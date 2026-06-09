@@ -7,11 +7,14 @@
     "start": "expo start --lan",
     "start:localhost": "expo start --localhost",
     "start:tunnel": "expo start --tunnel",
+    "start:web": "expo start --web --localhost",
     "android": "expo run:android",
     "build:android": "eas build --platform android --profile production",
+    "build:web": "expo export -p web",
     "lint": "echo \"Add eslint config when project grows\""
   },
   "dependencies": {
+    "@expo/metro-runtime": "~6.1.2",
     "@expo/vector-icons": "latest",
     "@react-native-async-storage/async-storage": "2.2.0",
     "expo": "^54.0.34",
@@ -19,8 +22,10 @@
     "expo-location": "~19.0.8",
     "expo-status-bar": "~3.0.9",
     "react": "19.1.0",
+    "react-dom": "19.1.0",
     "react-native": "0.81.5",
-    "react-native-safe-area-context": "~5.6.2"
+    "react-native-safe-area-context": "~5.6.2",
+    "react-native-web": "^0.21.0"
   },
   "devDependencies": {
     "@expo/ngrok": "^4.1.3",

@@ -20,7 +20,7 @@ import {
 } from 'react-native';
 import * as Location from 'expo-location';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 
 type PlanSlot = 'food' | 'activity';
 type PairingSuggestion = {
@@ -1162,7 +1162,7 @@ function formatClockAfterMinutes(totalMinutes: number) {
   return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 }
 
-export default function App() {
+function NomNomGoApp() {
   const colorScheme = useColorScheme();
   const scrollRef = useRef<ScrollView | null>(null);
   const manualSearchRef = useRef<TextInput | null>(null);
@@ -3772,6 +3772,14 @@ export default function App() {
     </ScrollView>
     </KeyboardAvoidingView>
     </SafeAreaView>
+  );
+}
+
+export default function App() {
+  return (
+    <SafeAreaProvider>
+      <NomNomGoApp />
+    </SafeAreaProvider>
   );
 }
 

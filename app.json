@@ -14,6 +14,10 @@
     "assetBundlePatterns": [
       "**/*"
     ],
+    "web": {
+      "output": "single",
+      "favicon": "./assets/nom-nom-go-icon-v19.png"
+    },
     "android": {
       "package": "com.miketools.nomnomgo",
       "versionCode": 1,

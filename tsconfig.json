@@ -3,5 +3,5 @@
   "compilerOptions": {
     "strict": true
   },
-  "exclude": ["App.old*.tsx", "node_modules"]
+  "exclude": ["App.old*.tsx", "archive", "dist", "node_modules"]
 }
