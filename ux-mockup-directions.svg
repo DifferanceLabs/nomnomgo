@@ -1,0 +1,200 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1180" viewBox="0 0 1800 1180">
+  <rect width="1800" height="1180" fill="#eef2f7"/>
+  <text x="70" y="72" font-family="Inter, Arial, sans-serif" font-size="34" font-weight="800" fill="#111827">Things Nearby UI/UX Direction Board</text>
+  <text x="70" y="110" font-family="Inter, Arial, sans-serif" font-size="18" fill="#475569">Current build plus four possible product directions for the next UI pass.</text>
+
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#0f172a" flood-opacity="0.20"/>
+    </filter>
+    <style>
+      .label { font-family: Inter, Arial, sans-serif; font-size: 22px; font-weight: 800; fill: #111827; }
+      .note { font-family: Inter, Arial, sans-serif; font-size: 15px; fill: #475569; }
+      .phoneTitle { font-family: Inter, Arial, sans-serif; font-size: 22px; font-weight: 800; fill: #f8fafc; }
+      .body { font-family: Inter, Arial, sans-serif; font-size: 13px; fill: #cbd5e1; }
+      .bodyDark { font-family: Inter, Arial, sans-serif; font-size: 13px; fill: #334155; }
+      .small { font-family: Inter, Arial, sans-serif; font-size: 11px; fill: #94a3b8; }
+      .chipText { font-family: Inter, Arial, sans-serif; font-size: 12px; font-weight: 700; }
+      .cardTitle { font-family: Inter, Arial, sans-serif; font-size: 15px; font-weight: 800; }
+      .buttonText { font-family: Inter, Arial, sans-serif; font-size: 12px; font-weight: 800; }
+    </style>
+  </defs>
+
+  <!-- Current -->
+  <g transform="translate(70 165)">
+    <text class="label" x="0" y="-34">0. Current Build</text>
+    <text class="note" x="0" y="-10">Functional, debug-friendly, dense. Best for proving behavior.</text>
+    <rect width="310" height="760" rx="34" fill="#020617" filter="url(#shadow)"/>
+    <rect x="14" y="18" width="282" height="724" rx="26" fill="#111827"/>
+    <text class="phoneTitle" x="32" y="62">Things Nearby</text>
+    <text class="small" x="32" y="87">Provider: Google Places - API key loaded: Yes</text>
+    <text class="body" x="32" y="126" font-weight="800">What are you looking for?</text>
+    <rect x="32" y="143" width="61" height="30" rx="8" fill="#f8fafc"/>
+    <text class="chipText" x="49" y="163" fill="#111827">Food</text>
+    <rect x="100" y="143" width="76" height="30" rx="8" fill="#1f2937" stroke="#475569"/>
+    <text class="chipText" x="114" y="163" fill="#e5e7eb">Activity</text>
+    <rect x="183" y="143" width="91" height="30" rx="8" fill="#1f2937" stroke="#475569"/>
+    <text class="chipText" x="193" y="163" fill="#e5e7eb">Food + Act</text>
+    <rect x="32" y="196" width="246" height="146" rx="8" fill="#172033" stroke="#334155"/>
+    <text class="body" x="48" y="225" font-weight="800" fill="#f8fafc">Confirmed choice</text>
+    <text class="body" x="48" y="253">Food: Cork and Cow</text>
+    <text class="body" x="48" y="278">Hours: Open now</text>
+    <text class="body" x="48" y="303">Activity: Not selected</text>
+    <rect x="48" y="316" width="116" height="26" rx="7" fill="#22c55e"/>
+    <text class="buttonText" x="58" y="334" fill="#052e16">Directions</text>
+    <rect x="32" y="370" width="63" height="30" rx="8" fill="#f8fafc"/>
+    <text class="chipText" x="50" y="390" fill="#111827">Easy</text>
+    <rect x="103" y="370" width="52" height="30" rx="8" fill="#1f2937" stroke="#475569"/>
+    <text class="chipText" x="118" y="390" fill="#e5e7eb">Fun</text>
+    <rect x="162" y="370" width="69" height="30" rx="8" fill="#1f2937" stroke="#475569"/>
+    <text class="chipText" x="175" y="390" fill="#e5e7eb">Date</text>
+    <rect x="32" y="425" width="246" height="44" rx="8" fill="#22c55e"/>
+    <text class="buttonText" x="105" y="452" fill="#052e16">Find things to do</text>
+    <rect x="32" y="498" width="246" height="122" rx="8" fill="#172033" stroke="#334155"/>
+    <text class="cardTitle" x="48" y="527" fill="#f8fafc">Franklin Steakhouse</text>
+    <text class="small" x="48" y="552">Steak house - 4.7 - 421 reviews - $$$</text>
+    <text class="body" x="48" y="577">Main Street, Franklin</text>
+    <text class="body" x="48" y="602" fill="#86efac">Open now</text>
+    <rect x="48" y="625" width="66" height="28" rx="7" fill="#22c55e"/>
+    <text class="buttonText" x="63" y="644" fill="#052e16">Select</text>
+    <rect x="121" y="625" width="82" height="28" rx="7" fill="#334155"/>
+    <text class="buttonText" x="135" y="644" fill="#f8fafc">Open Maps</text>
+  </g>
+
+  <!-- Direction A -->
+  <g transform="translate(430 165)">
+    <text class="label" x="0" y="-34">1. Decision Dashboard</text>
+    <text class="note" x="0" y="-10">Keep power, improve scan speed and make the plan sticky.</text>
+    <rect width="310" height="760" rx="34" fill="#020617" filter="url(#shadow)"/>
+    <rect x="14" y="18" width="282" height="724" rx="26" fill="#0f172a"/>
+    <rect x="14" y="18" width="282" height="126" rx="26" fill="#123c35"/>
+    <text class="phoneTitle" x="32" y="62">Things Nearby</text>
+    <text class="body" x="32" y="91">Tonight in Franklin</text>
+    <rect x="32" y="108" width="70" height="28" rx="14" fill="#ecfeff"/>
+    <text class="chipText" x="52" y="127" fill="#134e4a">Food</text>
+    <rect x="108" y="108" width="82" height="28" rx="14" fill="#0f766e"/>
+    <text class="chipText" x="124" y="127" fill="#ccfbf1">Activity</text>
+    <rect x="32" y="160" width="246" height="92" rx="8" fill="#f8fafc"/>
+    <text class="bodyDark" x="48" y="187" font-weight="800">Your plan</text>
+    <text class="bodyDark" x="48" y="213">Food: Cork and Cow</text>
+    <text class="bodyDark" x="48" y="237">Next: Pick an activity nearby</text>
+    <text class="body" x="32" y="288" font-weight="800" fill="#f8fafc">Quick filters</text>
+    <rect x="32" y="305" width="58" height="30" rx="15" fill="#fef3c7"/>
+    <text class="chipText" x="48" y="325" fill="#78350f">Easy</text>
+    <rect x="96" y="305" width="64" height="30" rx="15" fill="#dbeafe"/>
+    <text class="chipText" x="112" y="325" fill="#1e3a8a">Date</text>
+    <rect x="166" y="305" width="72" height="30" rx="15" fill="#dcfce7"/>
+    <text class="chipText" x="180" y="325" fill="#14532d">Open</text>
+    <rect x="32" y="365" width="246" height="94" rx="8" fill="#172033" stroke="#334155"/>
+    <text class="cardTitle" x="48" y="394" fill="#f8fafc">Best match</text>
+    <text class="body" x="48" y="420">Cork and Cow</text>
+    <text class="small" x="48" y="444">4.8 - open - 8 min - $$$</text>
+    <rect x="196" y="391" width="58" height="28" rx="7" fill="#22c55e"/>
+    <text class="buttonText" x="210" y="410" fill="#052e16">Pick</text>
+    <rect x="32" y="475" width="246" height="94" rx="8" fill="#172033" stroke="#334155"/>
+    <text class="cardTitle" x="48" y="504" fill="#f8fafc">Strong backup</text>
+    <text class="body" x="48" y="530">Sushi Sho</text>
+    <text class="small" x="48" y="554">4.6 - open - 10 min - $$</text>
+    <rect x="32" y="607" width="246" height="44" rx="8" fill="#22c55e"/>
+    <text class="buttonText" x="95" y="634" fill="#052e16">Find the next stop</text>
+  </g>
+
+  <!-- Direction B -->
+  <g transform="translate(790 165)">
+    <text class="label" x="0" y="-34">2. Swipe-Style Decider</text>
+    <text class="note" x="0" y="-10">Fewer choices at once. Great for quick couple/family decisions.</text>
+    <rect width="310" height="760" rx="34" fill="#020617" filter="url(#shadow)"/>
+    <rect x="14" y="18" width="282" height="724" rx="26" fill="#111827"/>
+    <text class="phoneTitle" x="32" y="62">Pick one</text>
+    <text class="body" x="32" y="91">Food first, activity after</text>
+    <rect x="32" y="120" width="246" height="382" rx="12" fill="#f8fafc"/>
+    <rect x="48" y="140" width="214" height="130" rx="10" fill="#dbeafe"/>
+    <text class="cardTitle" x="48" y="306" fill="#111827">Cork and Cow</text>
+    <text class="bodyDark" x="48" y="333">Steak house - 4.8 - 421 reviews</text>
+    <text class="bodyDark" x="48" y="359">Open now - about 8 min away</text>
+    <text class="bodyDark" x="48" y="392">Why it fits: date night, easy parking, strong reviews.</text>
+    <rect x="48" y="432" width="60" height="46" rx="23" fill="#fee2e2"/>
+    <text class="buttonText" x="67" y="461" fill="#991b1b">Skip</text>
+    <rect x="124" y="432" width="62" height="46" rx="23" fill="#e0f2fe"/>
+    <text class="buttonText" x="139" y="461" fill="#075985">Map</text>
+    <rect x="202" y="432" width="60" height="46" rx="23" fill="#dcfce7"/>
+    <text class="buttonText" x="219" y="461" fill="#14532d">Pick</text>
+    <rect x="32" y="532" width="246" height="70" rx="8" fill="#172033" stroke="#334155"/>
+    <text class="body" x="48" y="561" font-weight="800" fill="#f8fafc">Plan so far</text>
+    <text class="small" x="48" y="584">Food: Not selected - Activity: Not selected</text>
+    <rect x="32" y="628" width="246" height="44" rx="8" fill="#334155"/>
+    <text class="buttonText" x="92" y="655" fill="#f8fafc">Show more like this</text>
+  </g>
+
+  <!-- Direction C -->
+  <g transform="translate(1150 165)">
+    <text class="label" x="0" y="-34">3. Plan Builder</text>
+    <text class="note" x="0" y="-10">Best for Food + Activity: a visible timeline with replaceable stops.</text>
+    <rect width="310" height="760" rx="34" fill="#020617" filter="url(#shadow)"/>
+    <rect x="14" y="18" width="282" height="724" rx="26" fill="#f8fafc"/>
+    <text x="32" y="62" font-family="Inter, Arial, sans-serif" font-size="22" font-weight="800" fill="#111827">Build tonight</text>
+    <text class="bodyDark" x="32" y="91">Food + activity, one step at a time</text>
+    <line x1="58" y1="132" x2="58" y2="302" stroke="#cbd5e1" stroke-width="4"/>
+    <circle cx="58" cy="132" r="15" fill="#22c55e"/>
+    <text x="52" y="137" font-family="Arial" font-size="14" font-weight="800" fill="#052e16">1</text>
+    <rect x="86" y="108" width="174" height="64" rx="8" fill="#ecfdf5" stroke="#86efac"/>
+    <text class="cardTitle" x="100" y="135" fill="#111827">Food</text>
+    <text class="bodyDark" x="100" y="158">Cork and Cow</text>
+    <circle cx="58" cy="222" r="15" fill="#38bdf8"/>
+    <text x="52" y="227" font-family="Arial" font-size="14" font-weight="800" fill="#082f49">2</text>
+    <rect x="86" y="198" width="174" height="64" rx="8" fill="#eff6ff" stroke="#93c5fd"/>
+    <text class="cardTitle" x="100" y="225" fill="#111827">Activity</text>
+    <text class="bodyDark" x="100" y="248">Pick nearby</text>
+    <circle cx="58" cy="312" r="15" fill="#e2e8f0"/>
+    <text x="52" y="317" font-family="Arial" font-size="14" font-weight="800" fill="#334155">3</text>
+    <rect x="86" y="288" width="174" height="64" rx="8" fill="#f1f5f9" stroke="#cbd5e1"/>
+    <text class="cardTitle" x="100" y="315" fill="#111827">Directions</text>
+    <text class="bodyDark" x="100" y="338">Ready after activity</text>
+    <text x="32" y="402" font-family="Inter, Arial, sans-serif" font-size="15" font-weight="800" fill="#111827">Activities near Cork and Cow</text>
+    <rect x="32" y="425" width="246" height="74" rx="8" fill="#ffffff" stroke="#e2e8f0"/>
+    <text class="cardTitle" x="48" y="454" fill="#111827">Franklin Theatre</text>
+    <text class="bodyDark" x="48" y="477">Movie theater - 0.4 mi - open</text>
+    <rect x="216" y="445" width="42" height="28" rx="7" fill="#22c55e"/>
+    <text class="buttonText" x="228" y="464" fill="#052e16">Add</text>
+    <rect x="32" y="513" width="246" height="74" rx="8" fill="#ffffff" stroke="#e2e8f0"/>
+    <text class="cardTitle" x="48" y="542" fill="#111827">Jeni's Ice Cream</text>
+    <text class="bodyDark" x="48" y="565">Dessert - 0.2 mi - open</text>
+    <rect x="32" y="622" width="246" height="44" rx="8" fill="#111827"/>
+    <text class="buttonText" x="103" y="649" fill="#f8fafc">Route the plan</text>
+  </g>
+
+  <!-- Direction D -->
+  <g transform="translate(1510 165)">
+    <text class="label" x="0" y="-34">4. Map + Bottom Sheet</text>
+    <text class="note" x="0" y="-10">Best when distance and clustering matter more than browsing.</text>
+    <rect width="240" height="760" rx="34" fill="#020617" filter="url(#shadow)"/>
+    <rect x="12" y="18" width="216" height="724" rx="26" fill="#e2e8f0"/>
+    <rect x="12" y="18" width="216" height="375" rx="26" fill="#dbeafe"/>
+    <path d="M12 194 C60 165 92 222 140 190 C180 164 203 188 228 170 L228 393 L12 393 Z" fill="#bfdbfe"/>
+    <path d="M12 270 C56 250 94 300 130 274 C174 242 196 269 228 248 L228 393 L12 393 Z" fill="#bbf7d0"/>
+    <circle cx="92" cy="210" r="10" fill="#ef4444"/>
+    <circle cx="146" cy="254" r="10" fill="#22c55e"/>
+    <circle cx="174" cy="190" r="10" fill="#38bdf8"/>
+    <rect x="28" y="44" width="184" height="42" rx="21" fill="#ffffff" fill-opacity="0.95"/>
+    <text x="48" y="70" font-family="Inter, Arial, sans-serif" font-size="13" font-weight="800" fill="#111827">Food near me</text>
+    <rect x="12" y="364" width="216" height="378" rx="24" fill="#ffffff"/>
+    <rect x="95" y="380" width="50" height="5" rx="3" fill="#cbd5e1"/>
+    <text x="30" y="425" font-family="Inter, Arial, sans-serif" font-size="17" font-weight="800" fill="#111827">Nearby picks</text>
+    <rect x="30" y="448" width="180" height="82" rx="8" fill="#f8fafc" stroke="#e2e8f0"/>
+    <text x="44" y="477" font-family="Inter, Arial, sans-serif" font-size="14" font-weight="800" fill="#111827">Cork and Cow</text>
+    <text x="44" y="500" font-family="Inter, Arial, sans-serif" font-size="12" fill="#475569">8 min - 4.8 - open</text>
+    <rect x="154" y="472" width="42" height="27" rx="7" fill="#22c55e"/>
+    <text x="166" y="490" font-family="Inter, Arial, sans-serif" font-size="11" font-weight="800" fill="#052e16">Pick</text>
+    <rect x="30" y="544" width="180" height="82" rx="8" fill="#f8fafc" stroke="#e2e8f0"/>
+    <text x="44" y="573" font-family="Inter, Arial, sans-serif" font-size="14" font-weight="800" fill="#111827">Sushi Sho</text>
+    <text x="44" y="596" font-family="Inter, Arial, sans-serif" font-size="12" fill="#475569">10 min - 4.6 - open</text>
+    <rect x="30" y="650" width="180" height="42" rx="8" fill="#111827"/>
+    <text x="80" y="677" font-family="Inter, Arial, sans-serif" font-size="12" font-weight="800" fill="#f8fafc">Open route</text>
+  </g>
+
+  <g transform="translate(70 990)">
+    <rect width="1660" height="110" rx="18" fill="#ffffff" stroke="#cbd5e1"/>
+    <text x="28" y="38" font-family="Inter, Arial, sans-serif" font-size="18" font-weight="800" fill="#111827">Recommendation</text>
+    <text x="28" y="70" font-family="Inter, Arial, sans-serif" font-size="16" fill="#334155">Start by evolving toward Direction 1 for the main MVP: it keeps the current functionality, reduces scrolling, and makes the confirmed plan feel permanent. Borrow Direction 3 for Food + Activity once the pairing flow is stable.</text>
+  </g>
+</svg>

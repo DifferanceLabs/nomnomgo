@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 760">
+  <rect width="1200" height="760" fill="#fbfaf6"/>
+  <path d="M616 190a132 132 0 1 0-36 136l-98-68z" fill="#f59e0b"/>
+  <circle cx="550" cy="188" r="20" fill="#0f172a"/>
+  <circle cx="646" cy="258" r="36" fill="#f25a4f"/>
+  <path d="M748 198l68 60-68 60" fill="none" stroke="#6fc2aa" stroke-width="58" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="600" y="560" text-anchor="middle" font-family="Arial Rounded MT Bold, Arial, Helvetica, sans-serif" font-size="146" font-weight="900" letter-spacing="-14">
+    <tspan fill="#0f172a">NomNom</tspan><tspan fill="#6fc2aa">Go</tspan>
+  </text>
+  <text x="535" y="640" text-anchor="end" font-family="Arial, Helvetica, sans-serif" font-size="34" font-weight="900" fill="#0f172a">GOOD FOOD.</text>
+  <circle cx="600" cy="628" r="9" fill="#f25a4f"/>
+  <text x="665" y="640" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="34" font-weight="900" fill="#0f172a">GREAT PLANS.</text>
+</svg>

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <rect width="1024" height="1024" fill="#0f172a"/>
+  <rect x="168" y="214" width="688" height="596" rx="176" fill="#0f766e"/>
+  <circle cx="758" cy="286" r="56" fill="#22c55e"/>
+  <text x="512" y="586" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="268" font-weight="900" letter-spacing="-4" fill="#f8fafc">IDK</text>
+</svg>

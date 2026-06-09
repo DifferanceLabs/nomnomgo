@@ -1,0 +1,39 @@
+{
+  "expo": {
+    "name": "NomNomGo",
+    "slug": "nomnomgo",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/nom-nom-go-icon-v19.png",
+    "userInterfaceStyle": "automatic",
+    "splash": {
+      "image": "./assets/nom-nom-go-splash-v19.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#111827"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "android": {
+      "package": "com.miketools.nomnomgo",
+      "versionCode": 1,
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION"
+      ],
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/nom-nom-go-adaptive-icon-v19.png",
+        "backgroundColor": "#111827"
+      }
+    },
+    "plugins": [
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "NomNomGo uses your approximate location to make nearby food and activity suggestions."
+        }
+      ],
+      "expo-font"
+    ]
+  }
+}
