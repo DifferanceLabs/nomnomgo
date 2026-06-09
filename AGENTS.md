@@ -15,6 +15,22 @@ Vercel settings:
 - Output directory: `dist`
 - Development command: `npm run start:web`
 
+## DL Alpha Launch Protection
+
+NomNomGo web is temporarily protected by Differance Labs alpha launch auth.
+
+This is an alpha gate, not permanent production auth.
+
+Hosted web direct access must not show the NomNomGo app UI unless a valid launch token or NomNomGo alpha session cookie is verified.
+
+The required server-side env var name is:
+
+- `DL_APP_LAUNCH_SECRET`
+
+Future production NomNomGo should own its own auth or intentionally federate with DL.
+
+Do not break mobile/Expo development while maintaining the web gate.
+
 ## Independence
 
 NomNomGo must be capable of moving to its own domain without architectural changes.
@@ -23,6 +39,7 @@ NomNomGo must be capable of moving to its own domain without architectural chang
 
 Never print secrets.
 Never expose environment variable values.
+Never expose `DL_APP_LAUNCH_SECRET` to the browser.
 
 The current public client environment variable names are:
 

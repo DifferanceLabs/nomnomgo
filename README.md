@@ -77,6 +77,12 @@ Required environment variable names:
 
 These names are read by the Expo client. Values prefixed with `EXPO_PUBLIC_` are bundled into client builds and are client-visible. Do not place private server-side secrets in `EXPO_PUBLIC_` variables.
 
+Required server-side Vercel environment variable names:
+
+- `DL_APP_LAUNCH_SECRET`
+
+Do not expose `DL_APP_LAUNCH_SECRET` to the browser. Do not prefix it with `EXPO_PUBLIC_`.
+
 ## Build Instructions
 
 Android production build:
@@ -132,12 +138,46 @@ After the first successful deployment, `nomnomgo.differancelabs.com` can be adde
 
 Do not integrate Differance Labs authentication or the Differance Labs admin portal as part of this deployment path.
 
+### DL Alpha Launch Protection
+
+Hosted web deployments are temporarily protected by Differance Labs alpha launch auth. Local web hosts such as `localhost` and mobile Expo builds bypass this gate for development.
+
+Direct access behavior:
+
+- Visiting `https://nomnomgo.differancelabs.com` without a valid NomNomGo alpha session cookie shows the locked screen.
+- The locked screen says `NomNomGo is currently in private alpha.` and links to `https://differancelabs.com/login`.
+- The NomNomGo app UI is not rendered until the alpha gate verifies access.
+
+Launcher behavior:
+
+- Differance Labs should launch NomNomGo with a `dl_launch_token` query parameter.
+- The token is validated server-side by `/api/alpha-launch`.
+- A valid token sets a host-only `nomnomgo_alpha_session` cookie for NomNomGo alpha access.
+- After validation, the browser removes `dl_launch_token` from the URL.
+
+Launch token contract:
+
+- Format: HS256 JWT.
+- Signing secret env var name: `DL_APP_LAUNCH_SECRET`.
+- Required payload app slug: `nomnomgo`.
+- Accepted app slug fields: `app`, `app_slug`, `appSlug`, or `slug`.
+- Required expiry field: `exp`.
+
+Testing:
+
+- Granted user: sign in through the Differance Labs launcher so it redirects to NomNomGo with a valid `dl_launch_token`; the app should load and the token should disappear from the URL.
+- Existing alpha session: reload `https://nomnomgo.differancelabs.com` after a successful launch; the app should load from the session cookie.
+- Direct or ungranted access: open `https://nomnomgo.differancelabs.com` in a fresh/incognito browser without a launch token; the locked screen should show and the app UI should not render.
+- Invalid token: use an expired token, wrong app slug, or bad signature; the locked screen should show and the app UI should not render.
+
 ## Known Limitations
 
 - The web build is a static single-page Expo app.
 - Browser location support depends on browser permissions and secure-context rules. Production HTTPS hosting should support the normal permission flow; local HTTP serving may have limitations.
 - Native sharing, maps links, and browser geolocation behavior depend on the user's browser and device.
 - Provider API calls currently run from the client and use `EXPO_PUBLIC_` variables, which are client-visible.
+- DL alpha launch protection is temporary alpha gating, not permanent production auth.
+- The gate validates only signed launch tokens and NomNomGo session cookies; it does not yet check Supabase grants.
 - Before serious public production use, move Google Places and Ticketmaster calls behind an independently deployable server-side API proxy so provider credentials are not exposed to the web client.
 
 ## Event Discovery Strategy

@@ -1162,6 +1162,117 @@ function formatClockAfterMinutes(totalMinutes: number) {
   return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 }
 
+const DIFFERANCE_LOGIN_URL = 'https://differancelabs.com/login';
+const LAUNCH_TOKEN_PARAM = 'dl_launch_token';
+
+type AlphaGateState = 'checking' | 'allowed' | 'locked';
+
+function isLocalWebHost(hostname: string) {
+  return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '0.0.0.0' || hostname === '::1';
+}
+
+function shouldApplyAlphaGate() {
+  if (Platform.OS !== 'web' || typeof window === 'undefined') return false;
+  const hostname = window.location.hostname.toLowerCase();
+  return Boolean(hostname) && !isLocalWebHost(hostname);
+}
+
+function getLaunchTokenFromUrl() {
+  if (Platform.OS !== 'web' || typeof window === 'undefined') return null;
+  return new URLSearchParams(window.location.search).get(LAUNCH_TOKEN_PARAM);
+}
+
+function removeLaunchTokenFromUrl() {
+  if (Platform.OS !== 'web' || typeof window === 'undefined') return;
+  const url = new URL(window.location.href);
+  if (!url.searchParams.has(LAUNCH_TOKEN_PARAM)) return;
+  url.searchParams.delete(LAUNCH_TOKEN_PARAM);
+  window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
+}
+
+function openDifferanceLogin() {
+  if (Platform.OS === 'web' && typeof window !== 'undefined') {
+    window.location.assign(DIFFERANCE_LOGIN_URL);
+    return;
+  }
+  void Linking.openURL(DIFFERANCE_LOGIN_URL);
+}
+
+async function validateLaunchToken(token: string) {
+  return fetch('/api/alpha-launch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ token }),
+  });
+}
+
+async function validateAlphaSession() {
+  return fetch('/api/alpha-session', {
+    method: 'GET',
+    credentials: 'include',
+  });
+}
+
+function AlphaAccessGate({ children }: { children: React.ReactNode }) {
+  const colorScheme = useColorScheme();
+  const isLightMode = colorScheme === 'light';
+  const isDarkMode = colorScheme === 'dark';
+  const [gateState, setGateState] = useState<AlphaGateState>(() => (shouldApplyAlphaGate() ? 'checking' : 'allowed'));
+
+  useEffect(() => {
+    if (!shouldApplyAlphaGate()) {
+      setGateState('allowed');
+      return;
+    }
+
+    let active = true;
+
+    async function checkAccess() {
+      const launchToken = getLaunchTokenFromUrl();
+      if (launchToken) removeLaunchTokenFromUrl();
+
+      try {
+        const response = launchToken ? await validateLaunchToken(launchToken) : await validateAlphaSession();
+        if (active) setGateState(response.ok ? 'allowed' : 'locked');
+      } catch {
+        if (active) setGateState('locked');
+      }
+    }
+
+    void checkAccess();
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  if (gateState === 'allowed') return <>{children}</>;
+
+  return (
+    <SafeAreaView style={[styles.safeArea, isLightMode && styles.lightScreen, isDarkMode && styles.darkScreen]} edges={['top', 'left', 'right']}>
+      <View style={styles.alphaGateShell}>
+        <View style={[styles.authCard, isDarkMode && styles.darkPanel]}>
+          {gateState === 'checking' ? (
+            <View style={styles.authCentered}>
+              <ActivityIndicator color="#f23b35" />
+              <Text style={[styles.authHint, isDarkMode && styles.darkMutedText]}>Checking NomNomGo alpha access</Text>
+            </View>
+          ) : (
+            <>
+              <Text style={[styles.authTitle, isDarkMode && styles.darkText]}>NomNomGo is currently in private alpha.</Text>
+              <Text style={[styles.authCopy, isDarkMode && styles.darkMutedText]}>
+                Launch NomNomGo from Differance Labs to continue.
+              </Text>
+              <Button label="Sign in with Differance Labs" onPress={openDifferanceLogin} primary />
+            </>
+          )}
+        </View>
+      </View>
+    </SafeAreaView>
+  );
+}
+
 function NomNomGoApp() {
   const colorScheme = useColorScheme();
   const scrollRef = useRef<ScrollView | null>(null);
@@ -3778,7 +3889,9 @@ function NomNomGoApp() {
 export default function App() {
   return (
     <SafeAreaProvider>
-      <NomNomGoApp />
+      <AlphaAccessGate>
+        <NomNomGoApp />
+      </AlphaAccessGate>
     </SafeAreaProvider>
   );
 }
@@ -4204,6 +4317,11 @@ const styles = StyleSheet.create({
   authHint: {
     color: '#526170',
     fontWeight: '800',
+  },
+  alphaGateShell: {
+    flex: 1,
+    justifyContent: 'center',
+    padding: 18,
   },
   testerDropdown: {
     borderWidth: 1,
