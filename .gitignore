@@ -7,3 +7,5 @@ dist/
 *.err
 *.out
 *.log
+
+.vercel/

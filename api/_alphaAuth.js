@@ -46,8 +46,9 @@ function readJsonPayload(encodedPayload) {
 }
 
 function expirySeconds(payload) {
-  if (typeof payload.exp !== 'number' || !Number.isFinite(payload.exp)) return null;
-  return payload.exp > 100000000000 ? Math.floor(payload.exp / 1000) : Math.floor(payload.exp);
+  const value = typeof payload.exp === 'number' ? payload.exp : payload.expires_at;
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+  return value > 100000000000 ? Math.floor(value / 1000) : Math.floor(value);
 }
 
 function payloadAppSlug(payload) {
@@ -58,6 +59,27 @@ function verifyLaunchToken(token, secret) {
   if (!token || !secret) return false;
 
   const parts = token.split('.');
+  if (parts.length === 2) {
+    const [encodedPayload, signature] = parts;
+    const expectedSignature = signBase64Url(encodedPayload, secret);
+
+    if (!timingSafeEqualString(signature, expectedSignature)) return false;
+
+    let payload;
+    try {
+      payload = readJsonPayload(encodedPayload);
+    } catch {
+      return false;
+    }
+
+    if (payloadAppSlug(payload) !== APP_SLUG) return false;
+
+    const expiresAt = expirySeconds(payload);
+    if (!expiresAt) return false;
+
+    return expiresAt > Math.floor(Date.now() / 1000);
+  }
+
   if (parts.length !== 3) return false;
 
   const [encodedHeader, encodedPayload, signature] = parts;
