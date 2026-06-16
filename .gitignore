@@ -1,7 +1,9 @@
 node_modules/
+.codex-remote-attachments/
 .expo/
 .expo-export-check/
 dist/
+.route-import-test-build/
 .env
 .env.*
 *.err

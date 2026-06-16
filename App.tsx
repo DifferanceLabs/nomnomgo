@@ -19,8 +19,16 @@ import {
   View,
 } from 'react-native';
 import * as Location from 'expo-location';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
+import {
+  GOOGLE_MAPS_ROUTE_IMPORT_ERROR,
+  parseGoogleMapsRouteUrl,
+  type GoogleMapsRouteImport,
+  type GoogleMapsRouteProvider,
+  type GoogleMapsRouteStop,
+} from './routeImport';
 
 type PlanSlot = 'food' | 'activity';
 type PairingSuggestion = {
@@ -31,7 +39,14 @@ type PairingSuggestion = {
   combo?: Array<{ slot: PlanSlot; item: PlaceCard | string }>;
 };
 type ResultFilter = 'all' | 'favorites';
+type SearchPreferenceOverride = {
+  foodSelections?: string[];
+  activitySelections?: string[];
+  dietarySelections?: string[];
+};
 type DateWindowId = 'today' | 'tomorrow' | 'next3' | 'weekend' | 'nextWeekend' | 'custom';
+type PlanStatus = 'draft' | 'locked';
+type SavedPlanTimeSchema = 'clock-arrivals-v1';
 type CustomDateRange = {
   start: string;
   end: string;
@@ -78,6 +93,16 @@ type ItineraryStop = {
 
 type ConfirmedPlan = {
   stops: ItineraryStop[];
+  title?: string;
+  sourceUrl?: string;
+  routeProvider?: GoogleMapsRouteProvider;
+  status?: PlanStatus;
+  importedAt?: number;
+  savedPlanId?: string;
+  invitees?: string[];
+  dateWindow?: DateWindowId;
+  customDateRange?: CustomDateRange | null;
+  timeWindow?: string;
 };
 
 type StopTime = {
@@ -119,9 +144,64 @@ type SavedPlan = {
   arrivalTimes: Record<string, StopTime | undefined>;
   createdAt: number;
   source: 'saved' | 'shared';
+  sourceUrl?: string;
+  routeProvider?: GoogleMapsRouteProvider;
+  status?: PlanStatus;
+  timeSchema?: SavedPlanTimeSchema;
+  invitees?: string[];
+  dateWindow?: DateWindowId;
+  customDateRange?: CustomDateRange | null;
+  timeWindow?: string;
   owner?: string;
   sharedBy?: string;
   sharedTo?: string;
+};
+
+type PlanningIntent = 'food' | 'activity' | 'both';
+
+type PlanningSuggestionSource = 'food' | 'activity' | 'event' | 'manual';
+
+type PlanningSuggestion = {
+  id: string;
+  slot: PlanSlot;
+  item: PlaceCard | string;
+  source: PlanningSuggestionSource;
+  addedBy: string;
+  createdAt: number;
+  votes: string[];
+};
+
+type PlanningRouteContext = {
+  originLabel: string;
+  location?: LatLon;
+  updatedAt: number;
+};
+
+type PlanningRecommendation = {
+  suggestionIds: string[];
+  generatedAt: number;
+  notes: string[];
+};
+
+type PlanningSession = {
+  id: string;
+  owner: string;
+  participants: string[];
+  title: string;
+  locationLabel: string;
+  searchLocation: LatLon;
+  dateWindow: DateWindowId;
+  customDateRange?: CustomDateRange | null;
+  timeWindow: string;
+  intent: PlanningIntent;
+  suggestions: PlanningSuggestion[];
+  recommendation?: PlanningRecommendation;
+  finalizedSuggestionIds: string[];
+  finalPlan: ItineraryStop[];
+  routeContexts: Record<string, PlanningRouteContext>;
+  status: 'planning' | 'finalized';
+  createdAt: number;
+  updatedAt: number;
 };
 
 type SearchCacheEntry = {
@@ -151,6 +231,8 @@ const STORAGE_WEBSITE_FEATURE_CACHE = 'thingsNearbyWebsiteFeatureCacheV1';
 const STORAGE_TESTER_USER = 'nomNomGoSelectedTesterV1';
 const STORAGE_USAGE_METER = 'nomNomGoUsageMeterV1';
 const STORAGE_SAVED_PLANS = 'nomNomGoSavedPlansV1';
+const STORAGE_PLANNING_SESSIONS = 'nomNomGoPlanningSessionsV1';
+const STORAGE_ACTIVE_PLANNING_SESSION = 'nomNomGoActivePlanningSessionV1';
 const EVENT_PROVIDER_CACHE_VERSION = 'ticketmaster-v1';
 const LOCATION_TTL_MS = 10 * 60 * 1000;
 const SEARCH_CACHE_TTL_MS = 15 * 60 * 1000;
@@ -168,14 +250,26 @@ const PAIRING_RADIUS_METERS = 11265;
 const FAVORITE_SUGGESTION_RADIUS_METERS = DEFAULT_RADIUS_METERS;
 const VENUE_FEATURE_RADIUS_METERS = 805;
 const PAGE_SIZE = 8;
+const SUGGESTED_PAIRING_PREVIEW_COUNT = 3;
 const FACTORY_EXPERIENCE_URL = 'https://factoryatfranklin.com/experience/';
 const DEV_SHARE_USERS = ['Alex', 'Jordan', 'Taylor', 'Morgan'];
 const TEST_USERS = ['BDM', ...DEV_SHARE_USERS];
+const GROUP_SESSION_ENABLED = false;
+const LOCAL_TEST_LOCATIONS: Record<string, LatLon> = {
+  'franklin tn': { latitude: 35.9251, longitude: -86.8689, label: 'Franklin, TN' },
+  'franklin tennessee': { latitude: 35.9251, longitude: -86.8689, label: 'Franklin, TN' },
+  '37064': { latitude: 35.9251, longitude: -86.8689, label: 'Franklin, TN 37064' },
+  'nashville tn': { latitude: 36.1627, longitude: -86.7816, label: 'Nashville, TN' },
+  'nashville tennessee': { latitude: 36.1627, longitude: -86.7816, label: 'Nashville, TN' },
+};
 
 const MOODS = ['Easy', 'Fun', 'Hungry', 'Tired', 'Bored', 'Date', 'Social', 'New', 'Cheap', 'Kid-friendly', 'Cozy', 'Active'];
 const TIMES = ['Now', 'Morning', 'Lunch', 'Afternoon', 'Dinner', 'Late night'];
 const WEATHER = ['Mild', 'Nice', 'Hot', 'Cold', 'Rainy', 'Unknown'];
 const DATE_WINDOW_IDS: DateWindowId[] = ['today', 'tomorrow', 'next3', 'weekend', 'nextWeekend', 'custom'];
+const DEFAULT_FOOD_SELECTIONS = ['Any'];
+const DEFAULT_ACTIVITY_SELECTIONS = ['Any'];
+const DEFAULT_DIETARY_SELECTIONS = ['Any'];
 const FOOD_QUICK_FILTERS = ['Any', 'Open now', 'Close by', 'No Fast Food'];
 const CUISINES = [
   'Pizza',
@@ -196,6 +290,21 @@ const CUISINES = [
   'Dessert',
 ];
 const ACTIVITIES = ['Any', 'Events', 'Movies', 'Bowling', 'Arcade', 'Park', 'Shopping', 'Museum', 'Dessert', 'Coffee'];
+const DIETARY_PREFERENCES = [
+  'Any',
+  'Vegetarian',
+  'Vegan',
+  'Gluten-free',
+  'Dairy-free',
+  'Nut-free',
+  'Shellfish-free',
+  'Halal',
+  'Kosher',
+  'Pescatarian',
+  'No pork',
+  'No beef',
+  'Low carb',
+];
 
 const FOOD_TYPE_MAP: Record<string, string[]> = {
   Steak: ['steak_house'],
@@ -273,6 +382,34 @@ const FOOD_TEXT_QUERY_MAP: Record<string, string[]> = {
   Breakfast: ['breakfast restaurants', 'brunch restaurants'],
   Coffee: ['coffee shops'],
   Dessert: ['dessert shops'],
+};
+const DIETARY_TEXT_QUERY_MAP: Record<string, string[]> = {
+  Vegetarian: ['vegetarian restaurants', 'vegetarian food'],
+  Vegan: ['vegan restaurants', 'vegan food'],
+  'Gluten-free': ['gluten free restaurants', 'gluten free food'],
+  'Dairy-free': ['dairy free restaurants', 'dairy free food'],
+  'Nut-free': ['nut free restaurants', 'nut free food'],
+  'Shellfish-free': ['shellfish free restaurants'],
+  Halal: ['halal restaurants', 'halal food'],
+  Kosher: ['kosher restaurants', 'kosher food'],
+  Pescatarian: ['pescatarian restaurants', 'seafood restaurants'],
+  'No pork': ['pork free restaurants', 'restaurants without pork'],
+  'No beef': ['beef free restaurants', 'restaurants without beef'],
+  'Low carb': ['low carb restaurants', 'healthy restaurants'],
+};
+const DIETARY_RELEVANCE_TERMS: Record<string, string[]> = {
+  Vegetarian: ['vegetarian', 'veggie', 'plant based', 'meatless'],
+  Vegan: ['vegan', 'plant based', 'plant-based'],
+  'Gluten-free': ['gluten free', 'gluten-free', 'celiac'],
+  'Dairy-free': ['dairy free', 'dairy-free', 'non dairy', 'non-dairy'],
+  'Nut-free': ['nut free', 'nut-free', 'allergy friendly'],
+  'Shellfish-free': ['shellfish free', 'shellfish-free'],
+  Halal: ['halal'],
+  Kosher: ['kosher'],
+  Pescatarian: ['pescatarian', 'seafood', 'fish'],
+  'No pork': ['pork free', 'no pork', 'halal', 'kosher'],
+  'No beef': ['beef free', 'no beef'],
+  'Low carb': ['low carb', 'low-carb', 'keto', 'healthy'],
 };
 const BLOCKED_ACTIVITY_TERMS = [
   'funeral',
@@ -411,6 +548,18 @@ function cuisineSelections(selectedFoods: string[]) {
   return selectedFoods.filter((item) => FOOD_RELEVANCE_TERMS[item]);
 }
 
+function dietarySelections(selectedDietary: string[]) {
+  return selectedDietary.filter((item) => item !== 'Any');
+}
+
+function dietaryQueryTerm(value: string) {
+  return value.toLowerCase().replace(/-/g, ' ');
+}
+
+function preferenceTag(value: string) {
+  return normalizePlaceName(value).replace(/\s+/g, '_');
+}
+
 function foodCuisineMatchStrength(card: PlaceCard, selectedFoods: string[]) {
   const selectedCuisines = cuisineSelections(selectedFoods);
   if (!selectedCuisines.length) return 1;
@@ -430,6 +579,29 @@ function foodCuisineMatchStrength(card: PlaceCard, selectedFoods: string[]) {
     if (mappedTypes.some((type) => typeText.includes(type))) best = Math.max(best, 4);
     if (terms.some((term) => title.includes(term))) best = Math.max(best, 5);
     if (terms.some((term) => subtitle.includes(term))) best = Math.max(best, 3);
+    if (terms.some((term) => blob.includes(term))) best = Math.max(best, 2);
+  });
+  return best;
+}
+
+function foodDietaryMatchStrength(card: PlaceCard, selectedDietary: string[]) {
+  const activeDietary = dietarySelections(selectedDietary);
+  if (!activeDietary.length) return 0;
+  const title = normalizePlaceName(card.title);
+  const subtitle = normalizePlaceName(card.subtitle || '');
+  const typeText = (card.types || []).join(' ').toLowerCase().replace(/_/g, ' ');
+  const blob = [card.title, card.subtitle, card.address, ...(card.types || [])]
+    .join(' ')
+    .toLowerCase()
+    .replace(/_/g, ' ');
+  let best = 0;
+  activeDietary.forEach((preference) => {
+    const terms = DIETARY_RELEVANCE_TERMS[preference] || [dietaryQueryTerm(preference)];
+    const tag = preferenceTag(preference).replace(/_/g, ' ');
+    if (blob.includes(`food dietary ${tag}`)) best = Math.max(best, 4);
+    if (terms.some((term) => title.includes(term))) best = Math.max(best, 5);
+    if (terms.some((term) => subtitle.includes(term))) best = Math.max(best, 3);
+    if (terms.some((term) => typeText.includes(term))) best = Math.max(best, 3);
     if (terms.some((term) => blob.includes(term))) best = Math.max(best, 2);
   });
   return best;
@@ -697,6 +869,231 @@ function mapsSearchUrl(query: string, near?: PlaceCard | LatLon | null) {
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(fullQuery)}`;
 }
 
+function routeStopMapsUrl(stop: GoogleMapsRouteStop) {
+  const query = typeof stop.latitude === 'number' && typeof stop.longitude === 'number'
+    ? `${stop.latitude},${stop.longitude}`
+    : stop.label;
+  return mapsSearchUrl(query);
+}
+
+function routeImportStopToCard(stop: GoogleMapsRouteStop, index: number): PlaceCard {
+  const title = stop.placeName || stop.address || stop.label || `Stop ${index + 1}`;
+  const coordinateText = typeof stop.latitude === 'number' && typeof stop.longitude === 'number'
+    ? `${stop.latitude.toFixed(6)}, ${stop.longitude.toFixed(6)}`
+    : undefined;
+  const idBase = normalizePlaceName(`${index + 1} ${title}`).replace(/\s+/g, '-') || `stop-${index + 1}`;
+
+  return {
+    id: `google-route-${idBase}`,
+    title,
+    subtitle: stop.placeName && stop.address
+      ? stop.address
+      : coordinateText
+        ? `Coordinates: ${coordinateText}`
+        : 'Imported from Google Maps route',
+    kind: 'place',
+    address: stop.address,
+    source: 'Google Maps route',
+    mapsUri: routeStopMapsUrl(stop),
+    lat: stop.latitude,
+    lng: stop.longitude,
+    types: ['google_maps_route_import'],
+  };
+}
+
+function routeImportToPlanStops(routeImport: GoogleMapsRouteImport): ItineraryStop[] {
+  const stamp = Date.now();
+  return routeImport.stops.map((stop, index) => {
+    const card = routeImportStopToCard(stop, index);
+    return {
+      key: `google-route-stop-${stamp}-${index}`,
+      slot: 'activity',
+      item: card,
+      featureOptions: [],
+      selectedFeatures: [],
+      featuresExpanded: false,
+    };
+  });
+}
+
+const CITY_TRAILING_STOP_WORDS = new Set([
+  'st',
+  'street',
+  'ave',
+  'avenue',
+  'rd',
+  'road',
+  'dr',
+  'drive',
+  'ln',
+  'lane',
+  'pl',
+  'place',
+  'blvd',
+  'boulevard',
+  'pkwy',
+  'parkway',
+  'ct',
+  'court',
+  'way',
+  'cir',
+  'circle',
+  'supercharger',
+  'station',
+  'restaurant',
+  'grill',
+  'bar',
+  'cafe',
+  'coffee',
+  'shop',
+  'store',
+  'center',
+  'mall',
+  'theater',
+  'theatre',
+  'museum',
+  'park',
+  'parking',
+  'airport',
+]);
+
+const CITY_PREFIX_WORDS = new Set(['new', 'los', 'las', 'san', 'santa', 'saint', 'st', 'fort', 'port', 'north', 'south', 'east', 'west']);
+
+function normalizeCityCandidate(value: string) {
+  const candidate = value
+    .replace(/\b(?:usa|united states)\b/gi, '')
+    .replace(/[^\w\s.'-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!candidate) return undefined;
+  const lastWord = candidate.split(/\s+/).pop()?.toLowerCase().replace(/[.'-]/g, '');
+  if (!lastWord || CITY_TRAILING_STOP_WORDS.has(lastWord)) return undefined;
+  return candidate
+    .split(/\s+/)
+    .map((word) => word.length ? `${word[0].toUpperCase()}${word.slice(1)}` : word)
+    .join(' ');
+}
+
+function addressCityCandidates(value: string) {
+  const candidates: string[] = [];
+  const stateMatch = value.match(/,\s*([^,\d]+?)\s*,?\s+[A-Z]{2}(?:\s+\d{5})?\b/);
+  if (stateMatch?.[1]) {
+    const normalized = normalizeCityCandidate(stateMatch[1]);
+    if (normalized) candidates.push(normalized);
+  }
+  const commaParts = value.split(',').map((part) => part.trim()).filter(Boolean);
+  if (commaParts.length >= 3) {
+    const normalized = normalizeCityCandidate(commaParts[commaParts.length - 2]);
+    if (normalized) candidates.push(normalized);
+  }
+  return candidates;
+}
+
+function labelCityCandidates(value: string) {
+  const words = value.match(/[A-Za-z][A-Za-z.'-]*/g) || [];
+  if (!words.length) return [];
+
+  const candidates: string[] = [];
+  const lastWord = normalizeCityCandidate(words[words.length - 1]);
+  if (lastWord) candidates.push(lastWord);
+
+  if (words.length >= 2) {
+    const previous = words[words.length - 2];
+    const previousKey = previous.toLowerCase().replace(/[.'-]/g, '');
+    const lastKey = words[words.length - 1].toLowerCase().replace(/[.'-]/g, '');
+    if (CITY_PREFIX_WORDS.has(previousKey) && !CITY_TRAILING_STOP_WORDS.has(lastKey)) {
+      const normalized = normalizeCityCandidate(`${previous} ${words[words.length - 1]}`);
+      if (normalized) candidates.push(normalized);
+    }
+  }
+
+  return candidates;
+}
+
+function importedRouteCity(routeImport: GoogleMapsRouteImport) {
+  const scores = new Map<string, { label: string; score: number; firstSeen: number }>();
+  const addCandidate = (candidate: string, score: number, firstSeen: number) => {
+    const normalized = normalizeCityCandidate(candidate);
+    if (!normalized) return;
+    const key = normalized.toLowerCase();
+    const current = scores.get(key);
+    scores.set(key, {
+      label: current?.label || normalized,
+      score: (current?.score || 0) + score,
+      firstSeen: current?.firstSeen ?? firstSeen,
+    });
+  };
+
+  routeImport.stops.forEach((stop, index) => {
+    [stop.address, stop.label].filter(Boolean).forEach((value) => {
+      addressCityCandidates(value as string).forEach((candidate) => addCandidate(candidate, 4, index));
+    });
+    if (stop.placeName) {
+      labelCityCandidates(stop.placeName).forEach((candidate) => addCandidate(candidate, 1, index));
+    }
+  });
+
+  const ranked = [...scores.values()].sort((a, b) => b.score - a.score || a.firstSeen - b.firstSeen);
+  return ranked[0]?.label;
+}
+
+function defaultImportedRouteTitle(routeImport: GoogleMapsRouteImport, windowId: DateWindowId, customRange?: CustomDateRange | null) {
+  const weekday = dateWindowRange(windowId, new Date(), customRange).start.toLocaleDateString([], { weekday: 'long' });
+  const city = importedRouteCity(routeImport);
+  return city ? `${weekday} in ${city}` : `${weekday} route`;
+}
+
+function normalizedMaybeUrl(rawUrl: string) {
+  const trimmed = rawUrl.trim();
+  if (!trimmed) return undefined;
+  return /^[a-z][a-z\d+\-.]*:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+}
+
+function isGoogleMapsShortUrl(rawUrl: string) {
+  const normalized = normalizedMaybeUrl(rawUrl);
+  if (!normalized) return false;
+  try {
+    const host = new URL(normalized).hostname.toLowerCase();
+    return host === 'maps.app.goo.gl' || host === 'goo.gl';
+  } catch {
+    return false;
+  }
+}
+
+async function expandGoogleMapsRouteUrlForImport(rawUrl: string) {
+  const normalized = normalizedMaybeUrl(rawUrl);
+  if (!normalized || !isGoogleMapsShortUrl(normalized)) return rawUrl.trim();
+
+  if (Platform.OS === 'web') {
+    try {
+      const response = await withTimeout(
+        fetch(`/api/expand-route-url?url=${encodeURIComponent(normalized)}`),
+        8000,
+        'Google Maps route expansion',
+      );
+      if (response.ok) {
+        const body = await response.json();
+        if (typeof body?.url === 'string' && body.url.includes('/maps/dir/')) return body.url;
+      }
+    } catch {
+      // Expo web development may not serve Vercel functions; fall through to client expansion.
+    }
+  }
+
+  try {
+    const response = await withTimeout(
+      fetch(normalized, { method: 'GET', redirect: 'follow' }),
+      8000,
+      'Google Maps route expansion',
+    );
+    if (response.url && response.url.includes('/maps/dir/')) return response.url;
+  } catch {
+    // CORS can block this on web; the caller will parse the original URL and fail gracefully.
+  }
+
+  return normalized;
+}
+
 function scoreCard(card: PlaceCard, memory: LocalMemory, selectedMoods: string[]) {
   const rating = card.rating || 0;
   const reviewCount = card.ratingCount || 0;
@@ -798,9 +1195,12 @@ function foodCardScore(
   memory: LocalMemory,
   selectedMoods: string[],
   selectedFoods: string[],
+  selectedDietary: string[] = DEFAULT_DIETARY_SELECTIONS,
 ) {
   const cuisineStrength = foodCuisineMatchStrength(card, selectedFoods);
   const hasCuisineFilter = cuisineSelections(selectedFoods).length > 0;
+  const dietaryStrength = foodDietaryMatchStrength(card, selectedDietary);
+  const hasDietaryFilter = dietarySelections(selectedDietary).length > 0;
   let score = scoreCard(card, memory, selectedMoods) + distanceScore(center, card);
 
   if (hasCuisineFilter) {
@@ -808,6 +1208,8 @@ function foodCardScore(
     if (isLikelyFastFood(card) && cuisineStrength <= 1) score -= 50;
     else if (isLikelyFastFood(card) && cuisineStrength < 5) score -= 18;
   }
+
+  if (hasDietaryFilter) score += dietaryStrength * 20;
 
   if (card.isOpen) score += 8;
   return score;
@@ -1022,6 +1424,15 @@ function clockTimeFromOffsetMinutes(totalMinutes: number): StopTime {
   };
 }
 
+function clockTimeFromRelativeStopTime(relativeTime: StopTime, baseMs: number) {
+  const totalMinutes = (relativeTime.hours || 0) * 60 + (relativeTime.minutes || 0);
+  const date = new Date(baseMs + Math.max(0, Math.round(totalMinutes)) * 60 * 1000);
+  return {
+    hours: date.getHours(),
+    minutes: date.getMinutes(),
+  };
+}
+
 function minutesUntilClockTime(time: StopTime) {
   const now = new Date();
   const target = new Date(now);
@@ -1045,7 +1456,10 @@ function estimateDriveMinutes(from: LatLon | undefined, to: PlaceCard | string) 
   const toCoords = stopCoords(to);
   if (!from || !toCoords) return 15;
   const miles = distanceMeters(from, { lat: toCoords.latitude, lng: toCoords.longitude }) / 1609.344;
-  return Math.max(5, Math.round(miles <= 1 ? miles * 8 + 3 : miles * 2.4 + 6));
+  if (miles <= 1) return Math.max(5, Math.round(miles * 8 + 3));
+  if (miles <= 5) return Math.round(miles * 3 + 5);
+  if (miles <= 15) return Math.round(miles * 2 + 6);
+  return Math.round(miles * 1.35 + 7);
 }
 
 function defaultStopDurationMinutes(stop: ItineraryStop) {
@@ -1162,8 +1576,213 @@ function formatClockAfterMinutes(totalMinutes: number) {
   return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 }
 
+function planningIntentLabel(intent: PlanningIntent) {
+  if (intent === 'food') return 'Food';
+  if (intent === 'activity') return 'Activity';
+  return 'Food + Activity';
+}
+
+function planningIntentIncludesSlot(intent: PlanningIntent, slot: PlanSlot) {
+  return intent === 'both' || intent === slot;
+}
+
+function defaultTimeWindowForPreference(selectedTime: string) {
+  if (selectedTime === 'Morning') return '9:00 AM - 11:30 AM';
+  if (selectedTime === 'Lunch') return '11:30 AM - 1:30 PM';
+  if (selectedTime === 'Afternoon') return '1:00 PM - 5:00 PM';
+  if (selectedTime === 'Dinner') return '6:00 PM - 9:00 PM';
+  if (selectedTime === 'Late night') return '9:00 PM - 12:00 AM';
+  return '6:00 PM - 9:00 PM';
+}
+
+function parseClockMinutes(value: string) {
+  const match = value.trim().match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/i);
+  if (!match) return undefined;
+  let hours = Number(match[1]);
+  const minutes = Number(match[2] || 0);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes) || minutes > 59) return undefined;
+  const meridian = match[3]?.toLowerCase();
+  if (meridian === 'pm' && hours < 12) hours += 12;
+  if (meridian === 'am' && hours === 12) hours = 0;
+  if (hours > 23) return undefined;
+  return hours * 60 + minutes;
+}
+
+function parsePlanningTimeWindow(value: string) {
+  const parts = value.split(/\s+-\s+|\s+to\s+/i).map((part) => part.trim()).filter(Boolean);
+  if (parts.length < 2) return undefined;
+  const start = parseClockMinutes(parts[0]);
+  const end = parseClockMinutes(parts[1]);
+  if (typeof start !== 'number' || typeof end !== 'number') return undefined;
+  return { start, end: end <= start ? end + 24 * 60 : end };
+}
+
+function eventFitsSessionWindow(card: PlaceCard, session: PlanningSession) {
+  if (!card.eventStartMs) return 0;
+  const start = new Date(card.eventStartMs);
+  const range = dateWindowRange(session.dateWindow, new Date(), session.customDateRange);
+  if (start < range.start || start > range.end) return -45;
+
+  const window = parsePlanningTimeWindow(session.timeWindow);
+  if (!window) return 18;
+  const eventMinutes = start.getHours() * 60 + start.getMinutes();
+  const normalizedEventMinutes = eventMinutes < window.start ? eventMinutes + 24 * 60 : eventMinutes;
+  if (normalizedEventMinutes >= window.start && normalizedEventMinutes <= window.end) return 32;
+  const minutesAway = Math.min(
+    Math.abs(normalizedEventMinutes - window.start),
+    Math.abs(normalizedEventMinutes - window.end),
+  );
+  if (minutesAway <= 60) return 8;
+  return -18;
+}
+
+function planningSourceForCard(slot: PlanSlot, card: PlaceCard): PlanningSuggestionSource {
+  if (card.kind === 'event') return 'event';
+  return slot;
+}
+
+function makePlanningSuggestionId(slot: PlanSlot, item: PlaceCard | string) {
+  const base = normalizePlaceName(cardToId(item)).slice(0, 48) || slot;
+  return `session-suggestion-${slot}-${base}-${Date.now()}`;
+}
+
+function samePlanningSuggestion(a: PlanningSuggestion, slot: PlanSlot, item: PlaceCard | string) {
+  return a.slot === slot && cardToId(a.item) === cardToId(item);
+}
+
+function suggestionDistanceMiles(suggestion: PlanningSuggestion, session: PlanningSession) {
+  if (typeof suggestion.item === 'string') return Number.POSITIVE_INFINITY;
+  return distanceMeters(session.searchLocation, suggestion.item) / 1609.344;
+}
+
+function scorePlanningSuggestion(suggestion: PlanningSuggestion, session: PlanningSession) {
+  const voteCount = unique(suggestion.votes).length;
+  let score = voteCount * 100;
+  const notes: string[] = [];
+
+  if (planningIntentIncludesSlot(session.intent, suggestion.slot)) {
+    score += 30;
+  } else {
+    score -= 60;
+    notes.push('outside the session intent');
+  }
+
+  if (typeof suggestion.item !== 'string') {
+    const miles = suggestionDistanceMiles(suggestion, session);
+    if (Number.isFinite(miles)) {
+      if (miles <= 2) score += 26;
+      else if (miles <= 5) score += 18;
+      else if (miles <= 10) score += 8;
+      else if (miles <= 20) score -= 8;
+      else score -= 35;
+      notes.push(`${miles.toFixed(1)} mi from shared search`);
+    }
+
+    if (suggestion.item.kind === 'event') {
+      const eventScore = eventFitsSessionWindow(suggestion.item, session);
+      score += eventScore;
+      if (eventScore > 0) notes.push('event time fits');
+      if (eventScore < 0) notes.push('event timing is awkward');
+    }
+
+    if (suggestion.item.isOpen === true) {
+      score += 18;
+      notes.push('currently open');
+    } else if (suggestion.item.isOpen === false) {
+      score -= 45;
+      notes.push('currently closed');
+    } else if (hasKnownHours(suggestion.item)) {
+      score += 5;
+      notes.push('hours available');
+    }
+
+    if (suggestion.item.rating) score += suggestion.item.rating * 3;
+  } else {
+    score -= 8;
+    notes.push('manual idea needs manual fit check');
+  }
+
+  return { suggestion, score, notes };
+}
+
+function pairDistancePenalty(food: PlanningSuggestion, activity: PlanningSuggestion) {
+  if (typeof food.item === 'string' || typeof activity.item === 'string') return 8;
+  const from = stopCoords(food.item);
+  if (!from) return 8;
+  const miles = distanceMeters(from, activity.item) / 1609.344;
+  if (!Number.isFinite(miles)) return 8;
+  if (miles <= 3) return -8;
+  if (miles <= 8) return 0;
+  if (miles <= 15) return 18;
+  return 40;
+}
+
+function buildPlanningRecommendation(session: PlanningSession): PlanningRecommendation {
+  const eligible = session.suggestions
+    .filter((suggestion) => planningIntentIncludesSlot(session.intent, suggestion.slot))
+    .map((suggestion) => scorePlanningSuggestion(suggestion, session))
+    .sort((a, b) => b.score - a.score);
+
+  const notes: string[] = [];
+  let selected: PlanningSuggestion[] = [];
+
+  if (session.intent === 'both') {
+    const foods = eligible.filter((item) => item.suggestion.slot === 'food').slice(0, 5);
+    const activities = eligible.filter((item) => item.suggestion.slot === 'activity').slice(0, 5);
+    let bestPair: { food: typeof eligible[number]; activity: typeof eligible[number]; score: number } | undefined;
+    foods.forEach((food) => {
+      activities.forEach((activity) => {
+        const score = food.score + activity.score - pairDistancePenalty(food.suggestion, activity.suggestion);
+        if (!bestPair || score > bestPair.score) bestPair = { food, activity, score };
+      });
+    });
+    if (bestPair) {
+      const activityIsEarlyEvent =
+        typeof bestPair.activity.suggestion.item !== 'string' &&
+        bestPair.activity.suggestion.item.kind === 'event' &&
+        bestPair.activity.suggestion.item.eventStartMs &&
+        new Date(bestPair.activity.suggestion.item.eventStartMs).getHours() < 17;
+      selected = activityIsEarlyEvent
+        ? [bestPair.activity.suggestion, bestPair.food.suggestion]
+        : [bestPair.food.suggestion, bestPair.activity.suggestion];
+      notes.push('Chose one food and one activity with votes, distance, and timing balanced.');
+    } else {
+      selected = eligible.slice(0, 2).map((item) => item.suggestion);
+      notes.push('Not enough paired food/activity suggestions yet, so the best available options are shown.');
+    }
+  } else {
+    selected = eligible.slice(0, 1).map((item) => item.suggestion);
+    notes.push(`Chose the strongest ${planningIntentLabel(session.intent).toLowerCase()} option for this session.`);
+  }
+
+  selected.forEach((suggestion) => {
+    const scored = scorePlanningSuggestion(suggestion, session);
+    const voteCount = unique(suggestion.votes).length;
+    notes.push(`${cardToName(suggestion.item) || 'Suggestion'}: ${voteCount} vote${voteCount === 1 ? '' : 's'}, ${scored.notes.slice(0, 2).join(', ') || 'best overall fit'}.`);
+  });
+
+  return {
+    suggestionIds: selected.map((suggestion) => suggestion.id),
+    generatedAt: Date.now(),
+    notes,
+  };
+}
+
+function suggestionToStop(suggestion: PlanningSuggestion, suffix = ''): ItineraryStop {
+  return {
+    key: `${makeStopKey(suggestion.slot, suggestion.item)}${suffix}`,
+    slot: suggestion.slot,
+    item: suggestion.item,
+    featureOptions: [],
+    selectedFeatures: [],
+    featuresExpanded: false,
+  };
+}
+
 const DIFFERANCE_LOGIN_URL = 'https://differancelabs.com/login';
 const LAUNCH_TOKEN_PARAM = 'dl_launch_token';
+const LIGHT_WEB_BACKGROUND = '#fff7ed';
+const DARK_WEB_BACKGROUND = '#071827';
 
 type AlphaGateState = 'checking' | 'allowed' | 'locked';
 
@@ -1188,6 +1807,31 @@ function removeLaunchTokenFromUrl() {
   if (!url.searchParams.has(LAUNCH_TOKEN_PARAM)) return;
   url.searchParams.delete(LAUNCH_TOKEN_PARAM);
   window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
+}
+
+function useWebDocumentSurface(backgroundColor: string) {
+  useEffect(() => {
+    if (Platform.OS !== 'web' || typeof document === 'undefined') return;
+
+    const root = document.getElementById('root');
+    const viewport = document.querySelector('meta[name="viewport"]');
+    const viewportContent = viewport?.getAttribute('content') || '';
+
+    document.documentElement.style.backgroundColor = backgroundColor;
+    document.documentElement.style.minHeight = '100%';
+    document.body.style.backgroundColor = backgroundColor;
+    document.body.style.margin = '0';
+    document.body.style.minHeight = '100%';
+
+    if (root) {
+      root.style.backgroundColor = backgroundColor;
+      root.style.minHeight = '100dvh';
+    }
+
+    if (viewport && !viewportContent.includes('viewport-fit=cover')) {
+      viewport.setAttribute('content', viewportContent ? `${viewportContent}, viewport-fit=cover` : 'viewport-fit=cover');
+    }
+  }, [backgroundColor]);
 }
 
 function openDifferanceLogin() {
@@ -1218,6 +1862,7 @@ function AlphaAccessGate({ children }: { children: React.ReactNode }) {
   const colorScheme = useColorScheme();
   const isLightMode = colorScheme === 'light';
   const isDarkMode = colorScheme === 'dark';
+  useWebDocumentSurface(isDarkMode ? DARK_WEB_BACKGROUND : LIGHT_WEB_BACKGROUND);
   const [gateState, setGateState] = useState<AlphaGateState>(() => (shouldApplyAlphaGate() ? 'checking' : 'allowed'));
 
   useEffect(() => {
@@ -1252,7 +1897,7 @@ function AlphaAccessGate({ children }: { children: React.ReactNode }) {
   return (
     <SafeAreaView style={[styles.safeArea, isLightMode && styles.lightScreen, isDarkMode && styles.darkScreen]} edges={['top', 'left', 'right']}>
       <View style={styles.alphaGateShell}>
-        <View style={[styles.authCard, isDarkMode && styles.darkPanel]}>
+        <View style={[styles.authCard, Platform.OS === 'web' && styles.webAuthCard, isDarkMode && styles.darkPanel]}>
           {gateState === 'checking' ? (
             <View style={styles.authCentered}>
               <ActivityIndicator color="#f23b35" />
@@ -1291,11 +1936,13 @@ function NomNomGoApp() {
   const [customDateEndInput, setCustomDateEndInput] = useState(formatDateInput(addLocalDays(new Date(), 6)));
   const [customDateOpen, setCustomDateOpen] = useState(false);
   const [selectedWeather, setSelectedWeather] = useState('Mild');
-  const [selectedFoods, setSelectedFoods] = useState<string[]>(['Any']);
-  const [selectedActivities, setSelectedActivities] = useState<string[]>(['Any']);
+  const [selectedFoods, setSelectedFoods] = useState<string[]>(() => [...DEFAULT_FOOD_SELECTIONS]);
+  const [selectedActivities, setSelectedActivities] = useState<string[]>(() => [...DEFAULT_ACTIVITY_SELECTIONS]);
+  const [selectedDietary, setSelectedDietary] = useState<string[]>(() => [...DEFAULT_DIETARY_SELECTIONS]);
   const [plan, setPlan] = useState<ConfirmedPlan>(EMPTY_PLAN);
   const [cards, setCards] = useState<PlaceCard[]>([]);
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const [searchNotice, setSearchNotice] = useState('');
   const [logs, setLogs] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [location, setLocation] = useState<LatLon | null>(null);
@@ -1319,16 +1966,36 @@ function NomNomGoApp() {
   const [resultMode, setResultMode] = useState<PlanSlot>('food');
   const [resultFilter, setResultFilter] = useState<ResultFilter>('all');
   const [preferencesOpen, setPreferencesOpen] = useState(false);
+  const [advancedPreferencesOpen, setAdvancedPreferencesOpen] = useState(false);
+  const [expandedPreferenceGroups, setExpandedPreferenceGroups] = useState<Record<string, boolean>>({});
+  const [planSettingsOpen, setPlanSettingsOpen] = useState(false);
   const [hasInitiatedSearch, setHasInitiatedSearch] = useState(false);
   const [sharePreviewOpen, setSharePreviewOpen] = useState(false);
+  const [planPreviewOpen, setPlanPreviewOpen] = useState(false);
   const [quickShareTarget, setQuickShareTarget] = useState<QuickShareTarget | null>(null);
   const [savedPlans, setSavedPlans] = useState<SavedPlan[]>([]);
   const [savedPlansOpen, setSavedPlansOpen] = useState(false);
+  const [suggestedPairingsOpen, setSuggestedPairingsOpen] = useState(true);
+  const [suggestedPairingsExpanded, setSuggestedPairingsExpanded] = useState(false);
   const [toastMessage, setToastMessage] = useState('');
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
   const [authLoaded, setAuthLoaded] = useState(false);
   const [testerUser, setTesterUser] = useState<TesterUser | null>(null);
   const [testerAuthenticated, setTesterAuthenticated] = useState(false);
   const [usageMeter, setUsageMeter] = useState<UsageMeter>(emptyUsageMeter());
+  const [planningSessions, setPlanningSessions] = useState<PlanningSession[]>([]);
+  const [activePlanningSessionId, setActivePlanningSessionId] = useState<string | null>(null);
+  const [sessionBuilderOpen, setSessionBuilderOpen] = useState(false);
+  const [sessionInvitees, setSessionInvitees] = useState<string[]>([]);
+  const [sessionLocationInput, setSessionLocationInput] = useState('');
+  const [sessionTimeWindowInput, setSessionTimeWindowInput] = useState(defaultTimeWindowForPreference('Dinner'));
+  const [sessionIntent, setSessionIntent] = useState<PlanningIntent>('both');
+  const [sessionManualSuggestion, setSessionManualSuggestion] = useState('');
+  const [routeImportOpen, setRouteImportOpen] = useState(false);
+  const [routeImportUrl, setRouteImportUrl] = useState('');
+  const [routeImportError, setRouteImportError] = useState('');
+  const [routeImporting, setRouteImporting] = useState(false);
   selectedDateWindowRef.current = selectedDateWindow;
   customDateRangeRef.current = customDateRange;
 
@@ -1355,27 +2022,60 @@ function NomNomGoApp() {
   const hasAnyActiveStop = activeFood || activeActivity;
   const titleForResults = resultMode === 'food' ? 'Food places' : activeFood ? 'Activities near your food' : 'Activity options';
   const selectedCards = resultMode === 'food' ? foodItems : activityItems;
-  const startingLocationLabel = routeOriginOverride.trim() || location?.label || 'Current location';
-  const searchLocationLabel = searchLocationOverride.trim() || searchLocation?.label || startingLocationLabel;
   const dateWindowOptions = useMemo(() => DATE_WINDOW_IDS.map((id) => ({ id, label: dateWindowLabel(id, new Date(), customDateRange) })), [customDateRange]);
   const selectedDateWindowText = dateWindowLabel(selectedDateWindow, new Date(), customDateRange);
   const currentTesterName = testerUser?.name || 'Tester';
+  let activePlanningSession: PlanningSession | null = null;
+  if (GROUP_SESSION_ENABLED) {
+    activePlanningSession = planningSessions.find((session) =>
+      session.id === activePlanningSessionId && session.participants.includes(currentTesterName),
+    ) || null;
+  }
+  const currentSessionRouteContext = activePlanningSession?.routeContexts?.[currentTesterName];
+  const activeSearchLocation = activePlanningSession?.searchLocation || searchLocation;
+  const startingLocationLabel = currentSessionRouteContext?.originLabel || routeOriginOverride.trim() || location?.label || 'Current location';
+  const routeStartLocation = currentSessionRouteContext?.location || location || undefined;
+  const searchLocationLabel = activePlanningSession?.locationLabel || searchLocationOverride.trim() || searchLocation?.label || startingLocationLabel;
+  const planSettingsSummary = startingLocationLabel === searchLocationLabel
+    ? `${selectedDateWindowText} | ${startingLocationLabel}`
+    : `${selectedDateWindowText} | Start ${startingLocationLabel} | Search ${searchLocationLabel}`;
+  const userPlanningSessions = planningSessions.filter((session) => session.participants.includes(currentTesterName));
+  const foodSuggestions = activePlanningSession?.suggestions.filter((suggestion) => suggestion.slot === 'food') || [];
+  const activitySuggestions = activePlanningSession?.suggestions.filter((suggestion) => suggestion.slot === 'activity') || [];
+  const isPlanningOwner = activePlanningSession?.owner === currentTesterName;
+  const planningSuggestionMode = Boolean(activePlanningSession && activePlanningSession.status === 'planning');
   const visibleSavedPlans = savedPlans.filter((saved) => {
     if (saved.source === 'shared') return saved.sharedTo === currentTesterName;
     return (saved.owner || saved.sharedBy || 'BDM') === currentTesterName;
   });
+  const savedArrivalClockTime = (saved: SavedPlan, stop: ItineraryStop) => {
+    const savedArrival = saved.arrivalTimes?.[stop.key];
+    if (!savedArrival) return undefined;
+    return saved.timeSchema === 'clock-arrivals-v1'
+      ? savedArrival
+      : clockTimeFromRelativeStopTime(savedArrival, saved.createdAt);
+  };
+  const savedPlanStopsLabel = (saved: SavedPlan) => {
+    const stops = saved.stops.map((stop) => {
+      const name = cardToName(stop.item);
+      if (!name) return undefined;
+      const arrival = savedArrivalClockTime(saved, stop);
+      return arrival ? `${formatClockTime(arrival)} ${name}` : name;
+    }).filter(Boolean);
+    return stops.join(' - ') || 'No stops';
+  };
 
   const durationForStop = (stop: ItineraryStop) =>
     (planTimes[stop.key]?.hours || 0) * 60 + (planTimes[stop.key]?.minutes || 0) || defaultStopDurationMinutes(stop);
 
   const arrivalOverrideForStop = (stop: ItineraryStop) => {
     const override = arrivalTimes[stop.key];
-    return override ? override.hours * 60 + override.minutes : undefined;
+    return override ? minutesUntilClockTime(override) : undefined;
   };
 
   const itineraryArrivalMinutes = (targetIndex: number) => {
     let elapsed = 0;
-    let from = location || undefined;
+    let from = routeStartLocation;
 
     for (let index = 0; index <= targetIndex; index += 1) {
       const stop = plan.stops[index];
@@ -1394,19 +2094,37 @@ function NomNomGoApp() {
     const stay = formatStopTime(stopTimeFromMinutes(durationForStop(stop)));
     return `Est. ${arrival} - ${stay} stop`;
   };
+  const displayedArrivalTimeForStop = (stop: ItineraryStop, index: number) =>
+    arrivalTimes[stop.key] || clockTimeFromOffsetMinutes(itineraryArrivalMinutes(index));
+  const currentDisplayedArrivalTimes = () => {
+    const next: Record<string, StopTime | undefined> = {};
+    plan.stops.forEach((stop, index) => {
+      next[stop.key] = displayedArrivalTimeForStop(stop, index);
+    });
+    return next;
+  };
   const firstStop = plan.stops[0];
   const firstStopArrivalMinutes = firstStop ? itineraryArrivalMinutes(0) : undefined;
-  const firstStopTravelMinutes = firstStop ? estimateDriveMinutes(location || undefined, firstStop.item) : 0;
-  const leaveForFirstStopText = firstStop && typeof firstStopArrivalMinutes === 'number'
+  const firstStopTravelMinutes = firstStop && routeStartLocation ? estimateDriveMinutes(routeStartLocation, firstStop.item) : undefined;
+  const leaveForFirstStopText = firstStop && typeof firstStopArrivalMinutes === 'number' && typeof firstStopTravelMinutes === 'number'
     ? `Leave around ${formatClockAfterMinutes(Math.max(0, firstStopArrivalMinutes - firstStopTravelMinutes))} from ${startingLocationLabel}`
     : undefined;
+  const importedPlanDateLabel = dateWindowLabel(
+    plan.dateWindow || selectedDateWindow,
+    new Date(),
+    plan.customDateRange || customDateRange,
+  );
+  const importedPlanDateTimeLabel = firstStop && typeof firstStopArrivalMinutes === 'number'
+    ? `${importedPlanDateLabel} | First stop ${formatClockAfterMinutes(firstStopArrivalMinutes)}`
+    : importedPlanDateLabel;
   const sharePlanText = () => {
-    const lines = ['NomNomGo plan'];
+    const lines = [plan.title || 'NomNomGo plan'];
+    if (plan.sourceUrl) lines.push('', plan.sourceUrl);
     plan.stops.forEach((stop) => {
       const name = cardToName(stop.item) || 'Stop';
       const url = typeof stop.item !== 'string'
         ? stop.item.mapsUri || mapsSearchUrl(stop.item.title, stop.item)
-        : mapsSearchUrl(stop.item, searchLocation || location);
+        : mapsSearchUrl(stop.item, activeSearchLocation || location);
       lines.push('', name, url);
     });
     lines.push('', 'Shared from NomNomGo');
@@ -1431,11 +2149,17 @@ function NomNomGoApp() {
     }, 2200);
   };
 
+  const notifyGooglePlacesMissing = (logLine: string, message = 'Google Places key missing. Import a route or add stops manually.') => {
+    showToast(message);
+    addLog(logLine);
+  };
+
   const resetResultsUntilSearch = () => {
     searchRequestIdRef.current += 1;
     setHasInitiatedSearch(false);
     setCards([]);
     setVisibleCount(PAGE_SIZE);
+    setSearchNotice('');
     setLoading(false);
   };
 
@@ -1526,8 +2250,10 @@ function NomNomGoApp() {
       AsyncStorage.getItem(STORAGE_TESTER_USER),
       AsyncStorage.getItem(STORAGE_USAGE_METER),
       AsyncStorage.getItem(STORAGE_SAVED_PLANS),
+      AsyncStorage.getItem(STORAGE_PLANNING_SESSIONS),
+      AsyncStorage.getItem(STORAGE_ACTIVE_PLANNING_SESSION),
     ])
-      .then(([rawUser, rawUsage, rawSavedPlans]) => {
+      .then(([rawUser, rawUsage, rawSavedPlans, rawPlanningSessions, rawActivePlanningSession]) => {
         if (rawUser) {
           const user = JSON.parse(rawUser) as TesterUser;
           if (user.name) {
@@ -1537,14 +2263,51 @@ function NomNomGoApp() {
         }
         if (rawUsage) setUsageMeter(normalizeUsageMeter(JSON.parse(rawUsage) as UsageMeter));
         if (rawSavedPlans) setSavedPlans(JSON.parse(rawSavedPlans) as SavedPlan[]);
+        if (rawPlanningSessions) setPlanningSessions(JSON.parse(rawPlanningSessions) as PlanningSession[]);
+        if (rawActivePlanningSession) setActivePlanningSessionId(JSON.parse(rawActivePlanningSession) as string);
       })
       .catch((err) => addLog(`Tester profile load failed: ${compactError(err)}`))
       .finally(() => setAuthLoaded(true));
   }, []);
 
+  useEffect(() => {
+    if (!activePlanningSession) return;
+    setSelectedDateWindow(activePlanningSession.dateWindow);
+    selectedDateWindowRef.current = activePlanningSession.dateWindow;
+    setCustomDateRange(activePlanningSession.customDateRange || null);
+    customDateRangeRef.current = activePlanningSession.customDateRange || null;
+    setSearchLocation(activePlanningSession.searchLocation);
+    setLastSearchLocationCenter(activePlanningSession.searchLocation);
+    setSearchLocationOverride(activePlanningSession.locationLabel);
+    if (activePlanningSession.intent === 'activity') setResultMode('activity');
+    if (activePlanningSession.intent === 'food' || activePlanningSession.intent === 'both') setResultMode('food');
+
+    const routeContext = activePlanningSession.routeContexts?.[currentTesterName];
+    setRouteOriginOverride(routeContext?.originLabel && routeContext.originLabel !== 'Current location' ? routeContext.originLabel : '');
+    setLocation(routeContext?.location || null);
+  }, [activePlanningSession?.id, currentTesterName]);
+
   const saveMemory = async (next: LocalMemory) => {
     setMemory(next);
     await AsyncStorage.setItem(STORAGE_MEMORY, JSON.stringify(next));
+  };
+
+  const savePlanningSessions = async (next: PlanningSession[]) => {
+    const trimmed = next
+      .slice()
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .slice(0, 20);
+    setPlanningSessions(trimmed);
+    await AsyncStorage.setItem(STORAGE_PLANNING_SESSIONS, JSON.stringify(trimmed));
+  };
+
+  const saveActivePlanningSession = async (id: string | null) => {
+    setActivePlanningSessionId(id);
+    if (id) {
+      await AsyncStorage.setItem(STORAGE_ACTIVE_PLANNING_SESSION, JSON.stringify(id));
+    } else {
+      await AsyncStorage.removeItem(STORAGE_ACTIVE_PLANNING_SESSION);
+    }
   };
 
   const labelApproximateLocation = async (next: LatLon) => {
@@ -1685,6 +2448,9 @@ function NomNomGoApp() {
   };
 
   const resolveLocationInput = async (value: string) => {
+    const localPreset = LOCAL_TEST_LOCATIONS[normalizePlaceName(value)];
+    if (localPreset) return { ...localPreset };
+
     const isZip = /^\d{5}$/.test(value);
     let next = isZip ? await readCachedZip(value) : undefined;
     if (next) return next;
@@ -1763,7 +2529,7 @@ function NomNomGoApp() {
     }
   };
 
-  const getSearchLocation = async () => searchLocation || getLocation();
+  const getSearchLocation = async () => activePlanningSession?.searchLocation || searchLocation || getLocation();
 
   const searchNearbyType = async (type: string, center: LatLon, radiusMeters: number): Promise<PlaceCard[]> => {
     if (!GOOGLE_API_KEY) throw new Error('Google Places API key is not loaded.');
@@ -1991,14 +2757,30 @@ function NomNomGoApp() {
     return cards;
   };
 
-  const searchFoodByTextPreferences = async (center: LatLon, foodSelections: string[]): Promise<PlaceCard[]> => {
+  const searchFoodByTextPreferences = async (
+    center: LatLon,
+    foodSelections: string[],
+    selectedDietaryPreferences: string[],
+  ): Promise<PlaceCard[]> => {
     const cuisines = cuisineSelections(foodSelections);
-    const baseQueries = cuisines.length
+    const activeDietary = dietarySelections(selectedDietaryPreferences);
+    const cuisineQueries = cuisines.length
       ? cuisines.flatMap((cuisine) => FOOD_TEXT_QUERY_MAP[cuisine] || [`${cuisine} restaurants`])
       : ['restaurants', 'places to eat', 'best food nearby'];
+    const dietaryQueries = activeDietary.flatMap((preference) =>
+      DIETARY_TEXT_QUERY_MAP[preference] || [`${dietaryQueryTerm(preference)} restaurants`],
+    );
+    const combinedQueries = activeDietary.length && cuisines.length
+      ? activeDietary.flatMap((preference) =>
+          cuisines.slice(0, 4).map((cuisine) => `${dietaryQueryTerm(preference)} ${cuisine} restaurants`),
+        )
+      : [];
+    const baseQueries = activeDietary.length
+      ? unique([...combinedQueries, ...dietaryQueries, ...cuisineQueries])
+      : cuisineQueries;
     const locationLabel = center.label && !/current location|last known location/i.test(center.label) ? center.label : '';
-    const locationQueries = locationLabel && cuisines.length
-      ? baseQueries.slice(0, 3).map((query) => `${query} near ${locationLabel}`)
+    const locationQueries = locationLabel && (cuisines.length || activeDietary.length)
+      ? baseQueries.slice(0, 4).map((query) => `${query} near ${locationLabel}`)
       : [];
     const queries = unique([...locationQueries, ...baseQueries]);
     const found = new Map<string, PlaceCard>();
@@ -2015,6 +2797,13 @@ function NomNomGoApp() {
           const matchedCuisine = cuisines.find((cuisine) =>
             (FOOD_TEXT_QUERY_MAP[cuisine] || []).some((foodQuery) => query === foodQuery || query.startsWith(`${foodQuery} near `)),
           );
+          const normalizedQuery = query.toLowerCase();
+          const matchedDietary = activeDietary.find((preference) =>
+            normalizedQuery.includes(dietaryQueryTerm(preference)) ||
+            (DIETARY_TEXT_QUERY_MAP[preference] || []).some((foodQuery) =>
+              normalizedQuery === foodQuery || normalizedQuery.startsWith(`${foodQuery} near `),
+            ),
+          );
           const explicitStrength = matchedCuisine ? foodCuisineMatchStrength(card, [matchedCuisine]) : 0;
           const taggedCard = matchedCuisine
             ? {
@@ -2027,8 +2816,14 @@ function NomNomGoApp() {
                 ]),
               }
             : { ...card, types: unique([...(card.types || []), 'food_text_match']) };
+          const dietaryTaggedCard = matchedDietary
+            ? {
+                ...taggedCard,
+                types: unique([...(taggedCard.types || []), `food_dietary_${preferenceTag(matchedDietary)}`]),
+              }
+            : taggedCard;
           found.set(card.id, {
-            ...taggedCard,
+            ...dietaryTaggedCard,
           });
         });
       } catch (err) {
@@ -2038,7 +2833,10 @@ function NomNomGoApp() {
 
     const cards = Array.from(found.values())
       .filter((card) => hasKnownHours(card))
-      .sort((a, b) => foodCardScore(b, center, memory, selectedMoods, foodSelections) - foodCardScore(a, center, memory, selectedMoods, foodSelections));
+      .sort((a, b) =>
+        foodCardScore(b, center, memory, selectedMoods, foodSelections, selectedDietaryPreferences) -
+        foodCardScore(a, center, memory, selectedMoods, foodSelections, selectedDietaryPreferences)
+      );
     addLog(`Food text discovery returned ${cards.length}`);
     return cards;
   };
@@ -2159,11 +2957,12 @@ function NomNomGoApp() {
     forceRefresh = false,
     foodSelections = selectedFoods,
     requestId = searchRequestIdRef.current,
+    selectedDietaryPreferences = selectedDietary,
   ) => {
     const wantsEvents = slot === 'activity';
     const eventsFocused = slot === 'activity' && selectedActivities.includes('Events');
     const preferenceKey = slot === 'food'
-      ? `${wantsNoFastFood(foodSelections) ? '|no-fast-food' : ''}${wantsCloseBy(foodSelections) ? '|close-by' : ''}${wantsOpenNow(foodSelections) ? '|open-now' : ''}${cuisineSelections(foodSelections).join(',')}`
+      ? `${wantsNoFastFood(foodSelections) ? '|no-fast-food' : ''}${wantsCloseBy(foodSelections) ? '|close-by' : ''}${wantsOpenNow(foodSelections) ? '|open-now' : ''}${cuisineSelections(foodSelections).join(',')}|dietary:${dietarySelections(selectedDietaryPreferences).join(',')}`
       : `${wantsEvents ? `|events|${EVENT_PROVIDER_CACHE_VERSION}|${selectedDateWindowRef.current}|${customDateRangeRef.current ? `${customDateRangeRef.current.start}-${customDateRangeRef.current.end}` : 'preset'}${eventsFocused ? '|focused' : ''}` : ''}`;
     const cacheKey = `${searchCacheKey(slot, center, types, radiusMeters)}${preferenceKey}`;
     const applyResultFilters = (nextCards: PlaceCard[]) => nextCards.filter((card) => {
@@ -2184,7 +2983,7 @@ function NomNomGoApp() {
     };
     const shouldExpand = (count: number) =>
       slot === 'food' &&
-      !wantsCloseBy(selectedFoods) &&
+      !wantsCloseBy(foodSelections) &&
       radiusMeters < EXPANDED_FOOD_RADIUS_METERS &&
       count < MIN_FOOD_RESULTS_BEFORE_EXPAND;
     const searchAndFilter = async (searchRadius: number) => {
@@ -2215,7 +3014,7 @@ function NomNomGoApp() {
 
     if (slot === 'food') {
       try {
-        const textFoodCards = await searchFoodByTextPreferences(center, foodSelections);
+        const textFoodCards = await searchFoodByTextPreferences(center, foodSelections, selectedDietaryPreferences);
         unblockedCards = mergeCards(unblockedCards, textFoodCards);
         addLog(`Food text discovery merged: ${unblockedCards.length} cards`);
       } catch (err) {
@@ -2246,7 +3045,7 @@ function NomNomGoApp() {
           addLog(`Open food text fallback error: ${compactError(err)}`);
         }
       }
-    } else if (slot === 'food' && wantsCloseBy(selectedFoods)) {
+    } else if (slot === 'food' && wantsCloseBy(foodSelections)) {
       addLog('Food radius expansion skipped: Close by selected');
     } else if (slot === 'food') {
       addLog(`Food radius expansion not needed: ${unblockedCards.length} results`);
@@ -2297,8 +3096,8 @@ function NomNomGoApp() {
       }
 
       if (slot === 'food') {
-        return foodCardScore(b, center, memory, selectedMoods, foodSelections) -
-          foodCardScore(a, center, memory, selectedMoods, foodSelections);
+        return foodCardScore(b, center, memory, selectedMoods, foodSelections, selectedDietaryPreferences) -
+          foodCardScore(a, center, memory, selectedMoods, foodSelections, selectedDietaryPreferences);
       }
 
       return scoreCard(b, memory, selectedMoods) - scoreCard(a, memory, selectedMoods);
@@ -2320,16 +3119,30 @@ function NomNomGoApp() {
     await writeCachedSearch(STORAGE_SEARCH_CACHE, cacheKey, finalCards, 32, 'Nearby search');
   };
 
-  const searchForSlot = async (slot: PlanSlot, shouldScroll = false, forceRefresh = false, centerOverride?: LatLon) => {
+  const searchForSlot = async (
+    slot: PlanSlot,
+    shouldScroll = false,
+    forceRefresh = false,
+    centerOverride?: LatLon,
+    preferenceOverride?: SearchPreferenceOverride,
+  ) => {
     const requestId = searchRequestIdRef.current + 1;
     searchRequestIdRef.current = requestId;
+    const foodSelections = preferenceOverride?.foodSelections || selectedFoods;
+    const activitySelections = preferenceOverride?.activitySelections || selectedActivities;
+    const dietaryPreferences = preferenceOverride?.dietarySelections || selectedDietary;
     if (resultFilter === 'favorites' && !cards.length && memory.favorites.length > 0) {
       addLog('Favorites filter needs a search before saved places can be shown');
     }
     addLog(`Find button tapped: ${slot}`);
     if (!keyLoaded) {
-      Alert.alert('Google Places key missing', 'Add EXPO_PUBLIC_GOOGLE_PLACES_API_KEY to things-app/.env, then restart Expo with --clear.');
-      addLog('Search stopped: API key missing');
+      setResultMode(slot);
+      setResultFilter('all');
+      setHasInitiatedSearch(true);
+      setCards([]);
+      setVisibleCount(PAGE_SIZE);
+      setSearchNotice('Search needs EXPO_PUBLIC_GOOGLE_PLACES_API_KEY. Import a route, or use Find a specific place to add stops manually.');
+      notifyGooglePlacesMissing('Search stopped: Google Places key missing');
       return;
     }
 
@@ -2338,6 +3151,7 @@ function NomNomGoApp() {
     setHasInitiatedSearch(true);
     setCards([]);
     setVisibleCount(PAGE_SIZE);
+    setSearchNotice('');
     setLoading(true);
     if (shouldScroll) scrollToResults();
     try {
@@ -2345,21 +3159,21 @@ function NomNomGoApp() {
       if (requestId !== searchRequestIdRef.current) return;
       setLastSearchLocationCenter(center);
       if (slot === 'activity') {
-        const types = typesForSelection(selectedActivities, ACTIVITY_TYPE_MAP, DEFAULT_ACTIVITY_TYPES);
+        const types = typesForSelection(activitySelections, ACTIVITY_TYPE_MAP, DEFAULT_ACTIVITY_TYPES);
         addLog(`Selected activity types: ${types.join(', ')}`);
         const anchor = centerOverride
           ? null
           : foodItems.find((item): item is PlaceCard => typeof item !== 'string' && Boolean(item.lat && item.lng));
         if (anchor) {
-          const activityRadius = selectedActivities.includes('Movies') ? DEFAULT_ACTIVITY_RADIUS_METERS : PAIRING_RADIUS_METERS;
-          await runPlacesSearch('activity', { latitude: anchor.lat!, longitude: anchor.lng!, label: anchor.title }, types, activityRadius, forceRefresh, selectedFoods, requestId);
+          const activityRadius = activitySelections.includes('Movies') ? DEFAULT_ACTIVITY_RADIUS_METERS : PAIRING_RADIUS_METERS;
+          await runPlacesSearch('activity', { latitude: anchor.lat!, longitude: anchor.lng!, label: anchor.title }, types, activityRadius, forceRefresh, foodSelections, requestId, dietaryPreferences);
         } else {
-          await runPlacesSearch('activity', center, types, DEFAULT_ACTIVITY_RADIUS_METERS, forceRefresh, selectedFoods, requestId);
+          await runPlacesSearch('activity', center, types, DEFAULT_ACTIVITY_RADIUS_METERS, forceRefresh, foodSelections, requestId, dietaryPreferences);
         }
       } else {
-        const types = typesForSelection(selectedFoods, FOOD_TYPE_MAP, DEFAULT_FOOD_TYPES);
+        const types = typesForSelection(foodSelections, FOOD_TYPE_MAP, DEFAULT_FOOD_TYPES);
         addLog(`Selected food types: ${types.join(', ')}`);
-        await runPlacesSearch('food', center, types, wantsCloseBy(selectedFoods) ? CLOSE_BY_RADIUS_METERS : DEFAULT_RADIUS_METERS, forceRefresh, selectedFoods, requestId);
+        await runPlacesSearch('food', center, types, wantsCloseBy(foodSelections) ? CLOSE_BY_RADIUS_METERS : DEFAULT_RADIUS_METERS, forceRefresh, foodSelections, requestId, dietaryPreferences);
       }
       if (shouldScroll) scrollToResults();
     } catch (err) {
@@ -2382,7 +3196,9 @@ function NomNomGoApp() {
 
     selectedDateWindowRef.current = next;
     setSelectedDateWindow(next);
+    setPlan((prev) => prev.status === 'draft' ? { ...prev, dateWindow: next, customDateRange: null, savedPlanId: undefined } : prev);
     setCustomDateOpen(false);
+    if (activePlanningSession) void updateActiveSessionDate(next, null);
     addLog(`Date window selected: ${label}`);
     if (!hasInitiatedSearch) {
       resetResultsUntilSearch();
@@ -2419,6 +3235,8 @@ function NomNomGoApp() {
     setCustomDateOpen(false);
     selectedDateWindowRef.current = 'custom';
     setSelectedDateWindow('custom');
+    setPlan((prev) => prev.status === 'draft' ? { ...prev, dateWindow: 'custom', customDateRange: nextRange, savedPlanId: undefined } : prev);
+    if (activePlanningSession) void updateActiveSessionDate('custom', nextRange);
     addLog(`Custom date window selected: ${nextRange.start} to ${nextRange.end}`);
 
     if (!hasInitiatedSearch) {
@@ -2467,12 +3285,21 @@ function NomNomGoApp() {
   const searchFromPlan = async (slot: PlanSlot) => {
     setPendingInsertIndex(null);
     setResultMode(slot);
+    const preferenceOverride: SearchPreferenceOverride = slot === 'food'
+      ? { foodSelections: [...DEFAULT_FOOD_SELECTIONS] }
+      : { activitySelections: [...DEFAULT_ACTIVITY_SELECTIONS] };
+    if (slot === 'food') {
+      setSelectedFoods(preferenceOverride.foodSelections || [...DEFAULT_FOOD_SELECTIONS]);
+    } else {
+      setSelectedActivities(preferenceOverride.activitySelections || [...DEFAULT_ACTIVITY_SELECTIONS]);
+    }
     setPreferencesOpen(false);
     scrollToResults();
-    await searchForSlot(slot, true);
+    await searchForSlot(slot, true, false, undefined, preferenceOverride);
   };
 
   const addStopAfter = async (slot: PlanSlot, index: number) => {
+    if (isPlanLocked) return;
     setPendingInsertIndex(index);
     setResultMode(slot);
     setPreferencesOpen(false);
@@ -2481,9 +3308,11 @@ function NomNomGoApp() {
   };
 
   const openTimeEditor = (key: string, index: number) => {
+    if (isPlanLocked) return;
     const stop = plan.stops.find((item) => item.key === key);
+    const existingArrival = stop ? arrivalTimes[stop.key] : arrivalTimes[key];
     setTimeEditorKey(key);
-    setDraftArrivalTime(clockTimeFromOffsetMinutes(arrivalOverrideForStop(stop || plan.stops[index]) ?? itineraryArrivalMinutes(index)));
+    setDraftArrivalTime(existingArrival || clockTimeFromOffsetMinutes(itineraryArrivalMinutes(index)));
     setDraftTime(planTimes[key] || stopTimeFromMinutes(stop ? defaultStopDurationMinutes(stop) : 60));
     setArrivalDraftDirty(false);
     setDurationDraftDirty(false);
@@ -2511,21 +3340,20 @@ function NomNomGoApp() {
   };
 
   const saveDraftTime = () => {
+    if (isPlanLocked) return;
     if (!timeEditorKey) return;
     if (!arrivalDraftDirty && !durationDraftDirty) {
       setTimeEditorKey(null);
       return;
     }
     if (arrivalDraftDirty) {
-      const arrivalOffsetMinutes = minutesUntilClockTime(draftArrivalTime);
-      const arrivalOffset = {
-        hours: Math.floor(arrivalOffsetMinutes / 60),
-        minutes: arrivalOffsetMinutes % 60,
-      };
-      setArrivalTimes((prev) => ({ ...prev, [timeEditorKey]: arrivalOffset }));
+      setArrivalTimes((prev) => ({ ...prev, [timeEditorKey]: draftArrivalTime }));
     }
     if (durationDraftDirty) {
       setPlanTimes((prev) => ({ ...prev, [timeEditorKey]: draftTime }));
+    }
+    if (arrivalDraftDirty || durationDraftDirty) {
+      setPlan((prev) => ({ ...prev, savedPlanId: undefined }));
     }
     addLog(`Itinerary time set: ${arrivalDraftDirty ? `arrival ${formatClockTime(draftArrivalTime)}` : 'arrival unchanged'}, ${durationDraftDirty ? `duration ${formatStopTime(draftTime)}` : 'duration unchanged'}`);
     setTimeEditorKey(null);
@@ -2553,11 +3381,17 @@ function NomNomGoApp() {
         return;
       }
 
-      await saveLocation(next);
+      const stamped = { ...next, ts: Date.now() };
+      if (activePlanningSession) {
+        setLocation(stamped);
+        await updateSessionRouteContext(value, stamped);
+      } else {
+        await saveLocation(next);
+      }
       addLog(`Location override saved: ${value} ${next.latitude.toFixed(4)}, ${next.longitude.toFixed(4)}`);
       setLocationOverrideOpen(false);
       setPreferencesOpen(false);
-      refreshAfterSearchContextChange(searchLocation || next);
+      refreshAfterSearchContextChange(activePlanningSession?.searchLocation || searchLocation || next);
       addLog('Starting location saved; refreshing active results');
     } catch (err) {
       addLog(`Location override failed: ${compactError(err)}`);
@@ -2569,8 +3403,12 @@ function NomNomGoApp() {
     setRouteOriginOverride('');
     setLocation(null);
     setLocationOverrideOpen(false);
-    await AsyncStorage.removeItem(STORAGE_LOCATION);
-    refreshAfterSearchContextChange(searchLocation || undefined);
+    if (activePlanningSession) {
+      await updateSessionRouteContext('Current location');
+    } else {
+      await AsyncStorage.removeItem(STORAGE_LOCATION);
+    }
+    refreshAfterSearchContextChange(activePlanningSession?.searchLocation || searchLocation || undefined);
     addLog('Starting location override cleared');
   };
 
@@ -2590,7 +3428,14 @@ function NomNomGoApp() {
         return;
       }
 
-      await saveSearchLocation(next);
+      if (activePlanningSession) {
+        const stamped = { ...next, ts: Date.now() };
+        setSearchLocation(stamped);
+        setLastSearchLocationCenter(stamped);
+        await updateActiveSessionSearchLocation(stamped);
+      } else {
+        await saveSearchLocation(next);
+      }
       addLog(`Search location saved: ${value} ${next.latitude.toFixed(4)}, ${next.longitude.toFixed(4)}`);
       setSearchLocationOverrideOpen(false);
       setPreferencesOpen(false);
@@ -2603,6 +3448,10 @@ function NomNomGoApp() {
   };
 
   const clearSearchLocationOverride = async () => {
+    if (activePlanningSession) {
+      Alert.alert('Shared location required', 'A planning session needs a shared search location. Edit it instead of clearing it.');
+      return;
+    }
     setSearchLocationOverride('');
     setSearchLocation(null);
     setLastSearchLocationCenter(null);
@@ -2612,7 +3461,324 @@ function NomNomGoApp() {
     addLog('Search location override cleared');
   };
 
+  const patchPlanningSession = async (id: string, updater: (session: PlanningSession) => PlanningSession) => {
+    const existing = planningSessions.find((session) => session.id === id);
+    if (!existing) return;
+    const updated = { ...updater(existing), updatedAt: Date.now() };
+    await savePlanningSessions(planningSessions.map((session) => session.id === id ? updated : session));
+  };
+
+  const createPlanningSession = async () => {
+    if (!sessionInvitees.length) {
+      Alert.alert('Invite testers', 'Choose at least one local tester user for this planning session.');
+      return;
+    }
+
+    const locationInput = sessionLocationInput.trim();
+    try {
+      const resolvedLocation = locationInput
+        ? await resolveLocationInput(locationInput)
+        : searchLocation || location || await getLocation();
+      if (!resolvedLocation) {
+        Alert.alert('Shared location needed', 'Enter a ZIP, address, or place for the shared session search.');
+        return;
+      }
+
+      const labeledLocation = await labelApproximateLocation({ ...resolvedLocation, label: locationInput || resolvedLocation.label || 'Shared search' });
+      const stampedLocation = { ...labeledLocation, ts: Date.now() };
+      const participants = unique([currentTesterName, ...sessionInvitees]);
+      const title = `${planningIntentLabel(sessionIntent)} near ${stampedLocation.label || 'shared location'}`;
+      const routeContext: PlanningRouteContext = {
+        originLabel: routeOriginOverride.trim() || location?.label || 'Current location',
+        location: location || undefined,
+        updatedAt: Date.now(),
+      };
+      const nextSession: PlanningSession = {
+        id: `planning-session-${Date.now()}`,
+        owner: currentTesterName,
+        participants,
+        title,
+        locationLabel: stampedLocation.label || 'Shared search',
+        searchLocation: stampedLocation,
+        dateWindow: selectedDateWindow,
+        customDateRange,
+        timeWindow: sessionTimeWindowInput.trim() || defaultTimeWindowForPreference(selectedTime),
+        intent: sessionIntent,
+        suggestions: [],
+        finalizedSuggestionIds: [],
+        finalPlan: [],
+        routeContexts: { [currentTesterName]: routeContext },
+        status: 'planning',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+
+      await savePlanningSessions([nextSession, ...planningSessions]);
+      await saveActivePlanningSession(nextSession.id);
+      setSessionBuilderOpen(false);
+      setSessionInvitees([]);
+      setSearchLocation(stampedLocation);
+      setLastSearchLocationCenter(stampedLocation);
+      setSearchLocationOverride(stampedLocation.label || '');
+      setResultMode(sessionIntent === 'activity' ? 'activity' : 'food');
+      setHasInitiatedSearch(false);
+      setCards([]);
+      addLog(`Planning session created: ${title}`);
+      showToast('Planning session started');
+    } catch (err) {
+      addLog(`Planning session create failed: ${compactError(err)}`);
+      Alert.alert('Could not create session', compactError(err));
+    }
+  };
+
+  const resumePlanningSession = async (id: string) => {
+    await saveActivePlanningSession(id);
+    setSessionBuilderOpen(false);
+    addLog('Planning session resumed');
+  };
+
+  const exitPlanningSession = async () => {
+    await saveActivePlanningSession(null);
+    setSessionBuilderOpen(false);
+    const [rawLocation, rawSearchLocation] = await Promise.all([
+      AsyncStorage.getItem(STORAGE_LOCATION),
+      AsyncStorage.getItem(STORAGE_SEARCH_LOCATION),
+    ]);
+    if (rawLocation) setLocation(JSON.parse(rawLocation) as LatLon);
+    if (rawSearchLocation) {
+      const cached = JSON.parse(rawSearchLocation) as LatLon;
+      setSearchLocation(cached);
+      setLastSearchLocationCenter(cached);
+      setSearchLocationOverride(cached.label || '');
+    }
+    addLog('Planning session closed');
+  };
+
+  const updateSessionRouteContext = async (originLabel: string, routeLocation?: LatLon) => {
+    if (!activePlanningSession) return;
+    await patchPlanningSession(activePlanningSession.id, (session) => ({
+      ...session,
+      routeContexts: {
+        ...(session.routeContexts || {}),
+        [currentTesterName]: {
+          originLabel,
+          location: routeLocation,
+          updatedAt: Date.now(),
+        },
+      },
+    }));
+  };
+
+  const updateActiveSessionSearchLocation = async (nextLocation: LatLon) => {
+    if (!activePlanningSession) return;
+    const labeled = await labelApproximateLocation(nextLocation);
+    const stamped = { ...labeled, ts: Date.now() };
+    await patchPlanningSession(activePlanningSession.id, (session) => ({
+      ...session,
+      locationLabel: stamped.label || session.locationLabel,
+      searchLocation: stamped,
+      recommendation: undefined,
+    }));
+  };
+
+  const updateActiveSessionDate = async (dateWindow: DateWindowId, nextCustomRange: CustomDateRange | null = null) => {
+    if (!activePlanningSession) return;
+    await patchPlanningSession(activePlanningSession.id, (session) => ({
+      ...session,
+      dateWindow,
+      customDateRange: nextCustomRange,
+      recommendation: undefined,
+    }));
+  };
+
+  const addPlanningSuggestion = async (slot: PlanSlot, item: PlaceCard | string, source: PlanningSuggestionSource) => {
+    if (!activePlanningSession) return false;
+    const existing = activePlanningSession.suggestions.find((suggestion) => samePlanningSuggestion(suggestion, slot, item));
+    if (existing) {
+      if (!existing.votes.includes(currentTesterName)) {
+        await patchPlanningSession(activePlanningSession.id, (session) => ({
+          ...session,
+          recommendation: undefined,
+          suggestions: session.suggestions.map((suggestion) =>
+            suggestion.id === existing.id
+              ? { ...suggestion, votes: unique([...suggestion.votes, currentTesterName]) }
+              : suggestion,
+          ),
+        }));
+        showToast('Vote added to existing suggestion');
+      } else {
+        showToast('Already suggested');
+      }
+      return true;
+    }
+
+    const suggestion: PlanningSuggestion = {
+      id: makePlanningSuggestionId(slot, item),
+      slot,
+      item,
+      source,
+      addedBy: currentTesterName,
+      createdAt: Date.now(),
+      votes: [currentTesterName],
+    };
+    await patchPlanningSession(activePlanningSession.id, (session) => ({
+      ...session,
+      recommendation: undefined,
+      status: 'planning',
+      suggestions: [suggestion, ...session.suggestions],
+    }));
+    addLog(`Planning suggestion added: ${cardToName(item) || slot}`);
+    showToast('Suggestion added');
+    return true;
+  };
+
+  const addManualPlanningSuggestion = async (slot: PlanSlot) => {
+    const value = sessionManualSuggestion.trim();
+    if (!value) return;
+    const added = await addPlanningSuggestion(slot, value, 'manual');
+    if (added) setSessionManualSuggestion('');
+  };
+
+  const togglePlanningVote = async (suggestionId: string) => {
+    if (!activePlanningSession) return;
+    await patchPlanningSession(activePlanningSession.id, (session) => ({
+      ...session,
+      recommendation: undefined,
+      suggestions: session.suggestions.map((suggestion) => {
+        if (suggestion.id !== suggestionId) return suggestion;
+        const voted = suggestion.votes.includes(currentTesterName);
+        return {
+          ...suggestion,
+          votes: voted
+            ? suggestion.votes.filter((user) => user !== currentTesterName)
+            : unique([...suggestion.votes, currentTesterName]),
+        };
+      }),
+    }));
+  };
+
+  const removePlanningSuggestion = async (suggestion: PlanningSuggestion) => {
+    if (!activePlanningSession) return;
+    if (suggestion.addedBy !== currentTesterName && activePlanningSession.owner !== currentTesterName) return;
+    await patchPlanningSession(activePlanningSession.id, (session) => ({
+      ...session,
+      recommendation: undefined,
+      suggestions: session.suggestions.filter((item) => item.id !== suggestion.id),
+      finalizedSuggestionIds: session.finalizedSuggestionIds.filter((id) => id !== suggestion.id),
+    }));
+    addLog(`Planning suggestion removed: ${cardToName(suggestion.item) || suggestion.slot}`);
+  };
+
+  const buildFinalPlanRecommendation = async () => {
+    if (!activePlanningSession || !isPlanningOwner) return;
+    if (!activePlanningSession.suggestions.length) {
+      Alert.alert('Add suggestions first', 'Food or activity suggestions are needed before building a final plan.');
+      return;
+    }
+    const recommendation = buildPlanningRecommendation(activePlanningSession);
+    if (!recommendation.suggestionIds.length) {
+      Alert.alert('No matching suggestions', 'Add suggestions that match the session intent first.');
+      return;
+    }
+    await patchPlanningSession(activePlanningSession.id, (session) => ({
+      ...session,
+      recommendation,
+    }));
+    addLog('Planning final recommendation built');
+  };
+
+  const acceptFinalPlanRecommendation = async () => {
+    if (!activePlanningSession || !isPlanningOwner || !activePlanningSession.recommendation) return;
+    const suggestionMap = new Map(activePlanningSession.suggestions.map((suggestion) => [suggestion.id, suggestion]));
+    const selectedSuggestions = activePlanningSession.recommendation.suggestionIds
+      .map((id) => suggestionMap.get(id))
+      .filter(Boolean) as PlanningSuggestion[];
+    const finalStops = selectedSuggestions.map((suggestion) => suggestionToStop(suggestion, `-final-${activePlanningSession.id}`));
+    if (!finalStops.length) return;
+
+    setPlan({ stops: finalStops });
+    setPlanTimes({});
+    setArrivalTimes({});
+    setPendingInsertIndex(null);
+    setTimeEditorKey(null);
+    setHasInitiatedSearch(false);
+    setCards([]);
+    finalStops.forEach((stop) => {
+      void refreshStopFeatures(stop.key, stop.slot, stop.item);
+    });
+    await patchPlanningSession(activePlanningSession.id, (session) => ({
+      ...session,
+      status: 'finalized',
+      finalizedSuggestionIds: activePlanningSession.recommendation?.suggestionIds || [],
+      finalPlan: finalStops.map((stop) => cloneStopForSavedPlan(stop, '-session')),
+    }));
+    setTimeout(() => scrollRef.current?.scrollTo({ y: 0, animated: true }), 100);
+    addLog('Planning session locked into itinerary');
+    showToast('Final plan added to itinerary');
+  };
+
+  const loadFinalSessionPlan = () => {
+    if (!activePlanningSession?.finalPlan.length) return;
+    const loadSuffix = `-session-load-${Date.now()}`;
+    const loadedStops = activePlanningSession.finalPlan.map((stop) => cloneStopForSavedPlan(stop, loadSuffix));
+    setPlan({ stops: loadedStops });
+    setPlanTimes({});
+    setArrivalTimes({});
+    loadedStops.forEach((stop) => {
+      void refreshStopFeatures(stop.key, stop.slot, stop.item);
+    });
+    setTimeout(() => scrollRef.current?.scrollTo({ y: 0, animated: true }), 100);
+  };
+
+  const planningSessionShareText = (session: PlanningSession) => {
+    const leading = session.suggestions
+      .map((suggestion) => scorePlanningSuggestion(suggestion, session))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 4)
+      .map(({ suggestion }) => {
+        const voteCount = unique(suggestion.votes).length;
+        return `- ${suggestion.slot === 'food' ? 'Food' : 'Activity'}: ${cardToName(suggestion.item) || 'Suggestion'} (${voteCount} vote${voteCount === 1 ? '' : 's'})`;
+      });
+    return [
+      `NomNomGo planning session: ${session.title}`,
+      `${dateWindowLabel(session.dateWindow, new Date(), session.customDateRange)} | ${session.timeWindow} | ${planningIntentLabel(session.intent)}`,
+      `Participants: ${session.participants.join(', ')}`,
+      '',
+      leading.length ? 'Leading options:' : 'No suggestions yet.',
+      ...leading,
+      '',
+      'Shared from NomNomGo',
+    ].join('\n');
+  };
+
+  const sharePlanningSessionUpdate = async () => {
+    if (!activePlanningSession) return;
+    try {
+      await Share.share({ message: planningSessionShareText(activePlanningSession) });
+      addLog('Planning session update shared');
+    } catch (err) {
+      addLog(`Planning session share failed: ${compactError(err)}`);
+    }
+  };
+
+  const openPlanningSuggestionMap = async (suggestion: PlanningSuggestion) => {
+    if (typeof suggestion.item === 'string') {
+      await Linking.openURL(mapsSearchUrl(suggestion.item, activePlanningSession?.searchLocation || searchLocation || location));
+      return;
+    }
+    await Linking.openURL(suggestion.item.mapsUri || mapsSearchUrl(suggestion.item.title, suggestion.item));
+  };
+
+  const openPlanningSuggestionEvent = async (suggestion: PlanningSuggestion) => {
+    if (typeof suggestion.item === 'string' || !suggestion.item.eventUrl) return;
+    await Linking.openURL(suggestion.item.eventUrl);
+  };
+
   const runSuggestion = async (suggestion: PairingSuggestion) => {
+    if (isPlanLocked) {
+      showToast('Unlock the plan to edit it');
+      return;
+    }
     addLog(`Suggested pairing tapped: ${suggestion.label}`);
     if (suggestion.combo?.length) {
       const nextStops = suggestion.combo.map((stop) => ({
@@ -2718,6 +3884,10 @@ function NomNomGoApp() {
   };
 
   const insertStopIntoPlan = (slot: PlanSlot, item: PlaceCard | string) => {
+    if (isPlanLocked) {
+      showToast('Unlock the plan to edit it');
+      return undefined;
+    }
     const nextStop: ItineraryStop = {
       key: makeStopKey(slot, item),
       slot,
@@ -2730,7 +3900,7 @@ function NomNomGoApp() {
       const existingIndex = prev.stops.findIndex((stop) => stop.slot === slot && cardToId(stop.item) === cardToId(item));
       if (existingIndex >= 0) {
         setPlanTimes((times) => ({ ...times, [prev.stops[existingIndex].key]: undefined }));
-        return { ...prev, stops: prev.stops.filter((_, index) => index !== existingIndex) };
+        return { ...prev, stops: prev.stops.filter((_, index) => index !== existingIndex), savedPlanId: undefined };
       }
 
       const insertAt = pendingInsertIndex === null ? prev.stops.length : Math.min(pendingInsertIndex + 1, prev.stops.length);
@@ -2741,6 +3911,7 @@ function NomNomGoApp() {
           nextStop,
           ...prev.stops.slice(insertAt),
         ],
+        savedPlanId: undefined,
       };
     });
     setPendingInsertIndex(null);
@@ -2749,12 +3920,21 @@ function NomNomGoApp() {
   };
 
   const selectCard = async (card: PlaceCard) => {
+    if (isPlanLocked && !planningSuggestionMode) {
+      showToast('Unlock the plan to edit it');
+      return;
+    }
     addLog(`Card Select action: ${card.title}`);
     const nextMemory = {
       ...memory,
       selectedHistory: unique([card.id, ...memory.selectedHistory]).slice(0, 80),
     };
     await saveMemory(nextMemory);
+
+    if (planningSuggestionMode) {
+      await addPlanningSuggestion(resultMode, card, planningSourceForCard(resultMode, card));
+      return;
+    }
 
     const alreadySelected = plan.stops.some((stop) => stop.slot === resultMode && cardToId(stop.item) === card.id);
     insertStopIntoPlan(resultMode, card);
@@ -2788,7 +3968,7 @@ function NomNomGoApp() {
       await Linking.openURL(stop.item.mapsUri || mapsSearchUrl(stop.item.title, stop.item));
       return;
     }
-    await Linking.openURL(mapsSearchUrl(stop.item, searchLocation || location));
+    await Linking.openURL(mapsSearchUrl(stop.item, activeSearchLocation || location));
   };
 
   const quickShareTitle = (target: QuickShareTarget) => {
@@ -2802,6 +3982,53 @@ function NomNomGoApp() {
     return names.length ? names.join(' + ') + (stops.length > 2 ? ` + ${stops.length - 2} more` : '') : 'Saved plan';
   };
 
+  const planTitle = plan.title || titleForPlanStops(plan.stops);
+  const isPlanLocked = plan.status === 'locked';
+  const isImportedGoogleMapsPlan = plan.routeProvider === 'google_maps';
+  const isImportedGoogleMapsDraft = isImportedGoogleMapsPlan && plan.status === 'draft';
+  const planInvitees = plan.invitees || [];
+  const timeSignature = (time?: StopTime) => time ? `${time.hours}:${time.minutes}` : '';
+  const stopSaveSignature = (stop: ItineraryStop, duration?: StopTime, arrival?: StopTime) => ({
+    slot: stop.slot,
+    itemId: cardToId(stop.item),
+    name: cardToName(stop.item) || '',
+    duration: timeSignature(duration),
+    arrival: timeSignature(arrival),
+    features: [...(stop.selectedFeatures || [])].sort(),
+  });
+  const savedPlanSignature = (saved: SavedPlan) => JSON.stringify({
+    title: saved.title,
+    sourceUrl: saved.sourceUrl || '',
+    routeProvider: saved.routeProvider || '',
+    status: saved.status || '',
+    invitees: [...(saved.invitees || [])].sort(),
+    dateWindow: saved.dateWindow || '',
+    customDateRange: saved.customDateRange || null,
+    stops: saved.stops.map((stop) => stopSaveSignature(
+      stop,
+      saved.planTimes?.[stop.key],
+      savedArrivalClockTime(saved, stop),
+    )),
+  });
+  const currentPlanSignature = JSON.stringify({
+    title: planTitle,
+    sourceUrl: plan.sourceUrl || '',
+    routeProvider: plan.routeProvider || '',
+    status: plan.status || '',
+    invitees: [...planInvitees].sort(),
+    dateWindow: plan.dateWindow || '',
+    customDateRange: plan.customDateRange || null,
+    stops: plan.stops.map((stop, index) => stopSaveSignature(
+      stop,
+      planTimes[stop.key],
+      displayedArrivalTimeForStop(stop, index),
+    )),
+  });
+  const isCurrentPlanSaved = Boolean(plan.savedPlanId && visibleSavedPlans.some((saved) => saved.id === plan.savedPlanId && saved.source === 'saved')) ||
+    visibleSavedPlans.some((saved) =>
+    saved.source === 'saved' && savedPlanSignature(saved) === currentPlanSignature,
+  );
+
   const cloneStopForSavedPlan = (stop: ItineraryStop, suffix = ''): ItineraryStop => ({
     ...stop,
     key: `${stop.key}${suffix}`,
@@ -2809,6 +4036,124 @@ function NomNomGoApp() {
     selectedFeatures: [...(stop.selectedFeatures || [])],
     featuresExpanded: false,
   });
+
+  const renamePlan = (title: string) => {
+    if (isPlanLocked) return;
+    setPlan((prev) => ({ ...prev, title, savedPlanId: undefined }));
+  };
+
+  const togglePlanInvitee = (user: string) => {
+    setPlan((prev) => {
+      const invitees = prev.invitees || [];
+      return {
+        ...prev,
+        invitees: invitees.includes(user)
+          ? invitees.filter((item) => item !== user)
+          : unique([...invitees, user]),
+        savedPlanId: undefined,
+      };
+    });
+  };
+
+  const moveStop = (key: string, direction: -1 | 1) => {
+    if (isPlanLocked) return;
+    setPlan((prev) => {
+      const index = prev.stops.findIndex((stop) => stop.key === key);
+      const targetIndex = index + direction;
+      if (index < 0 || targetIndex < 0 || targetIndex >= prev.stops.length) return prev;
+
+      const stops = [...prev.stops];
+      [stops[index], stops[targetIndex]] = [stops[targetIndex], stops[index]];
+      return { ...prev, stops, savedPlanId: undefined };
+    });
+    addLog(`Plan stop moved ${direction < 0 ? 'up' : 'down'}`);
+  };
+
+  const lockPlan = () => {
+    if (!plan.stops.length) return;
+    setPlan((prev) => ({
+      ...prev,
+      title: prev.title || titleForPlanStops(prev.stops),
+      status: 'locked',
+    }));
+    setTimeEditorKey(null);
+    setLocationOverrideOpen(false);
+    setSearchLocationOverrideOpen(false);
+    setCustomDateOpen(false);
+    setPreferencesOpen(false);
+    setRouteImportOpen(false);
+    addLog('Plan locked');
+    showToast('Plan locked');
+  };
+
+  const unlockPlan = () => {
+    setPlan((prev) => ({ ...prev, status: 'draft' }));
+    addLog('Plan unlocked');
+    showToast('Plan ready to edit');
+  };
+
+  const importGoogleMapsRoute = async () => {
+    const pastedUrl = routeImportUrl.trim();
+    if (!pastedUrl) {
+      setRouteImportError(GOOGLE_MAPS_ROUTE_IMPORT_ERROR);
+      return;
+    }
+
+    setRouteImporting(true);
+    setRouteImportError('');
+    try {
+      const expandedUrl = await expandGoogleMapsRouteUrlForImport(pastedUrl);
+      const routeImport = parseGoogleMapsRouteUrl(expandedUrl, pastedUrl);
+      if (!routeImport || !routeImport.stops.length) throw new Error(GOOGLE_MAPS_ROUTE_IMPORT_ERROR);
+
+      const importedStops = routeImportToPlanStops(routeImport);
+      setPlan({
+        title: defaultImportedRouteTitle(routeImport, selectedDateWindow, customDateRange),
+        stops: importedStops,
+        sourceUrl: routeImport.sourceUrl,
+        routeProvider: routeImport.routeProvider,
+        status: routeImport.status,
+        importedAt: Date.now(),
+        invitees: [],
+        dateWindow: selectedDateWindow,
+        customDateRange,
+      });
+      setPlanTimes({});
+      setArrivalTimes({});
+      setPendingInsertIndex(null);
+      setTimeEditorKey(null);
+      setHasInitiatedSearch(false);
+      setCards([]);
+      setRouteImportOpen(false);
+      setRouteImportUrl('');
+      addLog(`Google Maps route imported: ${routeImport.stops.length} stops`);
+      showToast('Route imported as draft');
+      setTimeout(() => scrollRef.current?.scrollTo({ y: 0, animated: true }), 100);
+    } catch (err) {
+      const message = err instanceof Error && err.message === GOOGLE_MAPS_ROUTE_IMPORT_ERROR
+        ? err.message
+        : GOOGLE_MAPS_ROUTE_IMPORT_ERROR;
+      setRouteImportError(message);
+      addLog(`Google Maps route import failed: ${compactError(err)}`);
+      Alert.alert('Could not import route', message);
+    } finally {
+      setRouteImporting(false);
+    }
+  };
+
+  const openImportedGoogleRoute = async () => {
+    if (!plan.sourceUrl) return;
+    addLog('Imported Google Maps route opened');
+    await Linking.openURL(plan.sourceUrl);
+  };
+
+  const openPlanRoute = async () => {
+    if (isImportedGoogleMapsPlan && plan.sourceUrl) {
+      await openImportedGoogleRoute();
+      return;
+    }
+    await openDirections();
+  };
 
   const makeSavedPlan = (
     stops: ItineraryStop[],
@@ -2822,17 +4167,28 @@ function NomNomGoApp() {
     const savedArrivalTimes: Record<string, StopTime | undefined> = {};
     stops.forEach((stop, index) => {
       const savedKey = savedStops[index].key;
+      const planIndex = plan.stops.findIndex((item) => item.key === stop.key);
       if (planTimes[stop.key]) savedPlanTimes[savedKey] = planTimes[stop.key];
-      if (arrivalTimes[stop.key]) savedArrivalTimes[savedKey] = arrivalTimes[stop.key];
+      savedArrivalTimes[savedKey] = planIndex >= 0
+        ? displayedArrivalTimeForStop(stop, planIndex)
+        : arrivalTimes[stop.key] || clockTimeFromOffsetMinutes(estimateDriveMinutes(routeStartLocation, stop.item));
     });
     return {
       id: `plan-${stamp}`,
-      title: options.title || titleForPlanStops(stops),
+      title: options.title || plan.title || titleForPlanStops(stops),
       stops: savedStops,
       planTimes: savedPlanTimes,
       arrivalTimes: savedArrivalTimes,
       createdAt: stamp,
       source,
+      sourceUrl: plan.sourceUrl,
+      routeProvider: plan.routeProvider,
+      status: plan.status,
+      timeSchema: 'clock-arrivals-v1',
+      invitees: plan.invitees,
+      dateWindow: plan.dateWindow,
+      customDateRange: plan.customDateRange,
+      timeWindow: plan.timeWindow,
       owner: source === 'saved' ? currentTesterName : options.sharedTo,
       sharedBy: options.sharedBy,
       sharedTo: options.sharedTo,
@@ -2841,8 +4197,11 @@ function NomNomGoApp() {
 
   const saveCurrentPlan = async () => {
     if (!plan.stops.length) return;
+    const displayedArrivals = currentDisplayedArrivalTimes();
     const saved = makeSavedPlan(plan.stops, 'saved');
     await saveSavedPlans([saved, ...savedPlans]);
+    setArrivalTimes(displayedArrivals);
+    setPlan((prev) => ({ ...prev, savedPlanId: saved.id }));
     addLog(`Plan saved: ${saved.title}`);
     showToast('Plan saved');
   };
@@ -2855,9 +4214,25 @@ function NomNomGoApp() {
     saved.stops.forEach((stop, index) => {
       const loadedKey = loadedStops[index].key;
       if (saved.planTimes?.[stop.key]) loadedPlanTimes[loadedKey] = saved.planTimes[stop.key];
-      if (saved.arrivalTimes?.[stop.key]) loadedArrivalTimes[loadedKey] = saved.arrivalTimes[stop.key];
+      const savedArrival = saved.arrivalTimes?.[stop.key];
+      if (savedArrival) {
+        loadedArrivalTimes[loadedKey] = saved.timeSchema === 'clock-arrivals-v1'
+          ? savedArrival
+          : clockTimeFromRelativeStopTime(savedArrival, saved.createdAt);
+      }
     });
-    setPlan({ stops: loadedStops });
+    setPlan({
+      stops: loadedStops,
+      title: saved.title,
+      sourceUrl: saved.sourceUrl,
+      routeProvider: saved.routeProvider,
+      status: saved.status,
+      savedPlanId: saved.source === 'saved' ? saved.id : undefined,
+      invitees: saved.invitees,
+      dateWindow: saved.dateWindow,
+      customDateRange: saved.customDateRange,
+      timeWindow: saved.timeWindow,
+    });
     setPlanTimes(loadedPlanTimes);
     setArrivalTimes(loadedArrivalTimes);
     setPendingInsertIndex(null);
@@ -2876,7 +4251,7 @@ function NomNomGoApp() {
   const quickShareMapsUrl = (target: QuickShareTarget) => {
     const item = target.kind === 'card' ? target.card : target.stop.item;
     if (typeof item !== 'string') return item.mapsUri || mapsSearchUrl(item.title, item);
-    return mapsSearchUrl(item, searchLocation || location);
+    return mapsSearchUrl(item, activeSearchLocation || location);
   };
 
   const quickShareMessage = (target: QuickShareTarget) => {
@@ -2956,11 +4331,26 @@ function NomNomGoApp() {
   };
 
   const addManualCardToPlan = async (slot: PlanSlot, card: PlaceCard) => {
+    if (isPlanLocked && !planningSuggestionMode) {
+      showToast('Unlock the plan to edit it');
+      return;
+    }
     const nextMemory = {
       ...memory,
       selectedHistory: unique([card.id, ...memory.selectedHistory]).slice(0, 80),
     };
     await saveMemory(nextMemory);
+
+    if (planningSuggestionMode) {
+      await addPlanningSuggestion(slot, card, 'manual');
+      setResultMode(slot);
+      setCards((prev) => {
+        const existing = prev.some((item) => item.id === card.id);
+        return existing ? prev : [card, ...prev];
+      });
+      setVisibleCount(PAGE_SIZE);
+      return;
+    }
 
     const alreadySelected = plan.stops.some((stop) => stop.slot === slot && cardToId(stop.item) === card.id);
     if (!alreadySelected) insertStopIntoPlan(slot, card);
@@ -2988,13 +4378,23 @@ function NomNomGoApp() {
   };
 
   const useManual = async (slot: PlanSlot) => {
+    if (isPlanLocked && !planningSuggestionMode) {
+      showToast('Unlock the plan to edit it');
+      return;
+    }
     const value = manualSearch.trim();
     if (!value) return;
     setManualSearchSubmitted(true);
     if (!keyLoaded) {
+      if (planningSuggestionMode) {
+        await addPlanningSuggestion(slot, value, 'manual');
+        setManualSearch('');
+        addLog(`Manual ${slot} suggested without Places lookup: ${value}`);
+        return;
+      }
       insertStopIntoPlan(slot, value);
       addLog(`Manual ${slot} used without Places lookup: ${value}`);
-      Alert.alert('Google Places key missing', 'Manual lookup needs the Places API key. Added the typed name without details.');
+      notifyGooglePlacesMissing('Manual lookup skipped: Google Places key missing', 'Added manually. Places details need a Google key.');
       return;
     }
 
@@ -3007,6 +4407,12 @@ function NomNomGoApp() {
       const matches = await searchPlaceByText(value, slot, center);
       const resolved = matches[0];
       if (!resolved) {
+        if (planningSuggestionMode) {
+          await addPlanningSuggestion(slot, value, 'manual');
+          setManualSearch('');
+          addLog(`Manual ${slot} suggestion added without match: ${value}`);
+          return;
+        }
         insertStopIntoPlan(slot, value);
         addLog(`Manual ${slot} lookup found no match: ${value}`);
         Alert.alert('Place not found', `I added "${value}" manually, but Google Places did not return a match.`);
@@ -3029,6 +4435,12 @@ function NomNomGoApp() {
       setManualSearch('');
       addLog(`Manual ${slot} resolved: ${resolved.title}`);
     } catch (err) {
+      if (planningSuggestionMode) {
+        await addPlanningSuggestion(slot, value, 'manual');
+        setManualSearch('');
+        addLog(`Manual ${slot} suggestion added after lookup failure: ${compactError(err)}`);
+        return;
+      }
       insertStopIntoPlan(slot, value);
       addLog(`Manual ${slot} lookup failed: ${compactError(err)}`);
       Alert.alert('Manual lookup failed', `I added "${value}" manually, but could not load details from Google Places.`);
@@ -3038,9 +4450,11 @@ function NomNomGoApp() {
   };
 
   const removeStop = (stop: ItineraryStop) => {
+    if (isPlanLocked) return;
     setPlan((prev) => ({
       ...prev,
       stops: prev.stops.filter((item) => item.key !== stop.key),
+      savedPlanId: undefined,
     }));
     setPlanTimes((prev) => ({ ...prev, [stop.key]: undefined }));
     setArrivalTimes((prev) => ({ ...prev, [stop.key]: undefined }));
@@ -3049,6 +4463,7 @@ function NomNomGoApp() {
   };
 
   const toggleStopFeaturesOpen = (key: string) => {
+    if (isPlanLocked) return;
     setPlan((prev) => ({
       ...prev,
       stops: prev.stops.map((stop) =>
@@ -3058,6 +4473,7 @@ function NomNomGoApp() {
   };
 
   const toggleStopFeature = (key: string, feature: string) => {
+    if (isPlanLocked) return;
     setPlan((prev) => ({
       ...prev,
       stops: prev.stops.map((stop) => {
@@ -3070,6 +4486,7 @@ function NomNomGoApp() {
             : [...selectedFeatures, feature],
         };
       }),
+      savedPlanId: undefined,
     }));
   };
 
@@ -3108,17 +4525,18 @@ function NomNomGoApp() {
     const shared = makeSavedPlan(plan.stops, 'shared', {
       sharedBy: currentTesterName,
       sharedTo: user,
-      title: titleForPlanStops(plan.stops),
+      title: planTitle,
     });
     await saveSavedPlans([shared, ...savedPlans]);
     setSharePreviewOpen(false);
+    setPlan((prev) => ({ ...prev, invitees: unique([...(prev.invitees || []), user]) }));
     addLog(`Plan shared in-app to ${user}: ${shared.title}`);
     showToast(`Shared to ${user}`);
   };
 
   const suggestedPairings = useMemo<PairingSuggestion[]>(() => {
     const suggestions: PairingSuggestion[] = [];
-    const favoriteSuggestionCenter = searchLocation || lastSearchLocationCenter || location;
+    const favoriteSuggestionCenter = activeSearchLocation || lastSearchLocationCenter || location;
     const isOpenSuggestion = (card: PlaceCard) => hasKnownHours(card) && card.isOpen === true;
     const distanceFromSearchLocation = (card: PlaceCard) =>
       favoriteSuggestionCenter ? distanceMeters(favoriteSuggestionCenter, card) : Number.POSITIVE_INFINITY;
@@ -3257,6 +4675,32 @@ function NomNomGoApp() {
     return suggestions.slice(0, 6);
   }, [plan.stops, foodItems, activityItems, memory.favoriteCards, memory.favorites, selectedMoods, selectedWeather, searchLocation, lastSearchLocationCenter, location]);
 
+  const visibleSuggestedPairings = suggestedPairingsExpanded
+    ? suggestedPairings
+    : suggestedPairings.slice(0, SUGGESTED_PAIRING_PREVIEW_COUNT);
+  const hiddenSuggestedPairingCount = Math.max(0, suggestedPairings.length - SUGGESTED_PAIRING_PREVIEW_COUNT);
+  const toggleSuggestedPairingsOpen = () => {
+    if (suggestedPairingsOpen) setSuggestedPairingsExpanded(false);
+    setSuggestedPairingsOpen((prev) => !prev);
+  };
+  const togglePreferenceGroupExpanded = (group: string) => {
+    setExpandedPreferenceGroups((prev) => ({ ...prev, [group]: !prev[group] }));
+  };
+  const summarizeSelection = (label: string, values: string[]) => {
+    const activeValues = values.filter((item) => item !== 'Any');
+    if (!activeValues.length) return '';
+    const shownValues = activeValues.slice(0, 2).join(', ');
+    return `${label}: ${shownValues}${activeValues.length > 2 ? ` +${activeValues.length - 2}` : ''}`;
+  };
+  const preferenceSummaryParts = [
+    selectedMoods.slice(0, 2).join(', '),
+    selectedTime,
+    resultMode === 'food'
+      ? summarizeSelection('Food', selectedFoods)
+      : summarizeSelection('Activity', selectedActivities),
+    resultMode === 'food' ? summarizeSelection('Dietary', selectedDietary) : '',
+  ].filter(Boolean);
+
   const quickShareUsers = unique(TEST_USERS.filter((user) => user !== currentTesterName));
 
   if (!authLoaded) {
@@ -3283,17 +4727,21 @@ function NomNomGoApp() {
             contentContainerStyle={styles.authContent}
             keyboardShouldPersistTaps="handled"
           >
-            <View style={[styles.hero, isLightMode && styles.lightHero, isDarkMode && styles.darkHero]}>
+            <View style={[styles.hero, isLightMode && styles.lightHero, isDarkMode && styles.darkHero, Platform.OS === 'web' && styles.webHero]}>
               <Image source={require('./assets/nom-nom-go-wordmark-v19.png')} style={styles.wordmarkImage} resizeMode="contain" />
             </View>
-            <View style={[styles.authCard, isDarkMode && styles.darkPanel]}>
+            <View style={[styles.authCard, Platform.OS === 'web' && styles.webAuthCard, isDarkMode && styles.darkPanel]}>
               <Text style={[styles.authTitle, isDarkMode && styles.darkText]}>Choose tester</Text>
               <Text style={[styles.authCopy, isDarkMode && styles.darkMutedText]}>
                 Select a local test user. This keeps development sharing simple until backend accounts are added.
               </Text>
-              <View style={styles.testerDropdown}>
+              <View style={[styles.testerDropdown, Platform.OS === 'web' && styles.webTesterDropdown]}>
                 {TEST_USERS.map((name) => (
-                  <TouchableOpacity key={name} style={styles.testerOption} onPress={() => selectTester(name)}>
+                  <TouchableOpacity
+                    key={name}
+                    style={[styles.testerOption, Platform.OS === 'web' && styles.webTesterOption]}
+                    onPress={() => selectTester(name)}
+                  >
                     <Text style={styles.testerOptionText}>{name}</Text>
                   </TouchableOpacity>
                 ))}
@@ -3322,18 +4770,43 @@ function NomNomGoApp() {
       keyboardShouldPersistTaps="handled"
       keyboardDismissMode="interactive"
     >
-      <View style={[styles.hero, isLightMode && styles.lightHero, isDarkMode && styles.darkHero]}>
-        <Image source={require('./assets/nom-nom-go-wordmark-v19.png')} style={styles.wordmarkImage} resizeMode="contain" />
-      </View>
-
-      <View style={styles.usageBox}>
-        <View>
-          <Text style={styles.usageName}>{testerUser?.name || 'Tester'}</Text>
-          <Text style={styles.usageText}>
-            Places calls today: {usageMeter.nearbySearchesToday + usageMeter.textSearchesToday} · month: {usageMeter.nearbySearchesMonth + usageMeter.textSearchesMonth}
-          </Text>
+      <View style={[styles.appBanner, isDarkMode && styles.darkPanel]}>
+        <View style={styles.bannerBrand} accessibilityLabel="NomNomGo. Come together.">
+          <Image
+            source={require('./assets/nom-nom-go-mark-transparent-v19.png')}
+            style={styles.bannerLogoMark}
+            resizeMode="contain"
+          />
+          <View style={styles.bannerBrandText}>
+            <View style={styles.bannerNameRow}>
+              <Text
+                style={[styles.bannerName, styles.bannerNameMain, isDarkMode && styles.bannerNameMainDark]}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.72}
+                maxFontSizeMultiplier={1}
+              >
+                NomNom
+              </Text>
+              <Text style={[styles.bannerName, styles.bannerNameGo]} numberOfLines={1} maxFontSizeMultiplier={1}>
+                Go
+              </Text>
+            </View>
+            <Text style={[styles.bannerTagline, isDarkMode && styles.darkMutedText]} numberOfLines={1}>
+              Come together
+            </Text>
+          </View>
         </View>
-        <Button label="Sign out" onPress={signOutTester} compact />
+        <View style={styles.bannerActions}>
+          <TouchableOpacity
+            style={[styles.accountIconButton, isDarkMode && styles.darkChip]}
+            onPress={() => setAccountMenuOpen((prev) => !prev)}
+            accessibilityRole="button"
+            accessibilityLabel="Open user menu"
+          >
+            <Ionicons name="person-circle-outline" size={28} color={isDarkMode ? '#fffaf3' : '#071827'} />
+          </TouchableOpacity>
+        </View>
       </View>
 
       {toastMessage ? (
@@ -3342,18 +4815,367 @@ function NomNomGoApp() {
         </View>
       ) : null}
 
-      <View style={[styles.planBox, isDarkMode && styles.darkPanel]}>
-        {hasAnyActiveStop ? (
-          <View style={styles.planHeader}>
-            <View>
-              <Text style={[styles.planTitle, isDarkMode && styles.darkText]} numberOfLines={1} adjustsFontSizeToFit>
-                Plan
+      <Modal
+        visible={accountMenuOpen}
+        animationType="fade"
+        transparent
+        onRequestClose={() => setAccountMenuOpen(false)}
+      >
+        <TouchableOpacity style={styles.accountOverlay} activeOpacity={1} onPress={() => setAccountMenuOpen(false)}>
+          <TouchableOpacity style={[styles.accountCard, isDarkMode && styles.darkModalCard]} activeOpacity={1} onPress={(event) => event.stopPropagation()}>
+            <View style={styles.accountHeader}>
+              <View style={styles.accountAvatar}>
+                <Ionicons name="person-circle-outline" size={36} color="#071827" />
+              </View>
+              <View style={styles.accountTextBlock}>
+                <Text style={[styles.accountName, isDarkMode && styles.darkText]}>{testerUser?.name || 'Tester'}</Text>
+                <Text style={[styles.accountUsage, isDarkMode && styles.darkMutedText]}>
+                  Places calls: {usageMeter.nearbySearchesToday + usageMeter.textSearchesToday} today - {usageMeter.nearbySearchesMonth + usageMeter.textSearchesMonth} month
+                </Text>
+              </View>
+            </View>
+            <View style={styles.accountActions}>
+              <Button
+                label="User settings"
+                onPress={() => {
+                  setAccountMenuOpen(false);
+                  setAccountSettingsOpen(true);
+                }}
+                compact
+              />
+              <Button
+                label="Switch user"
+                onPress={() => {
+                  setAccountMenuOpen(false);
+                  void signOutTester();
+                }}
+                compact
+              />
+              <Button label="Close" onPress={() => setAccountMenuOpen(false)} compact />
+            </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
+
+      <Modal
+        visible={accountSettingsOpen}
+        animationType="fade"
+        transparent
+        onRequestClose={() => setAccountSettingsOpen(false)}
+      >
+        <TouchableOpacity style={styles.accountOverlay} activeOpacity={1} onPress={() => setAccountSettingsOpen(false)}>
+          <TouchableOpacity style={[styles.accountCard, isDarkMode && styles.darkModalCard]} activeOpacity={1} onPress={(event) => event.stopPropagation()}>
+            <Text style={[styles.accountName, isDarkMode && styles.darkText]}>User settings</Text>
+            <View style={styles.accountSettingList}>
+              <View>
+                <Text style={[styles.accountSettingLabel, isDarkMode && styles.darkMutedText]}>Active user</Text>
+                <Text style={[styles.accountSettingValue, isDarkMode && styles.darkText]}>{testerUser?.name || 'Tester'}</Text>
+              </View>
+              <View>
+                <Text style={[styles.accountSettingLabel, isDarkMode && styles.darkMutedText]}>Places usage</Text>
+                <Text style={[styles.accountSettingValue, isDarkMode && styles.darkText]}>
+                  {usageMeter.nearbySearchesToday + usageMeter.textSearchesToday} today - {usageMeter.nearbySearchesMonth + usageMeter.textSearchesMonth} month
+                </Text>
+              </View>
+            </View>
+            <View style={styles.accountActions}>
+              <Button
+                label="Switch user"
+                onPress={() => {
+                  setAccountSettingsOpen(false);
+                  void signOutTester();
+                }}
+                compact
+              />
+              <Button label="Close" onPress={() => setAccountSettingsOpen(false)} compact />
+            </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
+
+      {GROUP_SESSION_ENABLED && !activePlanningSession && sessionBuilderOpen ? (
+        <View style={[styles.sessionBox, isDarkMode && styles.darkPanel]}>
+          <View style={styles.sessionHeaderRow}>
+            <View style={styles.sessionTitleBlock}>
+              <Text style={[styles.sectionTitle, isLightMode && styles.lightSectionTitle, isDarkMode && styles.darkText]}>Planning Session</Text>
+              <Text style={[styles.sessionMetaText, isDarkMode && styles.darkMutedText]}>
+                Invite local testers, set shared context, then collect suggestions and votes.
               </Text>
             </View>
+            <Button label="Close" onPress={() => setSessionBuilderOpen(false)} compact />
+          </View>
+
+          {userPlanningSessions.length ? (
+            <View style={styles.sessionResumeBox}>
+              <Text style={[styles.sessionSubhead, isDarkMode && styles.darkText]}>Resume</Text>
+              <View style={styles.sessionResumeList}>
+                {userPlanningSessions.slice(0, 3).map((session) => (
+                  <TouchableOpacity key={session.id} style={styles.sessionResumeItem} onPress={() => resumePlanningSession(session.id)}>
+                    <Text style={styles.sessionResumeTitle}>{session.title}</Text>
+                    <Text style={styles.sessionResumeMeta}>
+                      {planningIntentLabel(session.intent)} | {dateWindowLabel(session.dateWindow, new Date(), session.customDateRange)} | {session.suggestions.length} suggestions
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+          ) : null}
+
+          <Text style={[styles.sessionSubhead, isDarkMode && styles.darkText]}>Invite testers</Text>
+          <View style={styles.chipWrap}>
+            {TEST_USERS.filter((name) => name !== currentTesterName).map((name) => {
+              const selected = sessionInvitees.includes(name);
+              return (
+                <TouchableOpacity
+                  key={name}
+                  style={[styles.chip, isDarkMode && styles.darkChip, selected && styles.chipActive]}
+                  onPress={() => setSessionInvitees((prev) => selected ? prev.filter((item) => item !== name) : [...prev, name])}
+                >
+                  <Text style={[styles.chipText, isDarkMode && styles.darkMutedText, selected && styles.chipTextActive]}>{name}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+
+          <Text style={[styles.sessionSubhead, isDarkMode && styles.darkText]}>Shared search location</Text>
+          <View style={styles.inputRow}>
+            <TextInput
+              style={styles.input}
+              value={sessionLocationInput}
+              onChangeText={setSessionLocationInput}
+              placeholder={searchLocationLabel}
+              placeholderTextColor="#64748b"
+              returnKeyType="done"
+            />
+            <Button label="Use current" onPress={() => setSessionLocationInput(searchLocationLabel)} compact />
+          </View>
+
+          <Text style={[styles.sessionSubhead, isDarkMode && styles.darkText]}>Shared date</Text>
+          <View style={styles.dateChipWrap}>
+            {dateWindowOptions.map((option) => {
+              const active = selectedDateWindow === option.id;
+              return (
+                <TouchableOpacity
+                  key={`session-date-${option.id}`}
+                  style={[styles.dateChip, active && styles.dateChipActive]}
+                  onPress={() => chooseDateWindow(option.id, option.label)}
+                >
+                  <Text style={[styles.dateChipText, active && styles.dateChipTextActive]}>{option.label}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+
+          <Text style={[styles.sessionSubhead, isDarkMode && styles.darkText]}>Shared time window</Text>
+          <View style={styles.inputRow}>
+            <TextInput
+              style={styles.input}
+              value={sessionTimeWindowInput}
+              onChangeText={setSessionTimeWindowInput}
+              placeholder="6:00 PM - 9:00 PM"
+              placeholderTextColor="#64748b"
+              returnKeyType="done"
+            />
+          </View>
+
+          <Text style={[styles.sessionSubhead, isDarkMode && styles.darkText]}>Intent</Text>
+          <View style={styles.filterTabs}>
+            {(['food', 'activity', 'both'] as PlanningIntent[]).map((intent) => (
+              <FilterTab
+                key={intent}
+                label={planningIntentLabel(intent)}
+                active={sessionIntent === intent}
+                onPress={() => setSessionIntent(intent)}
+              />
+            ))}
+          </View>
+          <View style={styles.buttonRow}>
+            <Button label="Create session" onPress={createPlanningSession} primary />
+          </View>
+        </View>
+      ) : null}
+
+      {GROUP_SESSION_ENABLED && activePlanningSession ? (
+        <View style={[styles.sessionBox, isDarkMode && styles.darkPanel]}>
+          <View style={styles.sessionHeaderRow}>
+            <View style={styles.sessionTitleBlock}>
+              <Text style={[styles.sectionTitle, isLightMode && styles.lightSectionTitle, isDarkMode && styles.darkText]}>
+                {activePlanningSession.title}
+              </Text>
+              <Text style={[styles.sessionMetaText, isDarkMode && styles.darkMutedText]}>
+                {planningIntentLabel(activePlanningSession.intent)} | {dateWindowLabel(activePlanningSession.dateWindow, new Date(), activePlanningSession.customDateRange)} | {activePlanningSession.timeWindow}
+              </Text>
+              <Text style={[styles.sessionMetaText, isDarkMode && styles.darkMutedText]}>
+                Shared search: {activePlanningSession.locationLabel}
+              </Text>
+              <Text style={[styles.sessionMetaText, isDarkMode && styles.darkMutedText]}>
+                My route origin: {startingLocationLabel}
+              </Text>
+            </View>
+            <View style={styles.sessionHeaderActions}>
+              <Button label="Update" onPress={sharePlanningSessionUpdate} compact />
+              <Button label="Exit" onPress={exitPlanningSession} compact />
+            </View>
+          </View>
+
+          <View style={styles.sessionParticipantRow}>
+            {activePlanningSession.participants.map((participant) => (
+              <View key={participant} style={[styles.sessionParticipantPill, participant === activePlanningSession.owner && styles.sessionOwnerPill]}>
+                <Text style={styles.sessionParticipantText}>
+                  {participant}{participant === activePlanningSession.owner ? ' owner' : ''}
+                </Text>
+              </View>
+            ))}
+          </View>
+
+          {activePlanningSession.status === 'planning' ? (
+            <>
+              <View style={styles.sessionSearchActions}>
+                {activePlanningSession.intent !== 'activity' ? (
+                  <Button label="Find food" onPress={() => searchFromPlan('food')} compact />
+                ) : null}
+                {activePlanningSession.intent !== 'food' ? (
+                  <Button label="Find activity" onPress={() => searchFromPlan('activity')} compact />
+                ) : null}
+              </View>
+
+              <View style={styles.sessionManualBox}>
+                <Text style={[styles.sessionSubhead, isDarkMode && styles.darkText]}>Manual suggestion</Text>
+                <View style={styles.inputRow}>
+                  <TextInput
+                    style={styles.input}
+                    value={sessionManualSuggestion}
+                    onChangeText={setSessionManualSuggestion}
+                    placeholder="Place or idea"
+                    placeholderTextColor="#64748b"
+                    returnKeyType="done"
+                  />
+                  <Button label="Food" onPress={() => addManualPlanningSuggestion('food')} compact />
+                  <Button label="Activity" onPress={() => addManualPlanningSuggestion('activity')} compact />
+                </View>
+              </View>
+            </>
+          ) : null}
+
+          <View style={styles.sessionSuggestionGroup}>
+            <Text style={[styles.sessionSubhead, isDarkMode && styles.darkText]}>Food options</Text>
+            {foodSuggestions.length ? foodSuggestions
+              .slice()
+              .sort((a, b) => scorePlanningSuggestion(b, activePlanningSession).score - scorePlanningSuggestion(a, activePlanningSession).score)
+              .map((suggestion) => (
+                <PlanningSuggestionCard
+                  key={suggestion.id}
+                  suggestion={suggestion}
+                  currentUser={currentTesterName}
+                  canRemove={suggestion.addedBy === currentTesterName || isPlanningOwner}
+                  onVote={() => togglePlanningVote(suggestion.id)}
+                  onRemove={() => removePlanningSuggestion(suggestion)}
+                  onOpenMap={() => openPlanningSuggestionMap(suggestion)}
+                  onOpenEvent={typeof suggestion.item !== 'string' && suggestion.item.eventUrl ? () => openPlanningSuggestionEvent(suggestion) : undefined}
+                />
+              )) : (
+              <Text style={[styles.empty, isDarkMode && styles.darkMutedText]}>No food suggestions yet.</Text>
+            )}
+          </View>
+
+          <View style={styles.sessionSuggestionGroup}>
+            <Text style={[styles.sessionSubhead, isDarkMode && styles.darkText]}>Activity options</Text>
+            {activitySuggestions.length ? activitySuggestions
+              .slice()
+              .sort((a, b) => scorePlanningSuggestion(b, activePlanningSession).score - scorePlanningSuggestion(a, activePlanningSession).score)
+              .map((suggestion) => (
+                <PlanningSuggestionCard
+                  key={suggestion.id}
+                  suggestion={suggestion}
+                  currentUser={currentTesterName}
+                  canRemove={suggestion.addedBy === currentTesterName || isPlanningOwner}
+                  onVote={() => togglePlanningVote(suggestion.id)}
+                  onRemove={() => removePlanningSuggestion(suggestion)}
+                  onOpenMap={() => openPlanningSuggestionMap(suggestion)}
+                  onOpenEvent={typeof suggestion.item !== 'string' && suggestion.item.eventUrl ? () => openPlanningSuggestionEvent(suggestion) : undefined}
+                />
+              )) : (
+              <Text style={[styles.empty, isDarkMode && styles.darkMutedText]}>No activity suggestions yet.</Text>
+            )}
+          </View>
+
+          <View style={styles.sessionFinalBox}>
+            <View style={styles.sessionHeaderRow}>
+              <View style={styles.sessionTitleBlock}>
+                <Text style={[styles.sessionSubhead, isDarkMode && styles.darkText]}>Final plan</Text>
+                <Text style={[styles.sessionMetaText, isDarkMode && styles.darkMutedText]}>
+                  {activePlanningSession.status === 'finalized'
+                    ? 'Locked into normal itinerary stops.'
+                    : isPlanningOwner
+                      ? 'Build from votes plus timing, distance, event time, and hours.'
+                      : `${activePlanningSession.owner} can lock this in.`}
+                </Text>
+              </View>
+              {isPlanningOwner && activePlanningSession.status === 'planning' ? (
+                <Button label={activePlanningSession.recommendation ? 'Rebuild' : 'Lock it in'} onPress={buildFinalPlanRecommendation} primary compact />
+              ) : null}
+            </View>
+
+            {activePlanningSession.recommendation ? (
+              <View style={styles.sessionRecommendationBox}>
+                {activePlanningSession.recommendation.suggestionIds.map((id, index) => {
+                  const suggestion = activePlanningSession.suggestions.find((item) => item.id === id);
+                  if (!suggestion) return null;
+                  return (
+                    <Text key={id} style={[styles.sessionRecommendationLine, isDarkMode && styles.darkText]}>
+                      {index + 1}. {suggestion.slot === 'food' ? 'Food' : 'Activity'}: {cardToName(suggestion.item) || 'Suggestion'}
+                    </Text>
+                  );
+                })}
+                {activePlanningSession.recommendation.notes.slice(0, 3).map((note) => (
+                  <Text key={note} style={[styles.sessionMetaText, isDarkMode && styles.darkMutedText]}>{note}</Text>
+                ))}
+                {isPlanningOwner && activePlanningSession.status === 'planning' ? (
+                  <View style={styles.buttonRow}>
+                    <Button label="Accept plan" onPress={acceptFinalPlanRecommendation} primary compact />
+                  </View>
+                ) : null}
+              </View>
+            ) : null}
+
+            {activePlanningSession.status === 'finalized' && activePlanningSession.finalPlan.length ? (
+              <View style={styles.sessionRecommendationBox}>
+                {activePlanningSession.finalPlan.map((stop, index) => (
+                  <Text key={stop.key} style={[styles.sessionRecommendationLine, isDarkMode && styles.darkText]}>
+                    {index + 1}. {stop.slot === 'food' ? 'Food' : 'Activity'}: {cardToName(stop.item) || 'Stop'}
+                  </Text>
+                ))}
+                <View style={styles.buttonRow}>
+                  <Button label="Load final plan" onPress={loadFinalSessionPlan} compact />
+                </View>
+              </View>
+            ) : null}
+          </View>
+        </View>
+      ) : null}
+
+      <View style={[styles.planBox, isDarkMode && styles.darkPanel]}>
+        {hasAnyActiveStop && !isPlanLocked ? (
+          <View style={styles.planHeader}>
+            <View style={styles.planTitleBlock}>
+              <TextInput
+                style={[styles.planTitleInput, isDarkMode && styles.darkPanelInput]}
+                value={plan.title ?? planTitle}
+                onChangeText={renamePlan}
+                placeholder="Plan title"
+                placeholderTextColor="#64748b"
+              />
+              {isImportedGoogleMapsPlan ? (
+                <Text style={[styles.planMetaText, isDarkMode && styles.darkMutedText]} numberOfLines={2}>
+                  Google Maps draft route | {importedPlanDateTimeLabel} | {plan.stops.length} stops
+                </Text>
+              ) : null}
+            </View>
             <View style={styles.planHeaderActions}>
+              <Button label="Lock In" onPress={lockPlan} primary compact />
               <Button label="Save" onPress={saveCurrentPlan} compact />
-              <Button label="Share" onPress={() => setSharePreviewOpen(true)} compact />
-              <Button label="Route" onPress={openDirections} primary compact />
+              <Button label="Invite" onPress={() => setSharePreviewOpen(true)} compact />
+              <Button label={isImportedGoogleMapsPlan && plan.sourceUrl ? 'Open route' : 'Route'} onPress={openPlanRoute} compact />
             </View>
           </View>
         ) : null}
@@ -3378,13 +5200,66 @@ function NomNomGoApp() {
           </View>
         ) : null}
 
-        {hasAnyActiveStop ? (
+        {hasAnyActiveStop && isPlanLocked ? (
+          <>
+          <View style={[styles.lockedPlanCard, isDarkMode && styles.darkCard]}>
+            <View style={styles.lockedPlanCardHeader}>
+              <View style={styles.lockedPlanTitleBlock}>
+                <Text style={[styles.lockedPlanTitle, isDarkMode && styles.darkText]} numberOfLines={2}>
+                  {planTitle}
+                </Text>
+                <Text style={[styles.lockedPlanMeta, isDarkMode && styles.darkMutedText]} numberOfLines={1}>
+                  {importedPlanDateTimeLabel}
+                </Text>
+              </View>
+              <View style={styles.lockedPlanCardTools}>
+                <TouchableOpacity
+                  style={[styles.lockedPlanIconButton, isDarkMode && styles.darkChip]}
+                  onPress={() => setPlanPreviewOpen(true)}
+                  accessibilityRole="button"
+                  accessibilityLabel="View larger plan"
+                >
+                  <Ionicons name="expand-outline" size={18} color={isDarkMode ? '#fffaf3' : '#071827'} />
+                </TouchableOpacity>
+                <Text style={[styles.lockedPlanMeta, isDarkMode && styles.darkMutedText]}>{plan.stops.length} stops</Text>
+              </View>
+            </View>
+            {leaveForFirstStopText ? (
+              <Text style={[styles.lockedPlanLeave, isDarkMode && styles.darkMutedText]} numberOfLines={1}>
+                {leaveForFirstStopText}
+              </Text>
+            ) : null}
+            {planInvitees.length ? (
+              <Text style={[styles.lockedPlanInvitees, isDarkMode && styles.darkMutedText]} numberOfLines={1}>
+                With {unique([currentTesterName, ...planInvitees]).join(', ')}
+              </Text>
+            ) : null}
+            <View style={styles.lockedStopList}>
+              {plan.stops.map((stop, index) => (
+                <TouchableOpacity key={`locked-${stop.key}`} style={styles.lockedStopRow} onPress={() => openStopMaps(stop)}>
+                  <Text style={styles.lockedStopIndex}>{index + 1}</Text>
+                  <Text style={styles.lockedStopTime}>{formatClockAfterMinutes(itineraryArrivalMinutes(index))}</Text>
+                  <Text style={styles.lockedStopName} numberOfLines={1}>{cardToName(stop.item) || 'Stop'}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+          <View style={styles.lockedPlanActions}>
+            <Button label="Unlock/Edit" onPress={unlockPlan} compact />
+            {!isCurrentPlanSaved ? <Button label="Save" onPress={saveCurrentPlan} compact /> : null}
+            <Button label="Invite" onPress={() => setSharePreviewOpen(true)} compact />
+            <Button label={isImportedGoogleMapsPlan && plan.sourceUrl ? 'Open route' : 'Route'} onPress={openPlanRoute} primary compact />
+          </View>
+          </>
+        ) : null}
+
+        {hasAnyActiveStop && !isPlanLocked ? (
         <View style={styles.timeline}>
           {plan.stops.map((stop, index) => (
             <React.Fragment key={stop.key}>
               <PlanStep
                 number={`${index + 1}`}
-                title={stop.slot === 'food' ? 'Food' : 'Activity'}
+                title={isImportedGoogleMapsDraft ? 'Stop' : stop.slot === 'food' ? 'Food' : 'Activity'}
                 value={cardToName(stop.item) || (stop.slot === 'food' ? 'Food stop' : 'Activity stop')}
                 detail={stepDetail(stop, index)}
                 featureOptions={stop.featureOptions || []}
@@ -3400,6 +5275,10 @@ function NomNomGoApp() {
                 onMapPress={() => openStopMaps(stop)}
                 shareLabel="Share"
                 onSharePress={() => openQuickShare({ kind: 'stop', stop, index })}
+                moveUpLabel={index > 0 ? 'Up' : undefined}
+                onMoveUpPress={index > 0 ? () => moveStop(stop.key, -1) : undefined}
+                moveDownLabel={index < plan.stops.length - 1 ? 'Down' : undefined}
+                onMoveDownPress={index < plan.stops.length - 1 ? () => moveStop(stop.key, 1) : undefined}
                 removeLabel="Remove"
                 onRemovePress={() => removeStop(stop)}
               />
@@ -3423,6 +5302,7 @@ function NomNomGoApp() {
                     <Button label="Clear" onPress={() => {
                       setPlanTimes((prev) => ({ ...prev, [stop.key]: undefined }));
                       setArrivalTimes((prev) => ({ ...prev, [stop.key]: undefined }));
+                      setPlan((prev) => ({ ...prev, savedPlanId: undefined }));
                       setArrivalDraftDirty(false);
                       setDurationDraftDirty(false);
                       setTimeEditorKey(null);
@@ -3440,7 +5320,7 @@ function NomNomGoApp() {
         </View>
         ) : null}
 
-        {hasFood || hasActivity ? (
+        {(hasFood || hasActivity) && !isPlanLocked ? (
           <View style={styles.planActions}>
             <Button
               label="Clear plan"
@@ -3457,7 +5337,19 @@ function NomNomGoApp() {
           </View>
         ) : null}
 
+        {!isPlanLocked ? (
         <View style={styles.routeOriginBox}>
+          <TouchableOpacity style={styles.planSettingsHeader} onPress={() => setPlanSettingsOpen((prev) => !prev)}>
+            <View style={styles.locationSummaryText}>
+              <Text style={[styles.bridgeTitle, isDarkMode && styles.darkText]}>Plan Settings</Text>
+              <Text style={[styles.routeOriginHint, isDarkMode && styles.darkMutedText]} numberOfLines={1} ellipsizeMode="tail">
+                {planSettingsSummary}
+              </Text>
+            </View>
+            <Text style={styles.chevron}>{planSettingsOpen ? 'Hide' : 'Show'}</Text>
+          </TouchableOpacity>
+          {planSettingsOpen ? (
+          <>
           <View style={styles.locationSummaryRow}>
             <View style={styles.locationSummaryText}>
               <Text style={[styles.bridgeTitle, isDarkMode && styles.darkText]}>Starting location</Text>
@@ -3518,6 +5410,61 @@ function NomNomGoApp() {
             </>
           ) : null}
 
+          <View style={styles.locationSummaryRow}>
+            <View style={styles.locationSummaryText}>
+              <Text style={[styles.bridgeTitle, isDarkMode && styles.darkText]}>Import route</Text>
+              <Text style={[styles.routeOriginHint, isDarkMode && styles.darkMutedText]}>
+                {isImportedGoogleMapsPlan ? `Google Maps route | ${plan.stops.length} stops` : 'Paste a Google Maps directions URL.'}
+              </Text>
+            </View>
+            <Button
+              label={routeImportOpen ? 'Hide' : 'Edit'}
+              onPress={() => {
+                setRouteImportOpen((prev) => !prev);
+                setRouteImportError('');
+              }}
+              compact
+            />
+          </View>
+          {routeImportOpen ? (
+            <View style={styles.routeImportBox}>
+              <TextInput
+                style={styles.input}
+                value={routeImportUrl}
+                onChangeText={(value) => {
+                  setRouteImportUrl(value);
+                  setRouteImportError('');
+                }}
+                placeholder="Paste Google Maps route URL"
+                placeholderTextColor="#64748b"
+                autoCapitalize="none"
+                autoCorrect={false}
+                returnKeyType="done"
+                onSubmitEditing={importGoogleMapsRoute}
+              />
+              {routeImportError ? (
+                <Text style={styles.routeImportError}>{routeImportError}</Text>
+              ) : null}
+              <View style={styles.buttonRow}>
+                <Button
+                  label={routeImporting ? 'Importing' : 'Import'}
+                  onPress={importGoogleMapsRoute}
+                  primary
+                  compact
+                  disabled={routeImporting}
+                />
+                <Button
+                  label="Cancel"
+                  onPress={() => {
+                    setRouteImportOpen(false);
+                    setRouteImportError('');
+                  }}
+                  compact
+                />
+              </View>
+            </View>
+          ) : null}
+
           <View style={styles.dateWindowBox}>
             <View style={styles.locationSummaryText}>
               <Text style={[styles.bridgeTitle, isDarkMode && styles.darkText]}>Date</Text>
@@ -3566,7 +5513,10 @@ function NomNomGoApp() {
               </View>
             ) : null}
           </View>
+          </>
+          ) : null}
         </View>
+        ) : null}
 
       </View>
 
@@ -3592,7 +5542,7 @@ function NomNomGoApp() {
                       : 'Saved plan'} · {new Date(saved.createdAt).toLocaleDateString([], { month: 'short', day: 'numeric' })}
                   </Text>
                   <Text style={styles.savedPlanStops} numberOfLines={2}>
-                    {saved.stops.map((stop) => cardToName(stop.item)).filter(Boolean).join(' → ') || 'No stops'}
+                    {savedPlanStopsLabel(saved)}
                   </Text>
                 </View>
                 <View style={styles.savedPlanActions}>
@@ -3607,18 +5557,45 @@ function NomNomGoApp() {
         ) : null}
       </View>
 
+      {!isPlanLocked ? (
+      <>
       <View style={[styles.pairingBox, isLightMode && styles.lightPairingBox, isDarkMode && styles.darkAccentPanel]}>
-          <Text style={[styles.sectionTitle, isLightMode && styles.lightSectionTitle, isDarkMode && styles.darkText]}>Suggested pairings</Text>
-          <Text style={[styles.pairingHint, isLightMode && styles.lightMutedText, isDarkMode && styles.darkMutedText]}>
-            Starred combos fill your plan. Other suggestions update filters.
-          </Text>
-          <View style={styles.chipWrap}>
-            {suggestedPairings.map((suggestion, index) => (
-              <TouchableOpacity key={`${suggestion.slot}-${suggestion.label}-${index}`} style={styles.mapChip} onPress={() => runSuggestion(suggestion)}>
-                <Text style={styles.mapChipText}>{suggestion.label}</Text>
-              </TouchableOpacity>
-            ))}
+          <View style={styles.pairingHeader}>
+            <View style={styles.pairingHeaderText}>
+              <Text style={[styles.sectionTitle, styles.pairingTitle, isLightMode && styles.lightSectionTitle, isDarkMode && styles.darkText]}>
+                Suggested pairings
+              </Text>
+              <Text
+                style={[styles.pairingHint, isLightMode && styles.lightMutedText, isDarkMode && styles.darkMutedText]}
+                numberOfLines={suggestedPairingsOpen ? 2 : 1}
+              >
+                {suggestedPairingsOpen
+                  ? 'Starred combos fill your plan. Other suggestions update filters.'
+                  : `${suggestedPairings.length} suggestions available`}
+              </Text>
+            </View>
+            <Button label={suggestedPairingsOpen ? 'Hide' : 'Show'} onPress={toggleSuggestedPairingsOpen} compact />
           </View>
+          {suggestedPairingsOpen ? (
+            <View style={styles.pairingBody}>
+              <View style={styles.chipWrap}>
+                {visibleSuggestedPairings.map((suggestion, index) => (
+                  <TouchableOpacity key={`${suggestion.slot}-${suggestion.label}-${index}`} style={styles.mapChip} onPress={() => runSuggestion(suggestion)}>
+                    <Text style={styles.mapChipText}>{suggestion.label}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              {hiddenSuggestedPairingCount > 0 ? (
+                <View style={styles.pairingActions}>
+                  <Button
+                    label={suggestedPairingsExpanded ? 'Less' : `More (${hiddenSuggestedPairingCount})`}
+                    onPress={() => setSuggestedPairingsExpanded((prev) => !prev)}
+                    compact
+                  />
+                </View>
+              ) : null}
+            </View>
+          ) : null}
       </View>
 
       <View style={[styles.preferencesBox, isLightMode && styles.lightPanel, isDarkMode && styles.darkPanel]}>
@@ -3626,15 +5603,7 @@ function NomNomGoApp() {
           <View>
             <Text style={[styles.sectionTitle, isLightMode && styles.lightSectionTitle, isDarkMode && styles.darkText]}>Preferences</Text>
             <Text style={[styles.preferenceSummary, isLightMode && styles.lightMutedText, isDarkMode && styles.darkMutedText]}>
-              {[
-                selectedMoods.slice(0, 2).join(', '),
-                selectedTime,
-                resultMode === 'food'
-                  ? `Food: ${selectedFoods.join(', ')}`
-                  : `Activity: ${selectedActivities.join(', ')}`,
-              ]
-                .filter(Boolean)
-                .join(' - ')}
+              {preferenceSummaryParts.join(' - ')}
             </Text>
           </View>
           <Text style={styles.chevron}>{preferencesOpen ? 'Hide' : 'Edit'}</Text>
@@ -3642,10 +5611,13 @@ function NomNomGoApp() {
 
         {preferencesOpen ? (
           <View style={styles.preferencesContent}>
-            <Text style={styles.filterLabel}>Mood</Text>
-            <ChipRow
+            <PreferenceGroup
+              label="Vibe"
               items={MOODS}
               selected={selectedMoods}
+              previewCount={8}
+              expanded={Boolean(expandedPreferenceGroups.vibe)}
+              onToggleExpanded={() => togglePreferenceGroupExpanded('vibe')}
               onPress={(value) =>
                 setSelectedMoods((prev) => {
                   addLog(`Mood chip tapped: ${value}`);
@@ -3653,8 +5625,8 @@ function NomNomGoApp() {
                 })
               }
             />
-            <Text style={styles.filterLabel}>Time</Text>
-            <ChipRow
+            <PreferenceGroup
+              label="Time"
               items={TIMES}
               selected={[selectedTime]}
               onPress={(value) => {
@@ -3664,25 +5636,40 @@ function NomNomGoApp() {
             />
             {resultMode === 'food' ? (
               <>
-                <Text style={styles.filterLabel}>Food filters</Text>
-                <ChipRow
+                <PreferenceGroup
+                  label="Food filters"
                   items={FOOD_QUICK_FILTERS}
                   selected={selectedFoods}
                   onPress={(value) => toggleMulti(value, selectedFoods, setSelectedFoods, 'Food')}
                 />
-                <Text style={styles.filterLabel}>Cuisine</Text>
-                <ChipRow
+                <PreferenceGroup
+                  label="Cuisine"
                   items={CUISINES}
                   selected={selectedFoods}
+                  previewCount={8}
+                  expanded={Boolean(expandedPreferenceGroups.cuisine)}
+                  onToggleExpanded={() => togglePreferenceGroupExpanded('cuisine')}
                   onPress={(value) => toggleMulti(value, selectedFoods, setSelectedFoods, 'Food')}
+                />
+                <PreferenceGroup
+                  label="Dietary needs"
+                  items={DIETARY_PREFERENCES}
+                  selected={selectedDietary}
+                  previewCount={4}
+                  expanded={Boolean(expandedPreferenceGroups.dietary)}
+                  onToggleExpanded={() => togglePreferenceGroupExpanded('dietary')}
+                  onPress={(value) => toggleMulti(value, selectedDietary, setSelectedDietary, 'Dietary')}
                 />
               </>
             ) : (
               <>
-                <Text style={styles.filterLabel}>Activity type</Text>
-                <ChipRow
+                <PreferenceGroup
+                  label="Activity type"
                   items={ACTIVITIES}
                   selected={selectedActivities}
+                  previewCount={8}
+                  expanded={Boolean(expandedPreferenceGroups.activity)}
+                  onToggleExpanded={() => togglePreferenceGroupExpanded('activity')}
                   onPress={(value) => toggleMulti(value, selectedActivities, setSelectedActivities, 'Activity')}
                 />
                 {selectedActivities.includes('Events') ? (
@@ -3692,15 +5679,21 @@ function NomNomGoApp() {
                 ) : null}
               </>
             )}
-            <Text style={styles.filterLabel}>Weather</Text>
-            <ChipRow
-              items={WEATHER}
-              selected={[selectedWeather]}
-              onPress={(value) => {
-                addLog(`Weather chip tapped: ${value}`);
-                setSelectedWeather(value);
-              }}
-            />
+            <TouchableOpacity style={styles.advancedPreferenceHeader} onPress={() => setAdvancedPreferencesOpen((prev) => !prev)}>
+              <Text style={[styles.filterLabel, styles.advancedPreferenceLabel]}>Advanced preferences</Text>
+              <Text style={styles.chevron}>{advancedPreferencesOpen ? 'Hide' : 'Show'}</Text>
+            </TouchableOpacity>
+            {advancedPreferencesOpen ? (
+              <PreferenceGroup
+                label="Weather"
+                items={WEATHER}
+                selected={[selectedWeather]}
+                onPress={(value) => {
+                  addLog(`Weather chip tapped: ${value}`);
+                  setSelectedWeather(value);
+                }}
+              />
+            ) : null}
             <TouchableOpacity style={styles.bottomHideButton} onPress={refreshFromPreferences}>
               <Text style={styles.bottomHideText}>Refresh Results</Text>
             </TouchableOpacity>
@@ -3708,12 +5701,12 @@ function NomNomGoApp() {
         ) : null}
       </View>
 
-      <View style={[styles.bridgeBox, isLightMode && styles.lightPanel, isDarkMode && styles.darkPanel]}>
+      <View style={[styles.bridgeBox, isLightMode && styles.lightPanel, Platform.OS === 'web' && styles.webBridgeBox, isDarkMode && styles.darkPanel]}>
         <Text style={[styles.bridgeTitle, styles.bridgeTitleDarkPanel, isLightMode && styles.lightSectionTitle, isDarkMode && styles.darkText]}>Find a specific place</Text>
         <View style={styles.inputRow}>
           <TextInput
             ref={manualSearchRef}
-            style={[styles.input, styles.darkPanelInput, isLightMode && styles.input]}
+            style={[styles.input, styles.darkPanelInput, isLightMode && styles.input, Platform.OS === 'web' && styles.webInput]}
             value={manualSearch}
             onChangeText={(value) => {
               setManualSearch(value);
@@ -3732,7 +5725,16 @@ function NomNomGoApp() {
         </View>
       </View>
 
-      {hasInitiatedSearch ? (
+      {!hasInitiatedSearch ? (
+        <View onLayout={(event) => { resultsYRef.current = event.nativeEvent.layout.y; }}>
+          <View style={[styles.emptyState, styles.preSearchEmptyState, isDarkMode && styles.darkPanel]}>
+            <Text style={[styles.emptyTitle, isDarkMode && styles.darkText]}>Waiting for food or activity</Text>
+            <Text style={[styles.empty, isDarkMode && styles.darkMutedText]}>
+              Search results and suggested stops will appear here.
+            </Text>
+          </View>
+        </View>
+      ) : (
         <View onLayout={(event) => { resultsYRef.current = event.nativeEvent.layout.y; }}>
         <Section title={titleForResults}>
           <View style={styles.filterTabs}>
@@ -3754,14 +5756,26 @@ function NomNomGoApp() {
             </View>
           ) : !loading && shownCards.length === 0 ? (
             <View style={[styles.emptyState, isDarkMode && styles.darkPanel]}>
-              <Text style={styles.emptyTitle}>Ready when you are</Text>
-              <Text style={styles.empty}>Adjust preferences or search for places nearby.</Text>
+              <Text style={styles.emptyTitle}>{searchNotice ? 'Google Places key missing' : 'Ready when you are'}</Text>
+              <Text style={styles.empty}>{searchNotice || 'Adjust preferences or search for places nearby.'}</Text>
             </View>
           ) : null}
           {!loading && shownCards.map((card, index) => {
             const isSelected = selectedCards.some((item) => cardToId(item) === card.id);
+            const isSuggested = planningSuggestionMode && Boolean(activePlanningSession?.suggestions.some((suggestion) => samePlanningSuggestion(suggestion, resultMode, card)));
+            const resultActionLabel = planningSuggestionMode
+              ? isSuggested
+                ? 'Suggested'
+                : resultMode === 'food'
+                  ? 'Suggest food'
+                  : 'Suggest activity'
+              : isSelected
+                ? 'Deselect'
+                : resultMode === 'food'
+                  ? 'Add food'
+                  : 'Add activity';
             return (
-            <View key={`${card.id}-${index}`} style={[styles.card, isDarkMode && styles.darkCard, isSelected && styles.cardSelected]}>
+            <View key={`${card.id}-${index}`} style={[styles.card, isDarkMode && styles.darkCard, (isSelected || isSuggested) && styles.cardSelected]}>
               <View style={styles.cardTopRow}>
                 <Text style={[styles.cardRank, isSelected && styles.cardRankSelected]}>
                   {resultBadgeForCard(card, isSelected, index)}
@@ -3778,7 +5792,7 @@ function NomNomGoApp() {
               {card.address ? <Text style={[styles.address, isDarkMode && styles.darkMutedText]}>{card.address}</Text> : null}
               {card.todayHours ? <Text style={[styles.hoursDetail, isDarkMode && styles.darkMutedText]}>{card.todayHours}</Text> : null}
               <View style={styles.buttonRow}>
-                <Button label={isSelected ? 'Deselect' : resultMode === 'food' ? 'Add food' : 'Add activity'} onPress={() => selectCard(card)} primary={!isSelected} compact />
+                <Button label={resultActionLabel} onPress={() => selectCard(card)} primary={!isSelected && !isSuggested} compact />
                 {card.kind === 'event' && card.eventUrl ? (
                   <Button label="Open event" onPress={() => openCardEvent(card)} compact />
                 ) : null}
@@ -3804,7 +5818,54 @@ function NomNomGoApp() {
           ) : null}
         </Section>
         </View>
+      )}
+      </>
       ) : null}
+
+      <Modal
+        visible={planPreviewOpen}
+        animationType="fade"
+        transparent
+        onRequestClose={() => setPlanPreviewOpen(false)}
+      >
+        <View style={styles.shareOverlay}>
+          <View style={styles.planPreviewShell}>
+            <View style={[styles.planPreviewCard, isDarkMode && styles.darkModalCard]}>
+              <Text style={[styles.planPreviewTitle, isDarkMode && styles.darkText]} numberOfLines={2}>
+                {planTitle}
+              </Text>
+              <View style={styles.planPreviewMetaRow}>
+                <Text style={[styles.planPreviewMeta, isDarkMode && styles.darkMutedText]} numberOfLines={1}>
+                  {importedPlanDateTimeLabel}
+                </Text>
+                <Text style={[styles.planPreviewMeta, isDarkMode && styles.darkMutedText]}>{plan.stops.length} stops</Text>
+              </View>
+              {leaveForFirstStopText ? (
+                <Text style={styles.shareLeaveTime}>{leaveForFirstStopText}</Text>
+              ) : null}
+              {planInvitees.length ? (
+                <Text style={[styles.planPreviewMeta, isDarkMode && styles.darkMutedText]} numberOfLines={1}>
+                  With {unique([currentTesterName, ...planInvitees]).join(', ')}
+                </Text>
+              ) : null}
+              <View style={styles.planPreviewStopList}>
+                {plan.stops.map((stop, index) => (
+                  <View key={`preview-${stop.key}`} style={styles.planPreviewStopRow}>
+                    <Text style={styles.planPreviewStopIndex}>{index + 1}</Text>
+                    <Text style={styles.planPreviewStopTime}>{formatClockAfterMinutes(itineraryArrivalMinutes(index))}</Text>
+                    <Text style={styles.planPreviewStopName} numberOfLines={1}>{cardToName(stop.item) || 'Stop'}</Text>
+                  </View>
+                ))}
+              </View>
+            </View>
+            <View style={[styles.shareControlPanel, isDarkMode && styles.darkModalCard]}>
+              <View style={styles.shareActions}>
+                <Button label="Close" onPress={() => setPlanPreviewOpen(false)} primary />
+              </View>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       <Modal
         visible={sharePreviewOpen}
@@ -3813,29 +5874,70 @@ function NomNomGoApp() {
         onRequestClose={() => setSharePreviewOpen(false)}
       >
         <View style={styles.shareOverlay}>
+          <View style={styles.shareModalShell}>
           <View style={[styles.shareCard, isDarkMode && styles.darkModalCard]}>
             <View style={styles.shareHeader}>
               <Text style={styles.shareBrand}>NomNomGo</Text>
-              <Text style={styles.shareTagline}>GOOD FOOD. GREAT PLANS.</Text>
+              <Text style={styles.shareTagline}>Come together</Text>
             </View>
+            <Text style={[styles.shareTitle, isDarkMode && styles.darkText]} numberOfLines={2}>
+              {planTitle}
+            </Text>
+            <Text style={[styles.shareMetaLine, isDarkMode && styles.darkMutedText]} numberOfLines={1}>
+              {importedPlanDateTimeLabel}
+            </Text>
             {leaveForFirstStopText ? (
               <Text style={styles.shareLeaveTime}>{leaveForFirstStopText}</Text>
             ) : null}
-            {plan.stops.map((stop, index) => (
-              <View key={`share-${stop.key}`} style={styles.shareStop}>
-                <View style={styles.shareStopNumber}>
-                  <Text style={styles.shareStopNumberText}>{index + 1}</Text>
-                </View>
-                <View style={styles.shareStopBody}>
-                  <Text style={styles.shareStopType}>{stop.slot === 'food' ? 'Food' : 'Activity'}</Text>
-                  <Text style={styles.shareStopName}>{cardToName(stop.item) || 'Stop'}</Text>
-                  <Text style={styles.shareStopTime}>{stepDetail(stop, index)}</Text>
-                  {stop.selectedFeatures?.length ? (
-                    <Text style={styles.shareStopTime}>Includes: {stop.selectedFeatures.join(', ')}</Text>
-                  ) : null}
-                </View>
+            {isPlanLocked ? (
+              <View style={styles.shareLockedStopList}>
+                {plan.stops.map((stop, index) => (
+                  <View key={`share-locked-${stop.key}`} style={styles.shareLockedStopRow}>
+                    <Text style={styles.shareLockedStopIndex}>{index + 1}</Text>
+                    <Text style={styles.shareLockedStopTime}>{formatClockAfterMinutes(itineraryArrivalMinutes(index))}</Text>
+                    <Text style={styles.shareLockedStopName} numberOfLines={1}>{cardToName(stop.item) || 'Stop'}</Text>
+                  </View>
+                ))}
               </View>
-            ))}
+            ) : (
+              plan.stops.map((stop, index) => (
+                <View key={`share-${stop.key}`} style={styles.shareStop}>
+                  <View style={styles.shareStopNumber}>
+                    <Text style={styles.shareStopNumberText}>{index + 1}</Text>
+                  </View>
+                  <View style={styles.shareStopBody}>
+                    <Text style={styles.shareStopType}>{stop.slot === 'food' ? 'Food' : 'Activity'}</Text>
+                    <Text style={styles.shareStopName}>{cardToName(stop.item) || 'Stop'}</Text>
+                    <Text style={styles.shareStopTime}>{stepDetail(stop, index)}</Text>
+                    {stop.selectedFeatures?.length ? (
+                      <Text style={styles.shareStopTime}>Includes: {stop.selectedFeatures.join(', ')}</Text>
+                    ) : null}
+                  </View>
+                </View>
+              ))
+            )}
+            {planInvitees.length ? (
+              <Text style={[styles.shareMetaLine, isDarkMode && styles.darkMutedText]} numberOfLines={1}>
+                With {unique([currentTesterName, ...planInvitees]).join(', ')}
+              </Text>
+            ) : null}
+          </View>
+          <View style={[styles.shareControlPanel, isDarkMode && styles.darkModalCard]}>
+            <Text style={styles.quickShareHint}>Invite NNG users</Text>
+            <View style={styles.quickShareUserList}>
+              {quickShareUsers.map((user) => {
+                const selected = planInvitees.includes(user);
+                return (
+                  <TouchableOpacity
+                    key={`plan-invite-${user}`}
+                    style={[styles.quickShareUserButton, selected && styles.quickShareUserButtonSelected]}
+                    onPress={() => togglePlanInvitee(user)}
+                  >
+                    <Text style={styles.quickShareUserText}>{user}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
             <Text style={styles.quickShareHint}>In-app dev share</Text>
             <View style={styles.quickShareUserList}>
               {quickShareUsers.map((user) => (
@@ -3848,6 +5950,7 @@ function NomNomGoApp() {
               <Button label="Text contacts" onPress={sharePlan} primary />
               <Button label="Close" onPress={() => setSharePreviewOpen(false)} />
             </View>
+          </View>
           </View>
         </View>
       </Modal>
@@ -3887,6 +5990,9 @@ function NomNomGoApp() {
 }
 
 export default function App() {
+  const colorScheme = useColorScheme();
+  useWebDocumentSurface(colorScheme === 'dark' ? DARK_WEB_BACKGROUND : LIGHT_WEB_BACKGROUND);
+
   return (
     <SafeAreaProvider>
       <AlphaAccessGate>
@@ -3930,6 +6036,53 @@ function ChipRow<T extends string>({
   );
 }
 
+function PreferenceGroup<T extends string>({
+  label,
+  items,
+  selected,
+  onPress,
+  previewCount,
+  expanded,
+  onToggleExpanded,
+}: {
+  label: string;
+  items: T[];
+  selected: string[];
+  onPress: (value: T) => void;
+  previewCount?: number;
+  expanded?: boolean;
+  onToggleExpanded?: () => void;
+}) {
+  const isDarkMode = useColorScheme() === 'dark';
+  const limit = previewCount || items.length;
+  const canExpand = items.length > limit && Boolean(onToggleExpanded);
+  const visibleItems = expanded || !canExpand ? items : items.slice(0, limit);
+  const hiddenCount = Math.max(0, items.length - limit);
+
+  return (
+    <View style={styles.preferenceGroup}>
+      <Text style={styles.filterLabel}>{label}</Text>
+      <View style={styles.chipWrap}>
+        {visibleItems.map((item) => {
+          const active = selected.includes(item);
+          return (
+            <TouchableOpacity key={item} style={[styles.chip, isDarkMode && styles.darkChip, active && styles.chipActive]} onPress={() => onPress(item)}>
+              <Text style={[styles.chipText, isDarkMode && styles.darkMutedText, active && styles.chipTextActive]}>{item}</Text>
+            </TouchableOpacity>
+          );
+        })}
+        {canExpand ? (
+          <TouchableOpacity style={[styles.chip, isDarkMode && styles.darkChip, styles.preferenceMoreChip]} onPress={() => onToggleExpanded?.()}>
+            <Text style={[styles.chipText, isDarkMode && styles.darkMutedText, styles.preferenceMoreText]}>
+              {expanded ? 'Less' : `More (${hiddenCount})`}
+            </Text>
+          </TouchableOpacity>
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
 function FilterTab({
   label,
   active,
@@ -3957,6 +6110,55 @@ function PlanLine({ label, value }: { label: string; value: string }) {
   );
 }
 
+function PlanningSuggestionCard({
+  suggestion,
+  currentUser,
+  canRemove,
+  onVote,
+  onRemove,
+  onOpenMap,
+  onOpenEvent,
+}: {
+  suggestion: PlanningSuggestion;
+  currentUser: string;
+  canRemove: boolean;
+  onVote: () => void;
+  onRemove: () => void;
+  onOpenMap?: () => void;
+  onOpenEvent?: () => void;
+}) {
+  const isDarkMode = useColorScheme() === 'dark';
+  const voted = suggestion.votes.includes(currentUser);
+  const voteCount = unique(suggestion.votes).length;
+  const item = suggestion.item;
+  const sourceLabel = suggestion.source === 'event' ? 'Event' : suggestion.source === 'manual' ? 'Manual' : suggestion.slot === 'food' ? 'Food' : 'Activity';
+  return (
+    <View style={[styles.sessionSuggestionCard, isDarkMode && styles.darkCard]}>
+      <View style={styles.sessionSuggestionTopRow}>
+        <Text style={[styles.sessionSuggestionTitle, isDarkMode && styles.darkText]}>{cardToName(item) || 'Suggestion'}</Text>
+        <Text style={styles.sessionVoteCount}>{voteCount}</Text>
+      </View>
+      <Text style={[styles.sessionSuggestionMeta, isDarkMode && styles.darkMutedText]}>
+        {sourceLabel} by {suggestion.addedBy}
+      </Text>
+      {typeof item !== 'string' && item.subtitle ? (
+        <Text style={[styles.sessionSuggestionMeta, isDarkMode && styles.darkMutedText]} numberOfLines={2}>{item.subtitle}</Text>
+      ) : null}
+      {typeof item !== 'string' && (item.eventDateText || item.hoursText || item.todayHours) ? (
+        <Text style={[styles.sessionSuggestionMeta, item.isOpen ? styles.open : item.isOpen === false ? styles.closed : isDarkMode && styles.darkMutedText]}>
+          {item.kind === 'event' ? item.eventDateText || 'Date TBA' : item.todayHours || item.hoursText || 'Hours unknown'}
+        </Text>
+      ) : null}
+      <View style={styles.buttonRow}>
+        <Button label={voted ? 'Unvote' : 'Vote'} onPress={onVote} primary={!voted} compact />
+        {onOpenEvent ? <Button label="Open event" onPress={onOpenEvent} compact /> : null}
+        {onOpenMap ? <Button label="Map" onPress={onOpenMap} compact /> : null}
+        {canRemove ? <Button label="Remove" onPress={onRemove} compact /> : null}
+      </View>
+    </View>
+  );
+}
+
 function PlanStep({
   number,
   title,
@@ -3976,6 +6178,10 @@ function PlanStep({
   onMapPress,
   shareLabel,
   onSharePress,
+  moveUpLabel,
+  onMoveUpPress,
+  moveDownLabel,
+  onMoveDownPress,
   removeLabel,
   onRemovePress,
 }: {
@@ -3997,6 +6203,10 @@ function PlanStep({
   onMapPress?: () => void;
   shareLabel?: string;
   onSharePress?: () => void;
+  moveUpLabel?: string;
+  onMoveUpPress?: () => void;
+  moveDownLabel?: string;
+  onMoveDownPress?: () => void;
   removeLabel?: string;
   onRemovePress?: () => void;
 }) {
@@ -4057,7 +6267,7 @@ function PlanStep({
             ) : null}
           </View>
         ) : null}
-        {actionLabel && onActionPress || mapLabel && onMapPress || shareLabel && onSharePress || removeLabel && onRemovePress ? (
+        {actionLabel && onActionPress || mapLabel && onMapPress || shareLabel && onSharePress || moveUpLabel && onMoveUpPress || moveDownLabel && onMoveDownPress || removeLabel && onRemovePress ? (
           <View style={styles.stepActionRow}>
             {actionLabel && onActionPress ? (
               <TouchableOpacity
@@ -4093,6 +6303,30 @@ function PlanStep({
                 }}
               >
                 <Text style={styles.stepActionText}>{shareLabel}</Text>
+              </TouchableOpacity>
+            ) : null}
+            {moveUpLabel && onMoveUpPress ? (
+              <TouchableOpacity
+                style={styles.stepActionButton}
+                onPress={(event: GestureResponderEvent) => {
+                  event.stopPropagation();
+                  Keyboard.dismiss();
+                  onMoveUpPress();
+                }}
+              >
+                <Text style={styles.stepActionText}>{moveUpLabel}</Text>
+              </TouchableOpacity>
+            ) : null}
+            {moveDownLabel && onMoveDownPress ? (
+              <TouchableOpacity
+                style={styles.stepActionButton}
+                onPress={(event: GestureResponderEvent) => {
+                  event.stopPropagation();
+                  Keyboard.dismiss();
+                  onMoveDownPress();
+                }}
+              >
+                <Text style={styles.stepActionText}>{moveDownLabel}</Text>
               </TouchableOpacity>
             ) : null}
             {removeLabel && onRemovePress ? (
@@ -4228,9 +6462,90 @@ const styles = StyleSheet.create({
     backgroundColor: '#071827',
   },
   content: {
+    flexGrow: 1,
     padding: 16,
-    paddingTop: 22,
+    paddingTop: 12,
     paddingBottom: 42,
+  },
+  appBanner: {
+    minHeight: 72,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#eadccb',
+    backgroundColor: '#fffaf3',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    marginTop: 6,
+    marginBottom: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  bannerBrand: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  bannerLogoMark: {
+    width: 52,
+    height: 50,
+    flexShrink: 0,
+  },
+  bannerBrandText: {
+    flex: 1,
+    minWidth: 0,
+    justifyContent: 'center',
+  },
+  bannerNameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    minWidth: 0,
+  },
+  bannerName: {
+    color: '#071827',
+    fontSize: 23,
+    lineHeight: 27,
+    fontWeight: '900',
+    flexShrink: 1,
+  },
+  bannerNameMain: {
+    color: '#071827',
+    fontWeight: '900',
+  },
+  bannerNameMainDark: {
+    color: '#fffaf3',
+  },
+  bannerNameGo: {
+    color: '#66c5a8',
+    fontWeight: '900',
+    flexShrink: 0,
+  },
+  bannerTagline: {
+    color: '#526170',
+    fontSize: 11,
+    lineHeight: 14,
+    fontWeight: '900',
+    marginTop: 1,
+  },
+  bannerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: 8,
+    flexShrink: 0,
+  },
+  accountIconButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#eadccb',
+    backgroundColor: '#fffdf8',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   hero: {
     backgroundColor: '#fffaf3',
@@ -4250,6 +6565,10 @@ const styles = StyleSheet.create({
   darkHero: {
     backgroundColor: '#fffaf3',
     borderColor: '#2a3f52',
+  },
+  webHero: {
+    backgroundColor: '#f8fffc',
+    borderColor: '#b7e5d6',
   },
   darkPanel: {
     backgroundColor: '#102338',
@@ -4285,6 +6604,7 @@ const styles = StyleSheet.create({
     height: 128,
   },
   authContent: {
+    flexGrow: 1,
     padding: 16,
     paddingTop: 34,
     paddingBottom: 42,
@@ -4301,6 +6621,10 @@ const styles = StyleSheet.create({
     borderColor: '#eadccb',
     borderRadius: 8,
     padding: 16,
+  },
+  webAuthCard: {
+    backgroundColor: '#eefaf5',
+    borderColor: '#66c5a8',
   },
   authTitle: {
     color: '#071827',
@@ -4330,12 +6654,19 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     backgroundColor: '#fffdf8',
   },
+  webTesterDropdown: {
+    borderColor: '#b7e5d6',
+    backgroundColor: '#f8fffc',
+  },
   testerOption: {
     minHeight: 48,
     justifyContent: 'center',
     paddingHorizontal: 14,
     borderBottomWidth: 1,
     borderBottomColor: '#f0e3d4',
+  },
+  webTesterOption: {
+    borderBottomColor: '#d6f2e9',
   },
   testerOptionText: {
     color: '#071827',
@@ -4355,10 +6686,11 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     padding: 12,
     marginBottom: 14,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+    alignItems: 'stretch',
     gap: 10,
+  },
+  usageTextBlock: {
+    gap: 3,
   },
   usageName: {
     color: '#fffaf3',
@@ -4367,9 +6699,86 @@ const styles = StyleSheet.create({
   },
   usageText: {
     color: '#f5d7c2',
-    marginTop: 3,
     fontSize: 12,
     fontWeight: '700',
+  },
+  usageActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'flex-start',
+    gap: 8,
+  },
+  accountOverlay: {
+    flex: 1,
+    position: 'relative',
+    backgroundColor: 'rgba(7, 24, 39, 0.18)',
+    alignItems: 'flex-end',
+    paddingTop: 76,
+    paddingHorizontal: 16,
+  },
+  accountCard: {
+    width: '100%',
+    maxWidth: 320,
+    zIndex: 1,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#eadccb',
+    backgroundColor: '#fffaf3',
+    padding: 12,
+    gap: 12,
+  },
+  accountHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  accountAvatar: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: '#fffdf8',
+    borderWidth: 1,
+    borderColor: '#eadccb',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  accountTextBlock: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  accountName: {
+    color: '#071827',
+    fontSize: 18,
+    fontWeight: '900',
+  },
+  accountUsage: {
+    color: '#526170',
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: '800',
+  },
+  accountSettingList: {
+    gap: 10,
+  },
+  accountSettingLabel: {
+    color: '#526170',
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+  },
+  accountSettingValue: {
+    color: '#071827',
+    fontSize: 15,
+    lineHeight: 20,
+    fontWeight: '900',
+    marginTop: 2,
+  },
+  accountActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
   },
   toastBox: {
     alignSelf: 'center',
@@ -4547,6 +6956,157 @@ const styles = StyleSheet.create({
   chipTextActive: {
     color: '#071827',
   },
+  sessionBox: {
+    backgroundColor: '#fffdf8',
+    borderWidth: 1,
+    borderColor: '#66c5a8',
+    borderRadius: 8,
+    padding: 14,
+    marginBottom: 18,
+    gap: 12,
+  },
+  sessionHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+  sessionTitleBlock: {
+    flex: 1,
+    minWidth: 0,
+  },
+  sessionHeaderActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'flex-end',
+    gap: 8,
+  },
+  sessionMetaText: {
+    color: '#526170',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '700',
+  },
+  sessionSubhead: {
+    color: '#071827',
+    fontSize: 14,
+    fontWeight: '900',
+    marginBottom: 2,
+  },
+  sessionResumeBox: {
+    gap: 8,
+  },
+  sessionResumeList: {
+    gap: 8,
+  },
+  sessionResumeItem: {
+    borderWidth: 1,
+    borderColor: '#c7eadf',
+    borderRadius: 8,
+    backgroundColor: '#f3fbf7',
+    padding: 10,
+  },
+  sessionResumeTitle: {
+    color: '#071827',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  sessionResumeMeta: {
+    color: '#526170',
+    fontSize: 12,
+    fontWeight: '700',
+    marginTop: 3,
+  },
+  sessionParticipantRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  sessionParticipantPill: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#c7eadf',
+    backgroundColor: '#f3fbf7',
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+  },
+  sessionOwnerPill: {
+    backgroundColor: '#ffd9cf',
+    borderColor: '#ff5a4f',
+  },
+  sessionParticipantText: {
+    color: '#071827',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  sessionSearchActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  sessionManualBox: {
+    gap: 8,
+  },
+  sessionSuggestionGroup: {
+    gap: 8,
+  },
+  sessionSuggestionCard: {
+    borderWidth: 1,
+    borderColor: '#eadccb',
+    borderRadius: 8,
+    backgroundColor: '#fff7ed',
+    padding: 12,
+    gap: 7,
+  },
+  sessionSuggestionTopRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  sessionSuggestionTitle: {
+    color: '#071827',
+    fontSize: 15,
+    fontWeight: '900',
+    flex: 1,
+  },
+  sessionVoteCount: {
+    minWidth: 32,
+    minHeight: 28,
+    borderRadius: 8,
+    backgroundColor: '#071827',
+    color: '#fffaf3',
+    textAlign: 'center',
+    textAlignVertical: 'center',
+    paddingTop: Platform.OS === 'ios' ? 5 : 4,
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  sessionSuggestionMeta: {
+    color: '#526170',
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: '700',
+  },
+  sessionFinalBox: {
+    borderTopWidth: 1,
+    borderTopColor: '#c7eadf',
+    paddingTop: 12,
+    gap: 10,
+  },
+  sessionRecommendationBox: {
+    borderWidth: 1,
+    borderColor: '#c7eadf',
+    borderRadius: 8,
+    backgroundColor: '#f3fbf7',
+    padding: 12,
+    gap: 7,
+  },
+  sessionRecommendationLine: {
+    color: '#071827',
+    fontSize: 14,
+    fontWeight: '900',
+  },
   planBox: {
     backgroundColor: '#fffdf8',
     borderWidth: 1,
@@ -4560,24 +7120,50 @@ const styles = StyleSheet.create({
     borderColor: '#eadccb',
   },
   planHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
+    alignItems: 'stretch',
     gap: 12,
     marginBottom: 14,
   },
   planHeaderActions: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    justifyContent: 'flex-end',
+    justifyContent: 'flex-start',
     gap: 8,
-    flexShrink: 1,
+  },
+  planTitleBlock: {
+    flex: 1,
+    minWidth: 0,
+    gap: 4,
   },
   planTitle: {
     color: '#071827',
     fontSize: 20,
     fontWeight: '900',
     maxWidth: 210,
+  },
+  lockedPlanTitle: {
+    color: '#071827',
+    fontSize: 20,
+    lineHeight: 24,
+    fontWeight: '900',
+  },
+  planTitleInput: {
+    width: '100%',
+    minHeight: 40,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#eadccb',
+    backgroundColor: '#fffdf8',
+    color: '#071827',
+    paddingHorizontal: 10,
+    fontSize: 18,
+    fontWeight: '900',
+  },
+  planMetaText: {
+    color: '#526170',
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: '800',
   },
   savedPlansBox: {
     borderWidth: 1,
@@ -4643,10 +7229,12 @@ const styles = StyleSheet.create({
   },
   startChooser: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 10,
   },
   startChoice: {
     flex: 1,
+    minWidth: 118,
     minHeight: 58,
     borderRadius: 8,
     borderWidth: 1,
@@ -4663,14 +7251,134 @@ const styles = StyleSheet.create({
     borderColor: '#071827',
   },
   startChoiceLabel: {
-    fontSize: 17,
+    fontSize: 16,
     fontWeight: '900',
+    textAlign: 'center',
   },
   startChoiceFoodLabel: {
     color: '#fffaf3',
   },
   startChoiceActivityLabel: {
     color: '#fffaf3',
+  },
+  routeImportBox: {
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: '#eadccb',
+    borderRadius: 8,
+    backgroundColor: '#fff7ed',
+    padding: 12,
+    gap: 8,
+  },
+  routeImportError: {
+    color: '#b91c1c',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '800',
+  },
+  lockedPlanCard: {
+    borderWidth: 1,
+    borderColor: '#66c5a8',
+    borderRadius: 8,
+    backgroundColor: '#eefaf5',
+    padding: 10,
+    gap: 8,
+  },
+  lockedPlanCardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: 10,
+  },
+  lockedPlanTitleBlock: {
+    flex: 1,
+    minWidth: 0,
+    gap: 3,
+  },
+  lockedPlanCardTools: {
+    alignItems: 'flex-end',
+    gap: 6,
+  },
+  lockedPlanIconButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#d8efe7',
+    backgroundColor: '#fffdf8',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  lockedPlanSummaryRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 10,
+  },
+  lockedPlanMeta: {
+    color: '#526170',
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '900',
+  },
+  lockedPlanLeave: {
+    color: '#526170',
+    fontSize: 11,
+    lineHeight: 15,
+    fontWeight: '800',
+  },
+  lockedPlanInvitees: {
+    color: '#526170',
+    fontSize: 11,
+    lineHeight: 15,
+    fontWeight: '800',
+  },
+  lockedStopList: {
+    gap: 6,
+  },
+  lockedPlanActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'flex-start',
+    gap: 8,
+    marginTop: 10,
+    marginBottom: 12,
+  },
+  lockedStopRow: {
+    minHeight: 34,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#d8efe7',
+    backgroundColor: '#fffdf8',
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  lockedStopIndex: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#f23b35',
+    color: '#fffaf3',
+    textAlign: 'center',
+    lineHeight: 24,
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  lockedStopTime: {
+    width: 68,
+    color: '#178f79',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  lockedStopName: {
+    flex: 1,
+    color: '#071827',
+    fontSize: 13,
+    lineHeight: 17,
+    fontWeight: '900',
   },
   timeline: {
     gap: 0,
@@ -4991,12 +7699,23 @@ const styles = StyleSheet.create({
     padding: 14,
     gap: 8,
   },
+  webBridgeBox: {
+    borderColor: '#66c5a8',
+    backgroundColor: '#eefaf5',
+  },
   routeOriginBox: {
     borderTopWidth: 1,
     borderTopColor: '#eadccb',
     marginTop: 10,
     paddingTop: 12,
     gap: 8,
+  },
+  planSettingsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    paddingVertical: 2,
   },
   dateWindowBox: {
     gap: 8,
@@ -5099,6 +7818,10 @@ const styles = StyleSheet.create({
     color: '#071827',
     backgroundColor: '#fffdf8',
   },
+  webInput: {
+    borderColor: '#b7e5d6',
+    backgroundColor: '#f8fffc',
+  },
   darkPanelInput: {
     borderColor: '#eadccb',
     color: '#071827',
@@ -5154,12 +7877,32 @@ const styles = StyleSheet.create({
     backgroundColor: '#e9f8f2',
     borderColor: '#66c5a8',
   },
+  pairingHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+  pairingHeaderText: {
+    flex: 1,
+    minWidth: 0,
+  },
+  pairingTitle: {
+    marginBottom: 2,
+  },
   pairingHint: {
     color: '#526170',
     fontSize: 13,
     lineHeight: 18,
-    marginTop: -4,
-    marginBottom: 10,
+    marginTop: 0,
+    marginBottom: 0,
+  },
+  pairingBody: {
+    gap: 10,
+    marginTop: 12,
+  },
+  pairingActions: {
+    alignSelf: 'flex-start',
   },
   mapChip: {
     borderRadius: 8,
@@ -5203,6 +7946,9 @@ const styles = StyleSheet.create({
     borderTopColor: '#eadccb',
     padding: 14,
     paddingTop: 12,
+    gap: 12,
+  },
+  preferenceGroup: {
     gap: 8,
   },
   bottomHideButton: {
@@ -5226,6 +7972,25 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     marginTop: 4,
   },
+  preferenceMoreChip: {
+    borderColor: '#66c5a8',
+  },
+  preferenceMoreText: {
+    fontWeight: '900',
+  },
+  advancedPreferenceHeader: {
+    borderTopWidth: 1,
+    borderTopColor: '#eadccb',
+    paddingTop: 12,
+    marginTop: 2,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  advancedPreferenceLabel: {
+    marginTop: 0,
+  },
   empty: {
     color: '#526170',
     fontSize: 15,
@@ -5237,6 +8002,9 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     padding: 14,
     backgroundColor: '#fffdf8',
+  },
+  preSearchEmptyState: {
+    marginBottom: 16,
   },
   emptyTitle: {
     color: '#071827',
@@ -5299,12 +8067,97 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     padding: 20,
   },
+  shareModalShell: {
+    width: '100%',
+    maxWidth: 420,
+    gap: 10,
+  },
+  planPreviewShell: {
+    width: '100%',
+    maxWidth: 520,
+    gap: 10,
+  },
+  planPreviewCard: {
+    width: '100%',
+    borderRadius: 8,
+    backgroundColor: '#fffaf3',
+    borderWidth: 1,
+    borderColor: '#eadccb',
+    padding: 18,
+    gap: 10,
+  },
+  planPreviewTitle: {
+    color: '#071827',
+    fontSize: 24,
+    lineHeight: 29,
+    fontWeight: '900',
+  },
+  planPreviewMetaRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 10,
+  },
+  planPreviewMeta: {
+    color: '#526170',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '900',
+  },
+  planPreviewStopList: {
+    gap: 8,
+  },
+  planPreviewStopRow: {
+    minHeight: 42,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#eadccb',
+    backgroundColor: '#fffdf8',
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  planPreviewStopIndex: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#f23b35',
+    color: '#fffaf3',
+    textAlign: 'center',
+    lineHeight: 28,
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  planPreviewStopTime: {
+    width: 76,
+    color: '#178f79',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  planPreviewStopName: {
+    flex: 1,
+    color: '#071827',
+    fontSize: 15,
+    lineHeight: 19,
+    fontWeight: '900',
+  },
   shareCard: {
     width: '100%',
     maxWidth: 420,
     borderRadius: 8,
     backgroundColor: '#fffaf3',
     padding: 18,
+  },
+  shareControlPanel: {
+    width: '100%',
+    maxWidth: 420,
+    borderRadius: 8,
+    backgroundColor: '#fffaf3',
+    borderWidth: 1,
+    borderColor: '#eadccb',
+    padding: 12,
   },
   quickShareCard: {
     width: '100%',
@@ -5348,6 +8201,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
   },
+  quickShareUserButtonSelected: {
+    backgroundColor: '#ffd9cf',
+    borderColor: '#ff5a4f',
+  },
   quickShareUserText: {
     color: '#071827',
     fontWeight: '900',
@@ -5374,6 +8231,13 @@ const styles = StyleSheet.create({
     color: '#071827',
     fontSize: 20,
     fontWeight: '900',
+    marginBottom: 10,
+  },
+  shareMetaLine: {
+    color: '#526170',
+    fontSize: 12,
+    fontWeight: '900',
+    marginTop: -4,
     marginBottom: 10,
   },
   shareLeaveTime: {
@@ -5425,6 +8289,46 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
     marginTop: 2,
+  },
+  shareLockedStopList: {
+    gap: 6,
+    marginBottom: 14,
+  },
+  shareLockedStopRow: {
+    minHeight: 34,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#eadccb',
+    backgroundColor: '#fffdf8',
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  shareLockedStopIndex: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#f23b35',
+    color: '#fffaf3',
+    textAlign: 'center',
+    lineHeight: 24,
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  shareLockedStopTime: {
+    width: 68,
+    color: '#178f79',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  shareLockedStopName: {
+    flex: 1,
+    color: '#071827',
+    fontSize: 13,
+    lineHeight: 17,
+    fontWeight: '900',
   },
   shareFooter: {
     color: '#526170',
