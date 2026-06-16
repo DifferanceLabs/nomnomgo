@@ -5346,7 +5346,7 @@ function NomNomGoApp() {
                 {planSettingsSummary}
               </Text>
             </View>
-            <Text style={styles.chevron}>{planSettingsOpen ? 'Hide' : 'Show'}</Text>
+            <HeaderAction label={planSettingsOpen ? 'Hide' : 'Show'} />
           </TouchableOpacity>
           {planSettingsOpen ? (
           <>
@@ -5522,13 +5522,13 @@ function NomNomGoApp() {
 
       <View style={[styles.savedPlansBox, isLightMode && styles.lightPanel, isDarkMode && styles.darkPanel]}>
         <TouchableOpacity style={styles.savedPlansHeader} onPress={() => setSavedPlansOpen((prev) => !prev)}>
-          <View>
+          <View style={styles.sectionHeaderTextBlock}>
             <Text style={[styles.sectionTitle, isLightMode && styles.lightSectionTitle, isDarkMode && styles.darkText]}>Saved Plans</Text>
             <Text style={[styles.savedPlansHint, isLightMode && styles.lightMutedText, isDarkMode && styles.darkMutedText]}>
               {visibleSavedPlans.length ? `${visibleSavedPlans.length} saved or shared for ${currentTesterName}` : 'Saved and shared plans will show here.'}
             </Text>
           </View>
-          <Button label={savedPlansOpen ? 'Hide' : 'Show'} onPress={() => setSavedPlansOpen((prev) => !prev)} compact />
+          <HeaderAction label={savedPlansOpen ? 'Hide' : 'Show'} />
         </TouchableOpacity>
         {savedPlansOpen ? (
           <View style={styles.savedPlansList}>
@@ -5560,7 +5560,7 @@ function NomNomGoApp() {
       {!isPlanLocked ? (
       <>
       <View style={[styles.pairingBox, isLightMode && styles.lightPairingBox, isDarkMode && styles.darkAccentPanel]}>
-          <View style={styles.pairingHeader}>
+          <TouchableOpacity style={styles.pairingHeader} onPress={toggleSuggestedPairingsOpen}>
             <View style={styles.pairingHeaderText}>
               <Text style={[styles.sectionTitle, styles.pairingTitle, isLightMode && styles.lightSectionTitle, isDarkMode && styles.darkText]}>
                 Suggested pairings
@@ -5574,8 +5574,8 @@ function NomNomGoApp() {
                   : `${suggestedPairings.length} suggestions available`}
               </Text>
             </View>
-            <Button label={suggestedPairingsOpen ? 'Hide' : 'Show'} onPress={toggleSuggestedPairingsOpen} compact />
-          </View>
+            <HeaderAction label={suggestedPairingsOpen ? 'Hide' : 'Show'} />
+          </TouchableOpacity>
           {suggestedPairingsOpen ? (
             <View style={styles.pairingBody}>
               <View style={styles.chipWrap}>
@@ -5600,13 +5600,13 @@ function NomNomGoApp() {
 
       <View style={[styles.preferencesBox, isLightMode && styles.lightPanel, isDarkMode && styles.darkPanel]}>
         <TouchableOpacity style={styles.preferencesHeader} onPress={() => setPreferencesOpen((prev) => !prev)}>
-          <View>
+          <View style={styles.sectionHeaderTextBlock}>
             <Text style={[styles.sectionTitle, isLightMode && styles.lightSectionTitle, isDarkMode && styles.darkText]}>Preferences</Text>
             <Text style={[styles.preferenceSummary, isLightMode && styles.lightMutedText, isDarkMode && styles.darkMutedText]}>
               {preferenceSummaryParts.join(' - ')}
             </Text>
           </View>
-          <Text style={styles.chevron}>{preferencesOpen ? 'Hide' : 'Edit'}</Text>
+          <HeaderAction label={preferencesOpen ? 'Hide' : 'Edit'} />
         </TouchableOpacity>
 
         {preferencesOpen ? (
@@ -5681,7 +5681,7 @@ function NomNomGoApp() {
             )}
             <TouchableOpacity style={styles.advancedPreferenceHeader} onPress={() => setAdvancedPreferencesOpen((prev) => !prev)}>
               <Text style={[styles.filterLabel, styles.advancedPreferenceLabel]}>Advanced preferences</Text>
-              <Text style={styles.chevron}>{advancedPreferencesOpen ? 'Hide' : 'Show'}</Text>
+              <HeaderAction label={advancedPreferencesOpen ? 'Hide' : 'Show'} />
             </TouchableOpacity>
             {advancedPreferencesOpen ? (
               <PreferenceGroup
@@ -6443,6 +6443,14 @@ function Button({
   );
 }
 
+function HeaderAction({ label }: { label: string }) {
+  return (
+    <View style={styles.headerActionButton}>
+      <Text style={styles.headerActionText}>{label}</Text>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
@@ -6476,7 +6484,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 8,
     marginTop: 6,
-    marginBottom: 12,
+    marginBottom: 16,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -7113,7 +7121,7 @@ const styles = StyleSheet.create({
     borderColor: '#ffc84a',
     borderRadius: 8,
     padding: 14,
-    marginBottom: 18,
+    marginBottom: 16,
   },
   lightPanel: {
     backgroundColor: '#fffdf8',
@@ -7170,14 +7178,18 @@ const styles = StyleSheet.create({
     borderColor: '#66c5a8',
     borderRadius: 8,
     padding: 14,
-    marginBottom: 18,
+    marginBottom: 16,
     backgroundColor: '#fffdf8',
   },
   savedPlansHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'flex-start',
+    alignItems: 'center',
     gap: 12,
+  },
+  sectionHeaderTextBlock: {
+    flex: 1,
+    minWidth: 0,
   },
   savedPlansHint: {
     color: '#526170',
@@ -7844,6 +7856,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   compactButton: {
+    minWidth: 76,
     minHeight: 38,
     paddingHorizontal: 10,
     paddingVertical: 8,
@@ -7869,8 +7882,7 @@ const styles = StyleSheet.create({
     borderColor: '#66c5a8',
     borderRadius: 8,
     padding: 14,
-    marginTop: 10,
-    marginBottom: 18,
+    marginBottom: 16,
     backgroundColor: '#e9f8f2',
   },
   lightPairingBox: {
@@ -7880,7 +7892,7 @@ const styles = StyleSheet.create({
   pairingHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'flex-start',
+    alignItems: 'center',
     gap: 12,
   },
   pairingHeaderText: {
@@ -7937,8 +7949,19 @@ const styles = StyleSheet.create({
   lightMutedText: {
     color: '#526170',
   },
-  chevron: {
-    color: '#f23b35',
+  headerActionButton: {
+    minWidth: 76,
+    minHeight: 38,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    backgroundColor: '#071827',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  headerActionText: {
+    color: '#fffaf3',
     fontWeight: '900',
   },
   preferencesContent: {
