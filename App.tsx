@@ -29,6 +29,12 @@ import {
   type GoogleMapsRouteProvider,
   type GoogleMapsRouteStop,
 } from './routeImport';
+import {
+  googleMapsDirectionsUrl,
+  teslaDestinationPayload,
+  type RouteHandoffPlan,
+  type RouteHandoffStop,
+} from './routeHandoff';
 
 type PlanSlot = 'food' | 'activity';
 type PairingSuggestion = {
@@ -102,7 +108,14 @@ type ConfirmedPlan = {
   invitees?: string[];
   dateWindow?: DateWindowId;
   customDateRange?: CustomDateRange | null;
+  planDateStart?: string;
+  planDateEnd?: string;
   timeWindow?: string;
+  routeOriginLabel?: string;
+  routeStartLocation?: LatLon;
+  searchLocation?: LatLon;
+  searchLocationLabel?: string;
+  lockedArrivalTimes?: Record<string, StopTime | undefined>;
 };
 
 type StopTime = {
@@ -142,6 +155,7 @@ type SavedPlan = {
   stops: ItineraryStop[];
   planTimes: Record<string, StopTime | undefined>;
   arrivalTimes: Record<string, StopTime | undefined>;
+  arrivalOverrides?: Record<string, StopTime | undefined>;
   createdAt: number;
   source: 'saved' | 'shared';
   sourceUrl?: string;
@@ -151,7 +165,13 @@ type SavedPlan = {
   invitees?: string[];
   dateWindow?: DateWindowId;
   customDateRange?: CustomDateRange | null;
+  planDateStart?: string;
+  planDateEnd?: string;
   timeWindow?: string;
+  routeOriginLabel?: string;
+  routeStartLocation?: LatLon;
+  searchLocation?: LatLon;
+  searchLocationLabel?: string;
   owner?: string;
   sharedBy?: string;
   sharedTo?: string;
@@ -249,6 +269,7 @@ const TICKETMASTER_EVENT_RADIUS_MILES = 35;
 const PAIRING_RADIUS_METERS = 11265;
 const FAVORITE_SUGGESTION_RADIUS_METERS = DEFAULT_RADIUS_METERS;
 const VENUE_FEATURE_RADIUS_METERS = 805;
+const WALKING_DISTANCE_METERS = 805;
 const PAGE_SIZE = 8;
 const SUGGESTED_PAIRING_PREVIEW_COUNT = 3;
 const FACTORY_EXPERIENCE_URL = 'https://factoryatfranklin.com/experience/';
@@ -289,7 +310,7 @@ const CUISINES = [
   'Coffee',
   'Dessert',
 ];
-const ACTIVITIES = ['Any', 'Events', 'Movies', 'Bowling', 'Arcade', 'Park', 'Shopping', 'Museum', 'Dessert', 'Coffee'];
+const ACTIVITIES = ['Any', 'Events', 'Movies', 'Bowling', 'Arcade', 'Park', 'Shopping', 'Museum', 'Dessert', 'Coffee', 'Tesla Supercharger', 'EV Charger'];
 const DIETARY_PREFERENCES = [
   'Any',
   'Vegetarian',
@@ -430,6 +451,8 @@ const ACTIVITY_TYPE_MAP: Record<string, string[]> = {
   Museum: ['museum'],
   Dessert: ['bakery', 'ice_cream_shop', 'dessert_shop'],
   Coffee: ['cafe', 'coffee_shop'],
+  'Tesla Supercharger': ['electric_vehicle_charging_station'],
+  'EV Charger': ['electric_vehicle_charging_station'],
 };
 
 const DEFAULT_ACTIVITY_TYPES = [
@@ -533,6 +556,39 @@ function wantsCloseBy(selectedFoods: string[]) {
 
 function wantsOpenNow(selectedFoods: string[]) {
   return selectedFoods.includes('Open now');
+}
+
+function wantsTeslaSupercharger(selectedActivities: string[]) {
+  return selectedActivities.includes('Tesla Supercharger');
+}
+
+function wantsEvCharger(selectedActivities: string[]) {
+  return selectedActivities.includes('EV Charger');
+}
+
+function wantsChargerActivity(selectedActivities: string[]) {
+  return wantsTeslaSupercharger(selectedActivities) || wantsEvCharger(selectedActivities);
+}
+
+function chargerText(item: PlaceCard | string) {
+  return typeof item === 'string'
+    ? item
+    : [item.title, item.subtitle, item.address, ...(item.types || [])].join(' ');
+}
+
+function isEvCharger(item: PlaceCard | string) {
+  const blob = chargerText(item).toLowerCase().replace(/_/g, ' ');
+  return (
+    blob.includes('electric vehicle charging') ||
+    blob.includes('ev charging') ||
+    blob.includes('charging station') ||
+    blob.includes('supercharger')
+  );
+}
+
+function isTeslaSupercharger(item: PlaceCard | string) {
+  const blob = chargerText(item).toLowerCase().replace(/_/g, ' ');
+  return blob.includes('tesla') && (blob.includes('supercharger') || blob.includes('charging station') || blob.includes('charger'));
 }
 
 function isLikelyFastFood(card: PlaceCard) {
@@ -815,15 +871,23 @@ function featureLabelForCard(card: PlaceCard) {
   return `${category}: ${card.title}`;
 }
 
-function cardToRouteParam(card: PlaceCard | string) {
+function cardToRouteHandoffStop(card: PlaceCard | string): RouteHandoffStop | undefined {
+  const name = cardToName(card)?.trim() || '';
+  if (!name) return undefined;
   if (typeof card !== 'string' && typeof card.lat === 'number' && typeof card.lng === 'number') {
-    return `${card.lat},${card.lng}`;
+    return { name, latitude: card.lat, longitude: card.lng };
   }
-  return cardToName(card);
+  return { name };
 }
 
-function cardListRouteParams(cards: Array<PlaceCard | string>) {
-  return cards.map(cardToRouteParam).filter(Boolean) as string[];
+function planToRouteHandoffPlan(plan: ConfirmedPlan, origin = 'Current Location'): RouteHandoffPlan {
+  return {
+    title: plan.title,
+    origin,
+    stops: plan.stops
+      .map((stop) => cardToRouteHandoffStop(stop.item))
+      .filter((stop): stop is RouteHandoffStop => Boolean(stop)),
+  };
 }
 
 function cardHours(card?: PlaceCard | string) {
@@ -847,15 +911,7 @@ function hasKnownHours(card: PlaceCard) {
 }
 
 function mapsDirectionsUrl(plan: ConfirmedPlan, origin = 'Current Location') {
-  const stops = cardListRouteParams(plan.stops.map((stop) => stop.item));
-
-  const destination = stops[stops.length - 1];
-  if (!destination) return undefined;
-  const waypoints = stops.slice(0, -1);
-  const waypointQuery = waypoints.length ? `&waypoints=${encodeURIComponent(waypoints.join('|'))}` : '';
-  return `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(origin)}&destination=${encodeURIComponent(
-    destination,
-  )}${waypointQuery}&travelmode=driving`;
+  return googleMapsDirectionsUrl(planToRouteHandoffPlan(plan, origin));
 }
 
 function mapsSearchUrl(query: string, near?: PlaceCard | LatLon | null) {
@@ -1010,6 +1066,20 @@ function labelCityCandidates(value: string) {
   return candidates;
 }
 
+function cityForPlace(item: PlaceCard | string) {
+  if (typeof item === 'string') {
+    return addressCityCandidates(item)[0] || labelCityCandidates(item)[0];
+  }
+
+  const addressCity = item.address ? addressCityCandidates(item.address)[0] : undefined;
+  if (addressCity) return addressCity;
+
+  const subtitleCity = item.subtitle ? addressCityCandidates(item.subtitle)[0] : undefined;
+  if (subtitleCity) return subtitleCity;
+
+  return labelCityCandidates(item.title)[0];
+}
+
 function importedRouteCity(routeImport: GoogleMapsRouteImport) {
   const scores = new Map<string, { label: string; score: number; firstSeen: number }>();
   const addCandidate = (candidate: string, score: number, firstSeen: number) => {
@@ -1134,6 +1204,8 @@ function matchesActivitySelection(card: PlaceCard, selectedActivities: string[])
     .replace(/_/g, ' ');
 
   return selected.some((activity) => {
+    if (activity === 'Tesla Supercharger') return isTeslaSupercharger(card);
+    if (activity === 'EV Charger') return isEvCharger(card);
     const label = activity.toLowerCase();
     const mappedTypes = (ACTIVITY_TYPE_MAP[activity] || []).map((type) => type.replace(/_/g, ' ').toLowerCase());
     return blob.includes(label) || mappedTypes.some((type) => blob.includes(type));
@@ -1410,8 +1482,45 @@ function stopTimeFromMinutes(totalMinutes: number): StopTime {
   };
 }
 
-function clockTimeFromOffsetMinutes(totalMinutes: number): StopTime {
-  const date = new Date(Date.now() + Math.max(0, Math.round(totalMinutes)) * 60 * 1000);
+function clockMinutes(time: StopTime) {
+  return (time.hours || 0) * 60 + (time.minutes || 0);
+}
+
+function clockTimeFromMinutes(totalMinutes: number): StopTime {
+  const normalized = ((Math.round(totalMinutes) % (24 * 60)) + 24 * 60) % (24 * 60);
+  return {
+    hours: Math.floor(normalized / 60),
+    minutes: normalized % 60,
+  };
+}
+
+function clockTimeFromDate(date: Date): StopTime {
+  return {
+    hours: date.getHours(),
+    minutes: date.getMinutes(),
+  };
+}
+
+function clockTimePlusMinutes(time: StopTime, deltaMinutes: number) {
+  return clockTimeFromMinutes(clockMinutes(time) + deltaMinutes);
+}
+
+function timeWindowFromStartClock(start: StopTime, durationMinutes = 180) {
+  const end = clockTimePlusMinutes(start, durationMinutes);
+  return `${formatClockTime(start)} - ${formatClockTime(end)}`;
+}
+
+function localDateClockMs(dateKey: string, totalClockMinutes: number) {
+  const parsed = parseDateInput(dateKey) || new Date();
+  const dayOffset = Math.floor(totalClockMinutes / (24 * 60));
+  const minuteOfDay = ((totalClockMinutes % (24 * 60)) + 24 * 60) % (24 * 60);
+  const date = addLocalDays(startOfLocalDay(parsed), dayOffset);
+  date.setHours(Math.floor(minuteOfDay / 60), minuteOfDay % 60, 0, 0);
+  return date.getTime();
+}
+
+function clockTimeFromOffsetMinutes(totalMinutes: number, baseMs = Date.now()): StopTime {
+  const date = new Date(baseMs + Math.max(0, Math.round(totalMinutes)) * 60 * 1000);
   const snappedMinutes = Math.round(date.getMinutes() / 15) * 15;
   if (snappedMinutes >= 60) {
     date.setHours(date.getHours() + 1, 0, 0, 0);
@@ -1433,9 +1542,9 @@ function clockTimeFromRelativeStopTime(relativeTime: StopTime, baseMs: number) {
   };
 }
 
-function minutesUntilClockTime(time: StopTime) {
-  const now = new Date();
-  const target = new Date(now);
+function minutesUntilClockTime(time: StopTime, baseMs = Date.now()) {
+  const now = new Date(baseMs);
+  const target = new Date(baseMs);
   target.setHours(time.hours, time.minutes, 0, 0);
   if (target.getTime() < now.getTime()) target.setDate(target.getDate() + 1);
   return Math.round((target.getTime() - now.getTime()) / 60000);
@@ -1450,6 +1559,14 @@ function formatClockTime(time: StopTime) {
 function stopCoords(item: PlaceCard | string): LatLon | undefined {
   if (typeof item === 'string' || typeof item.lat !== 'number' || typeof item.lng !== 'number') return undefined;
   return { latitude: item.lat, longitude: item.lng, label: item.title };
+}
+
+function isWalkableAfterTeslaStop(previous?: ItineraryStop, current?: ItineraryStop) {
+  if (!previous || !current || !isTeslaSupercharger(previous.item)) return false;
+  const previousCoords = stopCoords(previous.item);
+  const currentCoords = stopCoords(current.item);
+  if (!previousCoords || !currentCoords) return false;
+  return distanceMeters(previousCoords, { lat: currentCoords.latitude, lng: currentCoords.longitude }) <= WALKING_DISTANCE_METERS;
 }
 
 function estimateDriveMinutes(from: LatLon | undefined, to: PlaceCard | string) {
@@ -1547,8 +1664,25 @@ function dateWindowRange(windowId: DateWindowId, now = new Date(), customRange?:
   return { start: now, end: endOfLocalDay(now) };
 }
 
+function dateRangeKeysForWindow(windowId: DateWindowId, customRange?: CustomDateRange | null, now = new Date()) {
+  const range = dateWindowRange(windowId, now, customRange);
+  return {
+    start: formatDateInput(range.start),
+    end: formatDateInput(range.end),
+  };
+}
+
 function shortDate(date: Date) {
   return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+}
+
+function absoluteDateRangeLabel(startKey?: string, endKey?: string) {
+  if (!startKey || !endKey) return undefined;
+  const start = parseDateInput(startKey);
+  const end = parseDateInput(endKey);
+  if (!start || !end) return undefined;
+  if (startKey === endKey) return shortDate(start);
+  return `${shortDate(start)} - ${shortDate(end)}`;
 }
 
 function dateWindowLabel(windowId: DateWindowId, now = new Date(), customRange?: CustomDateRange | null) {
@@ -1571,8 +1705,8 @@ function dateWindowSearchPhrase(windowId: DateWindowId, customRange?: CustomDate
   return 'next few days';
 }
 
-function formatClockAfterMinutes(totalMinutes: number) {
-  const date = new Date(Date.now() + Math.max(0, Math.round(totalMinutes)) * 60 * 1000);
+function formatClockAfterMinutes(totalMinutes: number, baseMs = Date.now()) {
+  const date = new Date(baseMs + Math.max(0, Math.round(totalMinutes)) * 60 * 1000);
   return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 }
 
@@ -1923,6 +2057,9 @@ function NomNomGoApp() {
   const scrollRef = useRef<ScrollView | null>(null);
   const manualSearchRef = useRef<TextInput | null>(null);
   const resultsYRef = useRef(0);
+  const planBoxYRef = useRef(0);
+  const timelineYRef = useRef(0);
+  const stopLayoutYRef = useRef<Record<string, number>>({});
   const searchRequestIdRef = useRef(0);
   const isLightMode = colorScheme === 'light';
   const isDarkMode = colorScheme === 'dark';
@@ -1963,6 +2100,7 @@ function NomNomGoApp() {
   const [arrivalDraftDirty, setArrivalDraftDirty] = useState(false);
   const [durationDraftDirty, setDurationDraftDirty] = useState(false);
   const [pendingInsertIndex, setPendingInsertIndex] = useState<number | null>(null);
+  const [selectedStopKey, setSelectedStopKey] = useState<string | null>(null);
   const [resultMode, setResultMode] = useState<PlanSlot>('food');
   const [resultFilter, setResultFilter] = useState<ResultFilter>('all');
   const [preferencesOpen, setPreferencesOpen] = useState(false);
@@ -1973,7 +2111,9 @@ function NomNomGoApp() {
   const [sharePreviewOpen, setSharePreviewOpen] = useState(false);
   const [planPreviewOpen, setPlanPreviewOpen] = useState(false);
   const [quickShareTarget, setQuickShareTarget] = useState<QuickShareTarget | null>(null);
+  const [routeOptionsOpen, setRouteOptionsOpen] = useState(false);
   const [savedPlans, setSavedPlans] = useState<SavedPlan[]>([]);
+  const savedPlansRef = useRef<SavedPlan[]>([]);
   const [savedPlansOpen, setSavedPlansOpen] = useState(false);
   const [suggestedPairingsOpen, setSuggestedPairingsOpen] = useState(true);
   const [suggestedPairingsExpanded, setSuggestedPairingsExpanded] = useState(false);
@@ -1998,6 +2138,7 @@ function NomNomGoApp() {
   const [routeImporting, setRouteImporting] = useState(false);
   selectedDateWindowRef.current = selectedDateWindow;
   customDateRangeRef.current = customDateRange;
+  savedPlansRef.current = savedPlans;
 
   const keyLoaded = Boolean(GOOGLE_API_KEY);
   const savedFavoriteResultCards = Object.values(memory.favoriteCards || {})
@@ -2036,9 +2177,24 @@ function NomNomGoApp() {
   const startingLocationLabel = currentSessionRouteContext?.originLabel || routeOriginOverride.trim() || location?.label || 'Current location';
   const routeStartLocation = currentSessionRouteContext?.location || location || undefined;
   const searchLocationLabel = activePlanningSession?.locationLabel || searchLocationOverride.trim() || searchLocation?.label || startingLocationLabel;
+  const selectedPreferenceTimeWindow = selectedTime === 'Now' ? undefined : defaultTimeWindowForPreference(selectedTime);
+  const activePlanDateWindow = plan.dateWindow || selectedDateWindow;
+  const activePlanCustomDateRange = plan.customDateRange ?? customDateRange;
+  const activePlanDateRange = plan.planDateStart && plan.planDateEnd
+    ? { start: plan.planDateStart, end: plan.planDateEnd }
+    : dateRangeKeysForWindow(activePlanDateWindow, activePlanCustomDateRange);
+  const activePlanDateLabel = absoluteDateRangeLabel(activePlanDateRange.start, activePlanDateRange.end) ||
+    dateWindowLabel(activePlanDateWindow, new Date(), activePlanCustomDateRange);
+  const activePlanTimeWindow = plan.timeWindow || selectedPreferenceTimeWindow;
+  const activePlanTimelineBaseMs = (() => {
+    const parsedWindow = activePlanTimeWindow ? parsePlanningTimeWindow(activePlanTimeWindow) : undefined;
+    if (parsedWindow) return localDateClockMs(activePlanDateRange.start, parsedWindow.start);
+    const now = new Date();
+    return localDateClockMs(activePlanDateRange.start, now.getHours() * 60 + now.getMinutes());
+  })();
   const planSettingsSummary = startingLocationLabel === searchLocationLabel
-    ? `${selectedDateWindowText} | ${startingLocationLabel}`
-    : `${selectedDateWindowText} | Start ${startingLocationLabel} | Search ${searchLocationLabel}`;
+    ? `${activePlanDateLabel} | ${startingLocationLabel}`
+    : `${activePlanDateLabel} | Start ${startingLocationLabel} | Search ${searchLocationLabel}`;
   const userPlanningSessions = planningSessions.filter((session) => session.participants.includes(currentTesterName));
   const foodSuggestions = activePlanningSession?.suggestions.filter((suggestion) => suggestion.slot === 'food') || [];
   const activitySuggestions = activePlanningSession?.suggestions.filter((suggestion) => suggestion.slot === 'activity') || [];
@@ -2070,32 +2226,44 @@ function NomNomGoApp() {
 
   const arrivalOverrideForStop = (stop: ItineraryStop) => {
     const override = arrivalTimes[stop.key];
-    return override ? minutesUntilClockTime(override) : undefined;
+    return override ? minutesUntilClockTime(override, activePlanTimelineBaseMs) : undefined;
   };
 
   const itineraryArrivalMinutes = (targetIndex: number) => {
     let elapsed = 0;
     let from = routeStartLocation;
+    let previousArrival: number | undefined;
+    let previousCoords: LatLon | undefined;
 
     for (let index = 0; index <= targetIndex; index += 1) {
       const stop = plan.stops[index];
-      const estimatedArrival = elapsed + estimateDriveMinutes(from, stop.item);
+      const walkableAfterTesla = isWalkableAfterTeslaStop(plan.stops[index - 1], stop);
+      const estimatedArrival = walkableAfterTesla && typeof previousArrival === 'number'
+        ? previousArrival
+        : elapsed + estimateDriveMinutes(from, stop.item);
       const arrival = arrivalOverrideForStop(stop) ?? estimatedArrival;
       if (index === targetIndex) return arrival;
-      elapsed = arrival + durationForStop(stop);
-      from = stopCoords(stop.item);
+      elapsed = walkableAfterTesla
+        ? Math.max(elapsed, arrival + durationForStop(stop))
+        : arrival + durationForStop(stop);
+      previousArrival = arrival;
+      const currentCoords = stopCoords(stop.item);
+      from = walkableAfterTesla && previousCoords ? previousCoords : currentCoords;
+      previousCoords = currentCoords;
     }
 
     return elapsed;
   };
 
   const stepDetail = (stop: ItineraryStop, index: number) => {
-    const arrival = formatClockAfterMinutes(itineraryArrivalMinutes(index));
+    const arrival = formatClockAfterMinutes(itineraryArrivalMinutes(index), activePlanTimelineBaseMs);
     const stay = formatStopTime(stopTimeFromMinutes(durationForStop(stop)));
     return `Est. ${arrival} - ${stay} stop`;
   };
   const displayedArrivalTimeForStop = (stop: ItineraryStop, index: number) =>
-    arrivalTimes[stop.key] || clockTimeFromOffsetMinutes(itineraryArrivalMinutes(index));
+    arrivalTimes[stop.key] ||
+    (plan.status === 'locked' ? plan.lockedArrivalTimes?.[stop.key] : undefined) ||
+    clockTimeFromOffsetMinutes(itineraryArrivalMinutes(index), activePlanTimelineBaseMs);
   const currentDisplayedArrivalTimes = () => {
     const next: Record<string, StopTime | undefined> = {};
     plan.stops.forEach((stop, index) => {
@@ -2107,16 +2275,11 @@ function NomNomGoApp() {
   const firstStopArrivalMinutes = firstStop ? itineraryArrivalMinutes(0) : undefined;
   const firstStopTravelMinutes = firstStop && routeStartLocation ? estimateDriveMinutes(routeStartLocation, firstStop.item) : undefined;
   const leaveForFirstStopText = firstStop && typeof firstStopArrivalMinutes === 'number' && typeof firstStopTravelMinutes === 'number'
-    ? `Leave around ${formatClockAfterMinutes(Math.max(0, firstStopArrivalMinutes - firstStopTravelMinutes))} from ${startingLocationLabel}`
+    ? `Leave around ${formatClockAfterMinutes(Math.max(0, firstStopArrivalMinutes - firstStopTravelMinutes), activePlanTimelineBaseMs)} from ${startingLocationLabel}`
     : undefined;
-  const importedPlanDateLabel = dateWindowLabel(
-    plan.dateWindow || selectedDateWindow,
-    new Date(),
-    plan.customDateRange || customDateRange,
-  );
-  const importedPlanDateTimeLabel = firstStop && typeof firstStopArrivalMinutes === 'number'
-    ? `${importedPlanDateLabel} | First stop ${formatClockAfterMinutes(firstStopArrivalMinutes)}`
-    : importedPlanDateLabel;
+  const activePlanDateTimeLabel = firstStop
+    ? `${activePlanDateLabel} | First stop ${formatClockTime(displayedArrivalTimeForStop(firstStop, 0))}`
+    : activePlanDateLabel;
   const sharePlanText = () => {
     const lines = [plan.title || 'NomNomGo plan'];
     if (plan.sourceUrl) lines.push('', plan.sourceUrl);
@@ -2177,7 +2340,11 @@ function NomNomGoApp() {
     await AsyncStorage.setItem(STORAGE_USAGE_METER, JSON.stringify(next));
   };
 
-  const saveSavedPlans = async (next: SavedPlan[]) => {
+  const saveSavedPlans = async (nextOrUpdater: SavedPlan[] | ((current: SavedPlan[]) => SavedPlan[])) => {
+    const next = typeof nextOrUpdater === 'function'
+      ? nextOrUpdater(savedPlansRef.current)
+      : nextOrUpdater;
+    savedPlansRef.current = next;
     setSavedPlans(next);
     await AsyncStorage.setItem(STORAGE_SAVED_PLANS, JSON.stringify(next.slice(0, 40)));
   };
@@ -2211,6 +2378,22 @@ function NomNomGoApp() {
     [90, 280, 650].forEach((delay) => {
       setTimeout(() => scrollRef.current?.scrollTo({ y: Math.max(resultsYRef.current - 8, 0), animated: true }), delay);
     });
+  };
+
+  const scrollToPlanStop = (key: string) => {
+    [90, 280, 650].forEach((delay) => {
+      setTimeout(() => {
+        const stopY = stopLayoutYRef.current[key];
+        const targetY = typeof stopY === 'number'
+          ? planBoxYRef.current + timelineYRef.current + stopY
+          : planBoxYRef.current;
+        scrollRef.current?.scrollTo({ y: Math.max(targetY - 8, 0), animated: true });
+      }, delay);
+    });
+  };
+
+  const markStopSelected = (key?: string) => {
+    if (key) setSelectedStopKey(key);
   };
 
   useEffect(() => {
@@ -2262,7 +2445,11 @@ function NomNomGoApp() {
           }
         }
         if (rawUsage) setUsageMeter(normalizeUsageMeter(JSON.parse(rawUsage) as UsageMeter));
-        if (rawSavedPlans) setSavedPlans(JSON.parse(rawSavedPlans) as SavedPlan[]);
+        if (rawSavedPlans) {
+          const parsedSavedPlans = JSON.parse(rawSavedPlans) as SavedPlan[];
+          savedPlansRef.current = parsedSavedPlans;
+          setSavedPlans(parsedSavedPlans);
+        }
         if (rawPlanningSessions) setPlanningSessions(JSON.parse(rawPlanningSessions) as PlanningSession[]);
         if (rawActivePlanningSession) setActivePlanningSessionId(JSON.parse(rawActivePlanningSession) as string);
       })
@@ -2958,20 +3145,23 @@ function NomNomGoApp() {
     foodSelections = selectedFoods,
     requestId = searchRequestIdRef.current,
     selectedDietaryPreferences = selectedDietary,
+    activitySelections = selectedActivities,
   ) => {
     const wantsEvents = slot === 'activity';
-    const eventsFocused = slot === 'activity' && selectedActivities.includes('Events');
+    const eventsFocused = slot === 'activity' && activitySelections.includes('Events');
+    const chargerFocused = slot === 'activity' && wantsChargerActivity(activitySelections);
     const preferenceKey = slot === 'food'
       ? `${wantsNoFastFood(foodSelections) ? '|no-fast-food' : ''}${wantsCloseBy(foodSelections) ? '|close-by' : ''}${wantsOpenNow(foodSelections) ? '|open-now' : ''}${cuisineSelections(foodSelections).join(',')}|dietary:${dietarySelections(selectedDietaryPreferences).join(',')}`
-      : `${wantsEvents ? `|events|${EVENT_PROVIDER_CACHE_VERSION}|${selectedDateWindowRef.current}|${customDateRangeRef.current ? `${customDateRangeRef.current.start}-${customDateRangeRef.current.end}` : 'preset'}${eventsFocused ? '|focused' : ''}` : ''}`;
+      : `${nonEventActivitySelections(activitySelections).join(',')}|${wantsEvents ? `events|${EVENT_PROVIDER_CACHE_VERSION}|${selectedDateWindowRef.current}|${customDateRangeRef.current ? `${customDateRangeRef.current.start}-${customDateRangeRef.current.end}` : 'preset'}${eventsFocused ? '|focused' : ''}` : ''}`;
     const cacheKey = `${searchCacheKey(slot, center, types, radiusMeters)}${preferenceKey}`;
     const applyResultFilters = (nextCards: PlaceCard[]) => nextCards.filter((card) => {
       const isFavorite = memory.favorites.includes(card.id);
-      if (!hasKnownHours(card)) return false;
+      if (!hasKnownHours(card) && !(chargerFocused && isEvCharger(card))) return false;
       if (slot === 'food' && wantsNoFastFood(foodSelections) && isLikelyFastFood(card)) return false;
       if (slot === 'food' && !isLikelyFoodPreferenceMatch(card, foodSelections)) return false;
       if (slot === 'food' && card.isOpen === false && !isFavorite) return false;
       if (slot === 'activity' && isBadActivityResult(card)) return false;
+      if (slot === 'activity' && chargerFocused && !matchesActivitySelection(card, activitySelections)) return false;
       return true;
     });
     const mergeCards = (primaryCards: PlaceCard[], extraCards: PlaceCard[]) => {
@@ -3022,6 +3212,24 @@ function NomNomGoApp() {
       }
     }
 
+    if (slot === 'activity' && chargerFocused) {
+      const chargerQueries = wantsTeslaSupercharger(activitySelections)
+        ? ['Tesla Supercharger']
+        : ['EV charging station', 'electric vehicle charging station'];
+      for (const query of chargerQueries) {
+        try {
+          const chargerTextCards = await searchPlaceByText(query, 'activity', center, {
+            maxResults: 20,
+            radiusMeters: DEFAULT_ACTIVITY_RADIUS_METERS,
+          });
+          unblockedCards = mergeCards(unblockedCards, chargerTextCards);
+          addLog(`${query} text discovery merged: ${unblockedCards.length} activity cards`);
+        } catch (err) {
+          addLog(`${query} text discovery error: ${compactError(err)}`);
+        }
+      }
+    }
+
     if (shouldExpand(unblockedCards.length)) {
       addLog(`Food results sparse (${unblockedCards.length}); expanding radius to ${Math.round(EXPANDED_FOOD_RADIUS_METERS / 1609)} miles`);
       const expandedCacheKey = `${searchCacheKey(slot, center, types, EXPANDED_FOOD_RADIUS_METERS)}${preferenceKey}|expanded`;
@@ -3051,7 +3259,7 @@ function NomNomGoApp() {
       addLog(`Food radius expansion not needed: ${unblockedCards.length} results`);
     }
 
-    if (wantsEvents) {
+    if (wantsEvents && !chargerFocused) {
       let ticketmasterEventCount = unblockedCards.filter((card) => card.kind === 'event' && card.source === 'Ticketmaster').length;
       try {
         const ticketmasterCards = await searchTicketmasterEvents(center);
@@ -3091,8 +3299,8 @@ function NomNomGoApp() {
           return distanceMeters(center, a) - distanceMeters(center, b);
         }
 
-        return activityCardScore(b, center, memory, selectedMoods, selectedActivities, eventsFocused) -
-          activityCardScore(a, center, memory, selectedMoods, selectedActivities, eventsFocused);
+        return activityCardScore(b, center, memory, selectedMoods, activitySelections, eventsFocused) -
+          activityCardScore(a, center, memory, selectedMoods, activitySelections, eventsFocused);
       }
 
       if (slot === 'food') {
@@ -3103,7 +3311,7 @@ function NomNomGoApp() {
       return scoreCard(b, memory, selectedMoods) - scoreCard(a, memory, selectedMoods);
     });
     const finalCards = wantsEvents && !eventsFocused
-      ? promoteActivityEvents(capActivityEventBlend(sortedCards, selectedActivities), selectedActivities)
+      ? promoteActivityEvents(capActivityEventBlend(sortedCards, activitySelections), activitySelections)
       : sortedCards;
     addLog(`Final card count: ${finalCards.length}`);
     addLog(`Top results: ${finalCards.slice(0, 5).map((card) => card.title).join(' | ') || 'none'}`);
@@ -3166,14 +3374,14 @@ function NomNomGoApp() {
           : foodItems.find((item): item is PlaceCard => typeof item !== 'string' && Boolean(item.lat && item.lng));
         if (anchor) {
           const activityRadius = activitySelections.includes('Movies') ? DEFAULT_ACTIVITY_RADIUS_METERS : PAIRING_RADIUS_METERS;
-          await runPlacesSearch('activity', { latitude: anchor.lat!, longitude: anchor.lng!, label: anchor.title }, types, activityRadius, forceRefresh, foodSelections, requestId, dietaryPreferences);
+          await runPlacesSearch('activity', { latitude: anchor.lat!, longitude: anchor.lng!, label: anchor.title }, types, activityRadius, forceRefresh, foodSelections, requestId, dietaryPreferences, activitySelections);
         } else {
-          await runPlacesSearch('activity', center, types, DEFAULT_ACTIVITY_RADIUS_METERS, forceRefresh, foodSelections, requestId, dietaryPreferences);
+          await runPlacesSearch('activity', center, types, DEFAULT_ACTIVITY_RADIUS_METERS, forceRefresh, foodSelections, requestId, dietaryPreferences, activitySelections);
         }
       } else {
         const types = typesForSelection(foodSelections, FOOD_TYPE_MAP, DEFAULT_FOOD_TYPES);
         addLog(`Selected food types: ${types.join(', ')}`);
-        await runPlacesSearch('food', center, types, wantsCloseBy(foodSelections) ? CLOSE_BY_RADIUS_METERS : DEFAULT_RADIUS_METERS, forceRefresh, foodSelections, requestId, dietaryPreferences);
+        await runPlacesSearch('food', center, types, wantsCloseBy(foodSelections) ? CLOSE_BY_RADIUS_METERS : DEFAULT_RADIUS_METERS, forceRefresh, foodSelections, requestId, dietaryPreferences, activitySelections);
       }
       if (shouldScroll) scrollToResults();
     } catch (err) {
@@ -3196,7 +3404,16 @@ function NomNomGoApp() {
 
     selectedDateWindowRef.current = next;
     setSelectedDateWindow(next);
-    setPlan((prev) => prev.status === 'draft' ? { ...prev, dateWindow: next, customDateRange: null, savedPlanId: undefined } : prev);
+    const nextDateRange = dateRangeKeysForWindow(next, null);
+    setPlan((prev) => prev.status !== 'locked' ? {
+      ...prev,
+      dateWindow: next,
+      customDateRange: null,
+      planDateStart: nextDateRange.start,
+      planDateEnd: nextDateRange.end,
+      lockedArrivalTimes: undefined,
+      savedPlanId: undefined,
+    } : prev);
     setCustomDateOpen(false);
     if (activePlanningSession) void updateActiveSessionDate(next, null);
     addLog(`Date window selected: ${label}`);
@@ -3235,7 +3452,15 @@ function NomNomGoApp() {
     setCustomDateOpen(false);
     selectedDateWindowRef.current = 'custom';
     setSelectedDateWindow('custom');
-    setPlan((prev) => prev.status === 'draft' ? { ...prev, dateWindow: 'custom', customDateRange: nextRange, savedPlanId: undefined } : prev);
+    setPlan((prev) => prev.status !== 'locked' ? {
+      ...prev,
+      dateWindow: 'custom',
+      customDateRange: nextRange,
+      planDateStart: nextRange.start,
+      planDateEnd: nextRange.end,
+      lockedArrivalTimes: undefined,
+      savedPlanId: undefined,
+    } : prev);
     if (activePlanningSession) void updateActiveSessionDate('custom', nextRange);
     addLog(`Custom date window selected: ${nextRange.start} to ${nextRange.end}`);
 
@@ -3283,7 +3508,9 @@ function NomNomGoApp() {
   };
 
   const searchFromPlan = async (slot: PlanSlot) => {
-    setPendingInsertIndex(null);
+    const selectedIndex = selectedStopKey ? plan.stops.findIndex((stop) => stop.key === selectedStopKey) : -1;
+    const anchorIndex = selectedIndex >= 0 ? selectedIndex : plan.stops.length - 1;
+    setPendingInsertIndex(anchorIndex >= 0 ? anchorIndex : null);
     setResultMode(slot);
     const preferenceOverride: SearchPreferenceOverride = slot === 'food'
       ? { foodSelections: [...DEFAULT_FOOD_SELECTIONS] }
@@ -3295,16 +3522,25 @@ function NomNomGoApp() {
     }
     setPreferencesOpen(false);
     scrollToResults();
-    await searchForSlot(slot, true, false, undefined, preferenceOverride);
+    await searchForSlot(slot, true, false, anchorIndex >= 0 ? stopSearchCenter(plan.stops[anchorIndex]) : undefined, preferenceOverride);
   };
 
   const addStopAfter = async (slot: PlanSlot, index: number) => {
     if (isPlanLocked) return;
+    markStopSelected(plan.stops[index]?.key);
     setPendingInsertIndex(index);
     setResultMode(slot);
+    const preferenceOverride: SearchPreferenceOverride = slot === 'food'
+      ? { foodSelections: [...DEFAULT_FOOD_SELECTIONS] }
+      : { activitySelections: [...DEFAULT_ACTIVITY_SELECTIONS] };
+    if (slot === 'food') {
+      setSelectedFoods(preferenceOverride.foodSelections || [...DEFAULT_FOOD_SELECTIONS]);
+    } else {
+      setSelectedActivities(preferenceOverride.activitySelections || [...DEFAULT_ACTIVITY_SELECTIONS]);
+    }
     setPreferencesOpen(false);
     scrollToResults();
-    await searchForSlot(slot, true, false, stopSearchCenter(plan.stops[index]));
+    await searchForSlot(slot, true, false, stopSearchCenter(plan.stops[index]), preferenceOverride);
   };
 
   const openTimeEditor = (key: string, index: number) => {
@@ -3312,7 +3548,7 @@ function NomNomGoApp() {
     const stop = plan.stops.find((item) => item.key === key);
     const existingArrival = stop ? arrivalTimes[stop.key] : arrivalTimes[key];
     setTimeEditorKey(key);
-    setDraftArrivalTime(existingArrival || clockTimeFromOffsetMinutes(itineraryArrivalMinutes(index)));
+    setDraftArrivalTime(existingArrival || clockTimeFromOffsetMinutes(itineraryArrivalMinutes(index), activePlanTimelineBaseMs));
     setDraftTime(planTimes[key] || stopTimeFromMinutes(stop ? defaultStopDurationMinutes(stop) : 60));
     setArrivalDraftDirty(false);
     setDurationDraftDirty(false);
@@ -3696,10 +3932,15 @@ function NomNomGoApp() {
     const finalStops = selectedSuggestions.map((suggestion) => suggestionToStop(suggestion, `-final-${activePlanningSession.id}`));
     if (!finalStops.length) return;
 
-    setPlan({ stops: finalStops });
+    setPlan({
+      ...currentPlanContext(),
+      stops: finalStops,
+      status: 'draft',
+    });
     setPlanTimes({});
     setArrivalTimes({});
     setPendingInsertIndex(null);
+    setSelectedStopKey(finalStops[finalStops.length - 1]?.key || null);
     setTimeEditorKey(null);
     setHasInitiatedSearch(false);
     setCards([]);
@@ -3721,9 +3962,14 @@ function NomNomGoApp() {
     if (!activePlanningSession?.finalPlan.length) return;
     const loadSuffix = `-session-load-${Date.now()}`;
     const loadedStops = activePlanningSession.finalPlan.map((stop) => cloneStopForSavedPlan(stop, loadSuffix));
-    setPlan({ stops: loadedStops });
+    setPlan({
+      ...currentPlanContext(),
+      stops: loadedStops,
+      status: 'draft',
+    });
     setPlanTimes({});
     setArrivalTimes({});
+    setSelectedStopKey(loadedStops[loadedStops.length - 1]?.key || null);
     loadedStops.forEach((stop) => {
       void refreshStopFeatures(stop.key, stop.slot, stop.item);
     });
@@ -3790,7 +4036,9 @@ function NomNomGoApp() {
         featuresExpanded: false,
       }));
       setPlan({
+        ...currentPlanContext(),
         stops: nextStops,
+        status: 'draft',
       });
       nextStops.forEach((stop) => {
         void refreshStopFeatures(stop.key, stop.slot, stop.item);
@@ -3798,6 +4046,7 @@ function NomNomGoApp() {
       setPlanTimes({});
       setArrivalTimes({});
       setPendingInsertIndex(null);
+      setSelectedStopKey(nextStops[nextStops.length - 1]?.key || null);
       setTimeEditorKey(null);
       setPreferencesOpen(false);
       setHasInitiatedSearch(false);
@@ -3850,6 +4099,9 @@ function NomNomGoApp() {
         suggestionRadius,
         false,
         suggestion.slot === 'food' ? suggestion.selections : selectedFoods,
+        searchRequestIdRef.current,
+        selectedDietary,
+        suggestion.slot === 'activity' ? suggestion.selections : selectedActivities,
       );
       scrollToResults();
     } catch (err) {
@@ -3874,6 +4126,11 @@ function NomNomGoApp() {
         { latitude: food.lat, longitude: food.lng, label: food.title },
         types,
         selectedActivities.includes('Movies') ? DEFAULT_ACTIVITY_RADIUS_METERS : PAIRING_RADIUS_METERS,
+        false,
+        selectedFoods,
+        searchRequestIdRef.current,
+        selectedDietary,
+        selectedActivities,
       );
     } catch (err) {
       addLog(`Activity pairing failed: ${compactError(err)}`);
@@ -3888,6 +4145,23 @@ function NomNomGoApp() {
       showToast('Unlock the plan to edit it');
       return undefined;
     }
+    const context = currentPlanContext();
+    const existingStop = plan.stops.find((stop) => stop.slot === slot && cardToId(stop.item) === cardToId(item));
+    if (existingStop) {
+      setPlan((prev) => ({
+        ...prev,
+        ...context,
+        stops: prev.stops.filter((stop) => stop.key !== existingStop.key),
+        lockedArrivalTimes: undefined,
+        savedPlanId: undefined,
+      }));
+      setPlanTimes((times) => ({ ...times, [existingStop.key]: undefined }));
+      setArrivalTimes((times) => ({ ...times, [existingStop.key]: undefined }));
+      setSelectedStopKey((current) => current === existingStop.key ? null : current);
+      setPendingInsertIndex(null);
+      return undefined;
+    }
+
     const nextStop: ItineraryStop = {
       key: makeStopKey(slot, item),
       slot,
@@ -3897,24 +4171,23 @@ function NomNomGoApp() {
       featuresExpanded: false,
     };
     setPlan((prev) => {
-      const existingIndex = prev.stops.findIndex((stop) => stop.slot === slot && cardToId(stop.item) === cardToId(item));
-      if (existingIndex >= 0) {
-        setPlanTimes((times) => ({ ...times, [prev.stops[existingIndex].key]: undefined }));
-        return { ...prev, stops: prev.stops.filter((_, index) => index !== existingIndex), savedPlanId: undefined };
-      }
-
-      const insertAt = pendingInsertIndex === null ? prev.stops.length : Math.min(pendingInsertIndex + 1, prev.stops.length);
+      const selectedIndex = selectedStopKey ? prev.stops.findIndex((stop) => stop.key === selectedStopKey) : -1;
+      const insertAfterIndex = pendingInsertIndex !== null ? pendingInsertIndex : selectedIndex;
+      const insertAt = insertAfterIndex < 0 ? prev.stops.length : Math.min(insertAfterIndex + 1, prev.stops.length);
       return {
         ...prev,
+        ...context,
         stops: [
           ...prev.stops.slice(0, insertAt),
           nextStop,
           ...prev.stops.slice(insertAt),
         ],
+        lockedArrivalTimes: undefined,
         savedPlanId: undefined,
       };
     });
     setPendingInsertIndex(null);
+    setSelectedStopKey(nextStop.key);
     void refreshStopFeatures(nextStop.key, slot, item);
     return nextStop;
   };
@@ -3933,13 +4206,17 @@ function NomNomGoApp() {
 
     if (planningSuggestionMode) {
       await addPlanningSuggestion(resultMode, card, planningSourceForCard(resultMode, card));
+      setManualSearch('');
+      setManualSearchSubmitted(false);
       return;
     }
 
     const alreadySelected = plan.stops.some((stop) => stop.slot === resultMode && cardToId(stop.item) === card.id);
-    insertStopIntoPlan(resultMode, card);
+    const insertedStop = insertStopIntoPlan(resultMode, card);
     addLog(alreadySelected ? `Removed ${resultMode} choice: ${card.title}` : `Added ${resultMode} choice: ${card.title}`);
-    setTimeout(() => scrollRef.current?.scrollTo({ y: 0, animated: true }), 100);
+    if (insertedStop) scrollToPlanStop(insertedStop.key);
+    setManualSearch('');
+    setManualSearchSubmitted(false);
 
     if (resultMode === 'food') {
       if (!alreadySelected && pendingInsertIndex === null) {
@@ -3982,6 +4259,34 @@ function NomNomGoApp() {
     return names.length ? names.join(' + ') + (stops.length > 2 ? ` + ${stops.length - 2} more` : '') : 'Saved plan';
   };
 
+  const dateRangeForSavedPlan = (saved: SavedPlan) => {
+    if (saved.planDateStart && saved.planDateEnd) {
+      return { start: saved.planDateStart, end: saved.planDateEnd };
+    }
+    if (saved.dateWindow) {
+      return dateRangeKeysForWindow(saved.dateWindow, saved.customDateRange, new Date(saved.createdAt));
+    }
+    const createdDate = formatDateInput(new Date(saved.createdAt));
+    return { start: createdDate, end: createdDate };
+  };
+
+  const savedPlanDateLabel = (saved: SavedPlan) => {
+    const range = dateRangeForSavedPlan(saved);
+    return absoluteDateRangeLabel(range.start, range.end) || new Date(saved.createdAt).toLocaleDateString([], { month: 'short', day: 'numeric' });
+  };
+
+  const currentPlanContext = () => ({
+    dateWindow: activePlanDateWindow,
+    customDateRange: activePlanCustomDateRange,
+    planDateStart: activePlanDateRange.start,
+    planDateEnd: activePlanDateRange.end,
+    timeWindow: activePlanTimeWindow || timeWindowFromStartClock(clockTimeFromDate(new Date(activePlanTimelineBaseMs))),
+    routeOriginLabel: startingLocationLabel,
+    routeStartLocation,
+    searchLocation: activeSearchLocation || routeStartLocation,
+    searchLocationLabel,
+  });
+
   const planTitle = plan.title || titleForPlanStops(plan.stops);
   const isPlanLocked = plan.status === 'locked';
   const isImportedGoogleMapsPlan = plan.routeProvider === 'google_maps';
@@ -4004,20 +4309,35 @@ function NomNomGoApp() {
     invitees: [...(saved.invitees || [])].sort(),
     dateWindow: saved.dateWindow || '',
     customDateRange: saved.customDateRange || null,
+    planDateStart: dateRangeForSavedPlan(saved).start,
+    planDateEnd: dateRangeForSavedPlan(saved).end,
+    timeWindow: saved.timeWindow || '',
+    routeOriginLabel: saved.routeOriginLabel || '',
+    routeStartLocation: saved.routeStartLocation ? `${saved.routeStartLocation.latitude.toFixed(4)},${saved.routeStartLocation.longitude.toFixed(4)}` : '',
+    searchLocationLabel: saved.searchLocationLabel || '',
+    searchLocation: saved.searchLocation ? `${saved.searchLocation.latitude.toFixed(4)},${saved.searchLocation.longitude.toFixed(4)}` : '',
     stops: saved.stops.map((stop) => stopSaveSignature(
       stop,
       saved.planTimes?.[stop.key],
       savedArrivalClockTime(saved, stop),
     )),
   });
+  const currentContextSignature = currentPlanContext();
   const currentPlanSignature = JSON.stringify({
     title: planTitle,
     sourceUrl: plan.sourceUrl || '',
     routeProvider: plan.routeProvider || '',
     status: plan.status || '',
     invitees: [...planInvitees].sort(),
-    dateWindow: plan.dateWindow || '',
-    customDateRange: plan.customDateRange || null,
+    dateWindow: currentContextSignature.dateWindow || '',
+    customDateRange: currentContextSignature.customDateRange || null,
+    planDateStart: currentContextSignature.planDateStart,
+    planDateEnd: currentContextSignature.planDateEnd,
+    timeWindow: currentContextSignature.timeWindow || '',
+    routeOriginLabel: currentContextSignature.routeOriginLabel || '',
+    routeStartLocation: currentContextSignature.routeStartLocation ? `${currentContextSignature.routeStartLocation.latitude.toFixed(4)},${currentContextSignature.routeStartLocation.longitude.toFixed(4)}` : '',
+    searchLocationLabel: currentContextSignature.searchLocationLabel || '',
+    searchLocation: currentContextSignature.searchLocation ? `${currentContextSignature.searchLocation.latitude.toFixed(4)},${currentContextSignature.searchLocation.longitude.toFixed(4)}` : '',
     stops: plan.stops.map((stop, index) => stopSaveSignature(
       stop,
       planTimes[stop.key],
@@ -4071,10 +4391,15 @@ function NomNomGoApp() {
 
   const lockPlan = () => {
     if (!plan.stops.length) return;
+    const lockedArrivalTimes = currentDisplayedArrivalTimes();
+    const context = currentPlanContext();
     setPlan((prev) => ({
       ...prev,
+      ...context,
       title: prev.title || titleForPlanStops(prev.stops),
       status: 'locked',
+      lockedArrivalTimes,
+      savedPlanId: undefined,
     }));
     setTimeEditorKey(null);
     setLocationOverrideOpen(false);
@@ -4087,7 +4412,7 @@ function NomNomGoApp() {
   };
 
   const unlockPlan = () => {
-    setPlan((prev) => ({ ...prev, status: 'draft' }));
+    setPlan((prev) => ({ ...prev, status: 'draft', lockedArrivalTimes: undefined, savedPlanId: undefined }));
     addLog('Plan unlocked');
     showToast('Plan ready to edit');
   };
@@ -4107,6 +4432,7 @@ function NomNomGoApp() {
       if (!routeImport || !routeImport.stops.length) throw new Error(GOOGLE_MAPS_ROUTE_IMPORT_ERROR);
 
       const importedStops = routeImportToPlanStops(routeImport);
+      const importedDateRange = dateRangeKeysForWindow(selectedDateWindow, customDateRange);
       setPlan({
         title: defaultImportedRouteTitle(routeImport, selectedDateWindow, customDateRange),
         stops: importedStops,
@@ -4117,10 +4443,18 @@ function NomNomGoApp() {
         invitees: [],
         dateWindow: selectedDateWindow,
         customDateRange,
+        planDateStart: importedDateRange.start,
+        planDateEnd: importedDateRange.end,
+        timeWindow: selectedPreferenceTimeWindow,
+        routeOriginLabel: startingLocationLabel,
+        routeStartLocation,
+        searchLocation: activeSearchLocation || routeStartLocation,
+        searchLocationLabel,
       });
       setPlanTimes({});
       setArrivalTimes({});
       setPendingInsertIndex(null);
+      setSelectedStopKey(importedStops[importedStops.length - 1]?.key || null);
       setTimeEditorKey(null);
       setHasInitiatedSearch(false);
       setCards([]);
@@ -4155,6 +4489,40 @@ function NomNomGoApp() {
     await openDirections();
   };
 
+  const openRouteOptions = () => {
+    if (!plan.stops.length) {
+      Alert.alert('No plan yet', 'Select food or activity first.');
+      return;
+    }
+    setRouteOptionsOpen(true);
+    addLog('Route options opened');
+  };
+
+  const openGoogleRouteFromOptions = async () => {
+    setRouteOptionsOpen(false);
+    await openPlanRoute();
+  };
+
+  const sendPlanToTesla = async () => {
+    const payload = teslaDestinationPayload({
+      ...planToRouteHandoffPlan(plan, routeOriginOverride.trim() || startingLocationLabel),
+      title: planTitle,
+    });
+    if (!payload) {
+      Alert.alert('No destination yet', 'Select food or activity first.');
+      return;
+    }
+
+    setRouteOptionsOpen(false);
+    try {
+      await Share.share({ message: payload });
+      addLog('Tesla route handoff opened');
+    } catch (err) {
+      addLog(`Tesla route handoff failed: ${compactError(err)}`);
+      Alert.alert('Could not open Tesla handoff', compactError(err));
+    }
+  };
+
   const makeSavedPlan = (
     stops: ItineraryStop[],
     source: SavedPlan['source'],
@@ -4165,13 +4533,16 @@ function NomNomGoApp() {
     const savedStops = stops.map((stop) => cloneStopForSavedPlan(stop, suffix));
     const savedPlanTimes: Record<string, StopTime | undefined> = {};
     const savedArrivalTimes: Record<string, StopTime | undefined> = {};
+    const savedArrivalOverrides: Record<string, StopTime | undefined> = {};
+    const context = currentPlanContext();
     stops.forEach((stop, index) => {
       const savedKey = savedStops[index].key;
       const planIndex = plan.stops.findIndex((item) => item.key === stop.key);
       if (planTimes[stop.key]) savedPlanTimes[savedKey] = planTimes[stop.key];
+      if (arrivalTimes[stop.key]) savedArrivalOverrides[savedKey] = arrivalTimes[stop.key];
       savedArrivalTimes[savedKey] = planIndex >= 0
         ? displayedArrivalTimeForStop(stop, planIndex)
-        : arrivalTimes[stop.key] || clockTimeFromOffsetMinutes(estimateDriveMinutes(routeStartLocation, stop.item));
+        : arrivalTimes[stop.key] || clockTimeFromOffsetMinutes(estimateDriveMinutes(routeStartLocation, stop.item), activePlanTimelineBaseMs);
     });
     return {
       id: `plan-${stamp}`,
@@ -4179,6 +4550,7 @@ function NomNomGoApp() {
       stops: savedStops,
       planTimes: savedPlanTimes,
       arrivalTimes: savedArrivalTimes,
+      arrivalOverrides: savedArrivalOverrides,
       createdAt: stamp,
       source,
       sourceUrl: plan.sourceUrl,
@@ -4186,9 +4558,15 @@ function NomNomGoApp() {
       status: plan.status,
       timeSchema: 'clock-arrivals-v1',
       invitees: plan.invitees,
-      dateWindow: plan.dateWindow,
-      customDateRange: plan.customDateRange,
-      timeWindow: plan.timeWindow,
+      dateWindow: context.dateWindow,
+      customDateRange: context.customDateRange,
+      planDateStart: context.planDateStart,
+      planDateEnd: context.planDateEnd,
+      timeWindow: context.timeWindow,
+      routeOriginLabel: context.routeOriginLabel,
+      routeStartLocation: context.routeStartLocation,
+      searchLocation: context.searchLocation,
+      searchLocationLabel: context.searchLocationLabel,
       owner: source === 'saved' ? currentTesterName : options.sharedTo,
       sharedBy: options.sharedBy,
       sharedTo: options.sharedTo,
@@ -4197,11 +4575,13 @@ function NomNomGoApp() {
 
   const saveCurrentPlan = async () => {
     if (!plan.stops.length) return;
-    const displayedArrivals = currentDisplayedArrivalTimes();
     const saved = makeSavedPlan(plan.stops, 'saved');
-    await saveSavedPlans([saved, ...savedPlans]);
-    setArrivalTimes(displayedArrivals);
-    setPlan((prev) => ({ ...prev, savedPlanId: saved.id }));
+    await saveSavedPlans((current) => [saved, ...current.filter((item) => item.id !== saved.id)]);
+    setPlan((prev) => ({
+      ...prev,
+      ...currentPlanContext(),
+      savedPlanId: saved.id,
+    }));
     addLog(`Plan saved: ${saved.title}`);
     showToast('Plan saved');
   };
@@ -4210,32 +4590,68 @@ function NomNomGoApp() {
     const loadSuffix = `-load-${Date.now()}`;
     const loadedStops = saved.stops.map((stop) => cloneStopForSavedPlan(stop, loadSuffix));
     const loadedPlanTimes: Record<string, StopTime | undefined> = {};
-    const loadedArrivalTimes: Record<string, StopTime | undefined> = {};
+    const loadedArrivalOverrides: Record<string, StopTime | undefined> = {};
+    const loadedLockedArrivalTimes: Record<string, StopTime | undefined> = {};
     saved.stops.forEach((stop, index) => {
       const loadedKey = loadedStops[index].key;
       if (saved.planTimes?.[stop.key]) loadedPlanTimes[loadedKey] = saved.planTimes[stop.key];
+      if (saved.arrivalOverrides?.[stop.key]) loadedArrivalOverrides[loadedKey] = saved.arrivalOverrides[stop.key];
       const savedArrival = saved.arrivalTimes?.[stop.key];
       if (savedArrival) {
-        loadedArrivalTimes[loadedKey] = saved.timeSchema === 'clock-arrivals-v1'
+        loadedLockedArrivalTimes[loadedKey] = saved.timeSchema === 'clock-arrivals-v1'
           ? savedArrival
           : clockTimeFromRelativeStopTime(savedArrival, saved.createdAt);
       }
     });
+    const loadedDateRange = dateRangeForSavedPlan(saved);
+    const firstLoadedArrival = loadedStops[0] ? loadedLockedArrivalTimes[loadedStops[0].key] : undefined;
+    const inferredTimelineStart = firstLoadedArrival
+      ? clockTimePlusMinutes(firstLoadedArrival, -estimateDriveMinutes(saved.routeStartLocation || saved.searchLocation, loadedStops[0].item))
+      : undefined;
+    const loadedDateWindow: DateWindowId = 'custom';
+    const loadedCustomDateRange = loadedDateRange;
+    const loadedTimeWindow = saved.timeWindow || (inferredTimelineStart ? timeWindowFromStartClock(inferredTimelineStart) : undefined);
+
+    setSelectedDateWindow(loadedDateWindow);
+    selectedDateWindowRef.current = loadedDateWindow;
+    setCustomDateRange(loadedCustomDateRange);
+    customDateRangeRef.current = loadedCustomDateRange;
+    if (saved.searchLocation) {
+      setSearchLocation(saved.searchLocation);
+      setLastSearchLocationCenter(saved.searchLocation);
+      setSearchLocationOverride(saved.searchLocationLabel || saved.searchLocation.label || '');
+    } else if (saved.searchLocationLabel) {
+      setSearchLocationOverride(saved.searchLocationLabel);
+    }
+    if (saved.routeStartLocation) {
+      setLocation(saved.routeStartLocation);
+      setRouteOriginOverride(saved.routeOriginLabel && saved.routeOriginLabel !== 'Current location' ? saved.routeOriginLabel : '');
+    } else if (saved.routeOriginLabel) {
+      setRouteOriginOverride(saved.routeOriginLabel === 'Current location' ? '' : saved.routeOriginLabel);
+    }
     setPlan({
       stops: loadedStops,
       title: saved.title,
       sourceUrl: saved.sourceUrl,
       routeProvider: saved.routeProvider,
-      status: saved.status,
+      status: saved.status || 'draft',
       savedPlanId: saved.source === 'saved' ? saved.id : undefined,
       invitees: saved.invitees,
-      dateWindow: saved.dateWindow,
-      customDateRange: saved.customDateRange,
-      timeWindow: saved.timeWindow,
+      dateWindow: loadedDateWindow,
+      customDateRange: loadedCustomDateRange,
+      planDateStart: loadedDateRange.start,
+      planDateEnd: loadedDateRange.end,
+      timeWindow: loadedTimeWindow,
+      routeOriginLabel: saved.routeOriginLabel,
+      routeStartLocation: saved.routeStartLocation,
+      searchLocation: saved.searchLocation,
+      searchLocationLabel: saved.searchLocationLabel,
+      lockedArrivalTimes: saved.status === 'locked' ? loadedLockedArrivalTimes : undefined,
     });
     setPlanTimes(loadedPlanTimes);
-    setArrivalTimes(loadedArrivalTimes);
+    setArrivalTimes(loadedArrivalOverrides);
     setPendingInsertIndex(null);
+    setSelectedStopKey(loadedStops[loadedStops.length - 1]?.key || null);
     setTimeEditorKey(null);
     setHasInitiatedSearch(false);
     setCards([]);
@@ -4244,7 +4660,7 @@ function NomNomGoApp() {
   };
 
   const deleteSavedPlan = async (id: string) => {
-    await saveSavedPlans(savedPlans.filter((item) => item.id !== id));
+    await saveSavedPlans((current) => current.filter((item) => item.id !== id));
     addLog('Saved plan removed');
   };
 
@@ -4282,7 +4698,7 @@ function NomNomGoApp() {
       sharedTo: user,
       title: quickShareTitle(quickShareTarget),
     });
-    await saveSavedPlans([shared, ...savedPlans]);
+    await saveSavedPlans((current) => [shared, ...current.filter((item) => item.id !== shared.id)]);
     addLog(`Dev share to ${user}: ${quickShareTitle(quickShareTarget)}`);
     showToast(`Shared to ${user}`);
     setQuickShareTarget(null);
@@ -4353,14 +4769,14 @@ function NomNomGoApp() {
     }
 
     const alreadySelected = plan.stops.some((stop) => stop.slot === slot && cardToId(stop.item) === card.id);
-    if (!alreadySelected) insertStopIntoPlan(slot, card);
+    const insertedStop = !alreadySelected ? insertStopIntoPlan(slot, card) : undefined;
     setResultMode(slot);
     setCards((prev) => {
       const existing = prev.some((item) => item.id === card.id);
       return existing ? prev : [card, ...prev];
     });
     setVisibleCount(PAGE_SIZE);
-    setTimeout(() => scrollRef.current?.scrollTo({ y: 0, animated: true }), 100);
+    if (insertedStop) scrollToPlanStop(insertedStop.key);
 
     if (slot === 'food' && !alreadySelected && pendingInsertIndex === null) {
       setResultMode('activity');
@@ -4392,7 +4808,10 @@ function NomNomGoApp() {
         addLog(`Manual ${slot} suggested without Places lookup: ${value}`);
         return;
       }
-      insertStopIntoPlan(slot, value);
+      const insertedStop = insertStopIntoPlan(slot, value);
+      if (insertedStop) scrollToPlanStop(insertedStop.key);
+      setManualSearch('');
+      setManualSearchSubmitted(false);
       addLog(`Manual ${slot} used without Places lookup: ${value}`);
       notifyGooglePlacesMissing('Manual lookup skipped: Google Places key missing', 'Added manually. Places details need a Google key.');
       return;
@@ -4413,7 +4832,10 @@ function NomNomGoApp() {
           addLog(`Manual ${slot} suggestion added without match: ${value}`);
           return;
         }
-        insertStopIntoPlan(slot, value);
+        const insertedStop = insertStopIntoPlan(slot, value);
+        if (insertedStop) scrollToPlanStop(insertedStop.key);
+        setManualSearch('');
+        setManualSearchSubmitted(false);
         addLog(`Manual ${slot} lookup found no match: ${value}`);
         Alert.alert('Place not found', `I added "${value}" manually, but Google Places did not return a match.`);
         return;
@@ -4441,7 +4863,10 @@ function NomNomGoApp() {
         addLog(`Manual ${slot} suggestion added after lookup failure: ${compactError(err)}`);
         return;
       }
-      insertStopIntoPlan(slot, value);
+      const insertedStop = insertStopIntoPlan(slot, value);
+      if (insertedStop) scrollToPlanStop(insertedStop.key);
+      setManualSearch('');
+      setManualSearchSubmitted(false);
       addLog(`Manual ${slot} lookup failed: ${compactError(err)}`);
       Alert.alert('Manual lookup failed', `I added "${value}" manually, but could not load details from Google Places.`);
     } finally {
@@ -4458,6 +4883,7 @@ function NomNomGoApp() {
     }));
     setPlanTimes((prev) => ({ ...prev, [stop.key]: undefined }));
     setArrivalTimes((prev) => ({ ...prev, [stop.key]: undefined }));
+    setSelectedStopKey((current) => current === stop.key ? null : current);
     if (timeEditorKey === stop.key) setTimeEditorKey(null);
     addLog(`Removed ${stop.slot}: ${cardToName(stop.item)}`);
   };
@@ -4527,7 +4953,7 @@ function NomNomGoApp() {
       sharedTo: user,
       title: planTitle,
     });
-    await saveSavedPlans([shared, ...savedPlans]);
+    await saveSavedPlans((current) => [shared, ...current.filter((item) => item.id !== shared.id)]);
     setSharePreviewOpen(false);
     setPlan((prev) => ({ ...prev, invitees: unique([...(prev.invitees || []), user]) }));
     addLog(`Plan shared in-app to ${user}: ${shared.title}`);
@@ -5154,7 +5580,10 @@ function NomNomGoApp() {
         </View>
       ) : null}
 
-      <View style={[styles.planBox, isDarkMode && styles.darkPanel]}>
+      <View
+        style={[styles.planBox, isDarkMode && styles.darkPanel]}
+        onLayout={(event) => { planBoxYRef.current = event.nativeEvent.layout.y; }}
+      >
         {hasAnyActiveStop && !isPlanLocked ? (
           <View style={styles.planHeader}>
             <View style={styles.planTitleBlock}>
@@ -5167,7 +5596,7 @@ function NomNomGoApp() {
               />
               {isImportedGoogleMapsPlan ? (
                 <Text style={[styles.planMetaText, isDarkMode && styles.darkMutedText]} numberOfLines={2}>
-                  Google Maps draft route | {importedPlanDateTimeLabel} | {plan.stops.length} stops
+                  Google Maps draft route | {activePlanDateTimeLabel} | {plan.stops.length} stops
                 </Text>
               ) : null}
             </View>
@@ -5175,7 +5604,7 @@ function NomNomGoApp() {
               <Button label="Lock In" onPress={lockPlan} primary compact />
               <Button label="Save" onPress={saveCurrentPlan} compact />
               <Button label="Invite" onPress={() => setSharePreviewOpen(true)} compact />
-              <Button label={isImportedGoogleMapsPlan && plan.sourceUrl ? 'Open route' : 'Route'} onPress={openPlanRoute} compact />
+              <Button label={isImportedGoogleMapsPlan && plan.sourceUrl ? 'Open route' : 'Route'} onPress={openRouteOptions} compact />
             </View>
           </View>
         ) : null}
@@ -5209,7 +5638,7 @@ function NomNomGoApp() {
                   {planTitle}
                 </Text>
                 <Text style={[styles.lockedPlanMeta, isDarkMode && styles.darkMutedText]} numberOfLines={1}>
-                  {importedPlanDateTimeLabel}
+                  {activePlanDateTimeLabel}
                 </Text>
               </View>
               <View style={styles.lockedPlanCardTools}>
@@ -5235,42 +5664,70 @@ function NomNomGoApp() {
               </Text>
             ) : null}
             <View style={styles.lockedStopList}>
-              {plan.stops.map((stop, index) => (
-                <TouchableOpacity key={`locked-${stop.key}`} style={styles.lockedStopRow} onPress={() => openStopMaps(stop)}>
-                  <Text style={styles.lockedStopIndex}>{index + 1}</Text>
-                  <Text style={styles.lockedStopTime}>{formatClockAfterMinutes(itineraryArrivalMinutes(index))}</Text>
-                  <Text style={styles.lockedStopName} numberOfLines={1}>{cardToName(stop.item) || 'Stop'}</Text>
-                </TouchableOpacity>
-              ))}
+              {plan.stops.map((stop, index) => {
+                const stopCity = cityForPlace(stop.item);
+                const walkableAfterTesla = isWalkableAfterTeslaStop(plan.stops[index - 1], stop);
+                return (
+                  <TouchableOpacity key={`locked-${stop.key}`} style={styles.lockedStopRow} onPress={() => openStopMaps(stop)}>
+                    <Text style={styles.lockedStopIndex}>{index + 1}</Text>
+                    <Text style={styles.lockedStopTime}>{formatClockTime(displayedArrivalTimeForStop(stop, index))}</Text>
+                    {walkableAfterTesla ? (
+                      <Ionicons name="walk-outline" size={14} color="#178f79" />
+                    ) : null}
+                    <View style={styles.lockedStopTextBlock}>
+                      <Text style={styles.lockedStopName} numberOfLines={1}>{cardToName(stop.item) || 'Stop'}</Text>
+                      {stopCity ? (
+                        <View style={styles.lockedStopCityPill}>
+                          <Text style={styles.lockedStopCityText} numberOfLines={1}>{stopCity}</Text>
+                        </View>
+                      ) : null}
+                    </View>
+                  </TouchableOpacity>
+                );
+              })}
             </View>
           </View>
           <View style={styles.lockedPlanActions}>
             <Button label="Unlock/Edit" onPress={unlockPlan} compact />
             {!isCurrentPlanSaved ? <Button label="Save" onPress={saveCurrentPlan} compact /> : null}
             <Button label="Invite" onPress={() => setSharePreviewOpen(true)} compact />
-            <Button label={isImportedGoogleMapsPlan && plan.sourceUrl ? 'Open route' : 'Route'} onPress={openPlanRoute} primary compact />
+            <Button label={isImportedGoogleMapsPlan && plan.sourceUrl ? 'Open route' : 'Route'} onPress={openRouteOptions} primary compact />
           </View>
           </>
         ) : null}
 
         {hasAnyActiveStop && !isPlanLocked ? (
-        <View style={styles.timeline}>
+        <View
+          style={styles.timeline}
+          onLayout={(event) => { timelineYRef.current = event.nativeEvent.layout.y; }}
+        >
           {plan.stops.map((stop, index) => (
-            <React.Fragment key={stop.key}>
+            <View
+              key={stop.key}
+              style={styles.timelineStopGroup}
+              onLayout={(event) => { stopLayoutYRef.current[stop.key] = event.nativeEvent.layout.y; }}
+            >
               <PlanStep
                 number={`${index + 1}`}
                 title={isImportedGoogleMapsDraft ? 'Stop' : stop.slot === 'food' ? 'Food' : 'Activity'}
                 value={cardToName(stop.item) || (stop.slot === 'food' ? 'Food stop' : 'Activity stop')}
                 detail={stepDetail(stop, index)}
+                walkable={isWalkableAfterTeslaStop(plan.stops[index - 1], stop)}
                 featureOptions={stop.featureOptions || []}
                 selectedFeatures={stop.selectedFeatures || []}
                 featuresExpanded={Boolean(stop.featuresExpanded)}
                 onToggleFeaturesOpen={() => toggleStopFeaturesOpen(stop.key)}
                 onToggleFeature={(feature) => toggleStopFeature(stop.key, feature)}
                 active
-                onPress={() => addStopAfter(stop.slot, index)}
+                onPress={() => {
+                  markStopSelected(stop.key);
+                  void addStopAfter(stop.slot, index);
+                }}
                 actionLabel="Adjust time"
-                onActionPress={() => openTimeEditor(stop.key, index)}
+                onActionPress={() => {
+                  markStopSelected(stop.key);
+                  openTimeEditor(stop.key, index);
+                }}
                 mapLabel="Map"
                 onMapPress={() => openStopMaps(stop)}
                 shareLabel="Share"
@@ -5315,7 +5772,7 @@ function NomNomGoApp() {
                 <Button label="Add food" onPress={() => addStopAfter('food', index)} compact />
                 <Button label="Add activity" onPress={() => addStopAfter('activity', index)} compact />
               </View>
-            </React.Fragment>
+            </View>
           ))}
         </View>
         ) : null}
@@ -5328,6 +5785,7 @@ function NomNomGoApp() {
                 setPlan(EMPTY_PLAN);
                 setPlanTimes({});
                 setArrivalTimes({});
+                setSelectedStopKey(null);
                 setHasInitiatedSearch(false);
                 setCards([]);
                 addLog('Plan cleared');
@@ -5539,7 +5997,7 @@ function NomNomGoApp() {
                   <Text style={styles.savedPlanMeta}>
                     {saved.source === 'shared'
                       ? `Shared by ${saved.sharedBy || 'Tester'} to ${saved.sharedTo || 'tester'}`
-                      : 'Saved plan'} · {new Date(saved.createdAt).toLocaleDateString([], { month: 'short', day: 'numeric' })}
+                      : 'Saved plan'} · {savedPlanDateLabel(saved)}
                   </Text>
                   <Text style={styles.savedPlanStops} numberOfLines={2}>
                     {savedPlanStopsLabel(saved)}
@@ -5632,6 +6090,12 @@ function NomNomGoApp() {
               onPress={(value) => {
                 addLog(`Time chip tapped: ${value}`);
                 setSelectedTime(value);
+                setPlan((prev) => prev.status !== 'locked' ? {
+                  ...prev,
+                  timeWindow: value === 'Now' ? undefined : defaultTimeWindowForPreference(value),
+                  lockedArrivalTimes: undefined,
+                  savedPlanId: undefined,
+                } : prev);
               }}
             />
             {resultMode === 'food' ? (
@@ -5823,6 +6287,40 @@ function NomNomGoApp() {
       ) : null}
 
       <Modal
+        visible={routeOptionsOpen}
+        animationType="fade"
+        transparent
+        onRequestClose={() => setRouteOptionsOpen(false)}
+      >
+        <View style={styles.shareOverlay}>
+          <View style={[styles.quickShareCard, isDarkMode && styles.darkModalCard]}>
+            <Text style={[styles.quickShareTitle, isDarkMode && styles.darkText]}>Route</Text>
+            <Text style={styles.quickSharePlace} numberOfLines={2}>
+              {planTitle}
+            </Text>
+            <Text style={[styles.routeOptionHint, isDarkMode && styles.darkMutedText]}>
+              Tesla handoff opens your device share sheet. Choose Tesla if available.
+            </Text>
+            <View style={styles.routeOptionList}>
+              <TouchableOpacity style={styles.routeOptionButton} onPress={openGoogleRouteFromOptions}>
+                <Ionicons name="map-outline" size={18} color="#071827" />
+                <Text style={styles.routeOptionButtonText}>
+                  {isImportedGoogleMapsPlan && plan.sourceUrl ? 'Open Google route' : 'Google Maps'}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.routeOptionButton} onPress={sendPlanToTesla}>
+                <Ionicons name="car-sport-outline" size={18} color="#071827" />
+                <Text style={styles.routeOptionButtonText}>Send to Tesla</Text>
+              </TouchableOpacity>
+            </View>
+            <View style={styles.shareActions}>
+              <Button label="Cancel" onPress={() => setRouteOptionsOpen(false)} />
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
         visible={planPreviewOpen}
         animationType="fade"
         transparent
@@ -5836,7 +6334,7 @@ function NomNomGoApp() {
               </Text>
               <View style={styles.planPreviewMetaRow}>
                 <Text style={[styles.planPreviewMeta, isDarkMode && styles.darkMutedText]} numberOfLines={1}>
-                  {importedPlanDateTimeLabel}
+                  {activePlanDateTimeLabel}
                 </Text>
                 <Text style={[styles.planPreviewMeta, isDarkMode && styles.darkMutedText]}>{plan.stops.length} stops</Text>
               </View>
@@ -5852,7 +6350,7 @@ function NomNomGoApp() {
                 {plan.stops.map((stop, index) => (
                   <View key={`preview-${stop.key}`} style={styles.planPreviewStopRow}>
                     <Text style={styles.planPreviewStopIndex}>{index + 1}</Text>
-                    <Text style={styles.planPreviewStopTime}>{formatClockAfterMinutes(itineraryArrivalMinutes(index))}</Text>
+                    <Text style={styles.planPreviewStopTime}>{formatClockTime(displayedArrivalTimeForStop(stop, index))}</Text>
                     <Text style={styles.planPreviewStopName} numberOfLines={1}>{cardToName(stop.item) || 'Stop'}</Text>
                   </View>
                 ))}
@@ -5884,7 +6382,7 @@ function NomNomGoApp() {
               {planTitle}
             </Text>
             <Text style={[styles.shareMetaLine, isDarkMode && styles.darkMutedText]} numberOfLines={1}>
-              {importedPlanDateTimeLabel}
+              {activePlanDateTimeLabel}
             </Text>
             {leaveForFirstStopText ? (
               <Text style={styles.shareLeaveTime}>{leaveForFirstStopText}</Text>
@@ -5894,7 +6392,7 @@ function NomNomGoApp() {
                 {plan.stops.map((stop, index) => (
                   <View key={`share-locked-${stop.key}`} style={styles.shareLockedStopRow}>
                     <Text style={styles.shareLockedStopIndex}>{index + 1}</Text>
-                    <Text style={styles.shareLockedStopTime}>{formatClockAfterMinutes(itineraryArrivalMinutes(index))}</Text>
+                    <Text style={styles.shareLockedStopTime}>{formatClockTime(displayedArrivalTimeForStop(stop, index))}</Text>
                     <Text style={styles.shareLockedStopName} numberOfLines={1}>{cardToName(stop.item) || 'Stop'}</Text>
                   </View>
                 ))}
@@ -6164,6 +6662,7 @@ function PlanStep({
   title,
   value,
   detail,
+  walkable,
   featureOptions,
   selectedFeatures,
   featuresExpanded,
@@ -6189,6 +6688,7 @@ function PlanStep({
   title: string;
   value: string;
   detail: string;
+  walkable?: boolean;
   featureOptions?: string[];
   selectedFeatures?: string[];
   featuresExpanded?: boolean;
@@ -6222,7 +6722,12 @@ function PlanStep({
       <TouchableOpacity style={[styles.stepCard, isDarkMode && styles.darkCard, active && styles.stepCardActive]} onPress={onPress}>
         <Text style={styles.stepTitle}>{title}</Text>
         <Text style={[styles.stepValue, isDarkMode && !active && styles.darkText, active && styles.stepValueActive]}>{value}</Text>
-        <Text style={[styles.stepDetail, isDarkMode && !active && styles.darkMutedText, active && styles.stepDetailActive]}>{detail}</Text>
+        <View style={styles.stepDetailRow}>
+          {walkable ? (
+            <Ionicons name="walk-outline" size={13} color={isDarkMode && !active ? '#fffaf3' : '#178f79'} />
+          ) : null}
+          <Text style={[styles.stepDetail, isDarkMode && !active && styles.darkMutedText, active && styles.stepDetailActive]}>{detail}</Text>
+        </View>
         {featureOptions && featureOptions.length > 1 && onToggleFeaturesOpen ? (
           <View style={styles.stepFeatureBox}>
             <TouchableOpacity
@@ -7385,14 +7890,38 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '900',
   },
-  lockedStopName: {
+  lockedStopTextBlock: {
     flex: 1,
+    minWidth: 0,
+    gap: 3,
+  },
+  lockedStopName: {
     color: '#071827',
     fontSize: 13,
     lineHeight: 17,
     fontWeight: '900',
   },
+  lockedStopCityPill: {
+    alignSelf: 'flex-start',
+    maxWidth: '100%',
+    borderRadius: 999,
+    backgroundColor: '#e9f8f2',
+    borderWidth: 1,
+    borderColor: '#c9eadf',
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+  },
+  lockedStopCityText: {
+    color: '#178f79',
+    fontSize: 9,
+    lineHeight: 11,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+  },
   timeline: {
+    gap: 0,
+  },
+  timelineStopGroup: {
     gap: 0,
   },
   stepRow: {
@@ -7459,6 +7988,12 @@ const styles = StyleSheet.create({
   stepDetail: {
     color: '#526170',
     fontSize: 12,
+    marginTop: 0,
+  },
+  stepDetailRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
     marginTop: 3,
   },
   stepDetailActive: {
@@ -8231,6 +8766,35 @@ const styles = StyleSheet.create({
   quickShareUserText: {
     color: '#071827',
     fontWeight: '900',
+  },
+  routeOptionHint: {
+    color: '#526170',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '800',
+    marginBottom: 12,
+  },
+  routeOptionList: {
+    gap: 10,
+    marginBottom: 14,
+  },
+  routeOptionButton: {
+    minHeight: 48,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#66c5a8',
+    backgroundColor: '#dff7ef',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 9,
+  },
+  routeOptionButtonText: {
+    color: '#071827',
+    fontSize: 15,
+    fontWeight: '900',
+    flexShrink: 1,
   },
   shareHeader: {
     alignItems: 'center',

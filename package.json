@@ -12,7 +12,7 @@
     "build:android": "eas build --platform android --profile production",
     "build:web": "expo export -p web",
     "lint": "echo \"Add eslint config when project grows\"",
-    "test:route-import": "tsc --module commonjs --target ES2020 --skipLibCheck --esModuleInterop --outDir .route-import-test-build routeImport.ts && node --test tests/routeImport.test.js",
+    "test:route-import": "tsc --module commonjs --target ES2020 --skipLibCheck --esModuleInterop --outDir .route-import-test-build routeImport.ts routeHandoff.ts && node --test tests/routeImport.test.js tests/routeHandoff.test.js",
     "test": "npm run test:route-import"
   },
   "dependencies": {
