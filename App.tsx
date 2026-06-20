@@ -2140,6 +2140,7 @@ function NomNomGoApp() {
   const manualSearchRef = useRef<TextInput | null>(null);
   const resultsYRef = useRef(0);
   const planBoxYRef = useRef(0);
+  const savedPlansYRef = useRef(0);
   const timelineYRef = useRef(0);
   const stopLayoutYRef = useRef<Record<string, number>>({});
   const searchRequestIdRef = useRef(0);
@@ -2197,6 +2198,15 @@ function NomNomGoApp() {
   const [savedPlans, setSavedPlans] = useState<SavedPlan[]>([]);
   const savedPlansRef = useRef<SavedPlan[]>([]);
   const [savedPlansOpen, setSavedPlansOpen] = useState(false);
+  const [homeOpen, setHomeOpen] = useState(true);
+  const [planSetupOpen, setPlanSetupOpen] = useState(false);
+  const [planSetupTiming, setPlanSetupTiming] = useState<'now' | 'later'>('now');
+  const [planSetupName, setPlanSetupName] = useState('');
+  const [planSetupDateWindow, setPlanSetupDateWindow] = useState<DateWindowId>('today');
+  const [planSetupTime, setPlanSetupTime] = useState('Now');
+  const [planSetupWhere, setPlanSetupWhere] = useState('');
+  const [planSetupStartingLocation, setPlanSetupStartingLocation] = useState('');
+  const [planSetupSubmitting, setPlanSetupSubmitting] = useState(false);
   const [suggestedPairingsOpen, setSuggestedPairingsOpen] = useState(true);
   const [suggestedPairingsExpanded, setSuggestedPairingsExpanded] = useState(false);
   const [toastMessage, setToastMessage] = useState('');
@@ -2485,6 +2495,24 @@ function NomNomGoApp() {
     });
   };
 
+  const scrollToTop = () => {
+    [70, 220].forEach((delay) => {
+      setTimeout(() => scrollRef.current?.scrollTo({ y: 0, animated: true }), delay);
+    });
+  };
+
+  const scrollToPlan = () => {
+    [90, 280, 650].forEach((delay) => {
+      setTimeout(() => scrollRef.current?.scrollTo({ y: Math.max(planBoxYRef.current - 8, 0), animated: true }), delay);
+    });
+  };
+
+  const scrollToSavedPlans = () => {
+    [90, 280, 650].forEach((delay) => {
+      setTimeout(() => scrollRef.current?.scrollTo({ y: Math.max(savedPlansYRef.current - 8, 0), animated: true }), delay);
+    });
+  };
+
   const scrollToPlanStop = (key: string) => {
     [90, 280, 650].forEach((delay) => {
       setTimeout(() => {
@@ -2495,6 +2523,159 @@ function NomNomGoApp() {
         scrollRef.current?.scrollTo({ y: Math.max(targetY - 8, 0), animated: true });
       }, delay);
     });
+  };
+
+  const closeTransientSurfaces = () => {
+    setAccountMenuOpen(false);
+    setAccountSettingsOpen(false);
+    setSharePreviewOpen(false);
+    setPlanPreviewOpen(false);
+    setQuickShareTarget(null);
+    setRouteOptionsOpen(false);
+    setLocationOverrideOpen(false);
+    setSearchLocationOverrideOpen(false);
+    setCustomDateOpen(false);
+    setRouteImportOpen(false);
+  };
+
+  const openHome = () => {
+    closeTransientSurfaces();
+    setHomeOpen(true);
+    setPlanSetupOpen(false);
+    setSavedPlansOpen(false);
+    setPlanSettingsOpen(false);
+    setPreferencesOpen(false);
+    setAdvancedPreferencesOpen(false);
+    scrollToTop();
+    addLog('Home opened');
+  };
+
+  const openPlanSetup = (timing: 'now' | 'later') => {
+    closeTransientSurfaces();
+    const nextDateWindow: DateWindowId = timing === 'now' ? 'today' : 'next3';
+    const nextTime = timing === 'now' ? 'Now' : 'Dinner';
+    setPlanSetupTiming(timing);
+    setPlanSetupName('');
+    setPlanSetupDateWindow(nextDateWindow);
+    setPlanSetupTime(nextTime);
+    setPlanSetupWhere(searchLocationOverride.trim());
+    setPlanSetupStartingLocation(routeOriginOverride.trim());
+    setPlanSetupOpen(true);
+    setHomeOpen(true);
+    setSavedPlansOpen(false);
+    scrollToTop();
+    addLog(`Home action: ${timing}`);
+  };
+
+  const submitPlanSetup = async () => {
+    if (planSetupSubmitting) return;
+
+    const nextName = planSetupName.trim();
+    const whereInput = planSetupWhere.trim();
+    const startingInput = planSetupStartingLocation.trim();
+    const nextDateRange = dateRangeKeysForWindow(planSetupDateWindow, null);
+    const nextTimeWindow = planSetupTime === 'Now' ? undefined : defaultTimeWindowForPreference(planSetupTime);
+    setPlanSetupSubmitting(true);
+
+    try {
+      let resolvedStartingLocation: LatLon | undefined;
+      let resolvedSearchLocation: LatLon | undefined;
+
+      if (startingInput) {
+        const resolved = await resolveLocationInput(startingInput);
+        if (!resolved) {
+          Alert.alert('Starting location not found', `Could not find a location for ${startingInput}.`);
+          addLog(`Plan setup starting location failed: ${startingInput}`);
+          return;
+        }
+        resolvedStartingLocation = { ...resolved, label: startingInput };
+        await saveLocation(resolvedStartingLocation);
+        setRouteOriginOverride(startingInput);
+      } else {
+        setRouteOriginOverride('');
+      }
+
+      if (whereInput) {
+        const resolved = await resolveLocationInput(whereInput);
+        if (!resolved) {
+          Alert.alert('Plan location not found', `Could not find a location for ${whereInput}.`);
+          addLog(`Plan setup search location failed: ${whereInput}`);
+          return;
+        }
+        resolvedSearchLocation = { ...resolved, label: whereInput };
+        await saveSearchLocation(resolvedSearchLocation);
+        setSearchLocationOverride(whereInput);
+      } else if (resolvedStartingLocation) {
+        resolvedSearchLocation = resolvedStartingLocation;
+        await saveSearchLocation(resolvedStartingLocation);
+        setSearchLocationOverride('');
+      } else {
+        setSearchLocation(null);
+        setLastSearchLocationCenter(null);
+        setSearchLocationOverride('');
+      }
+
+      if (activePlanningSession) await saveActivePlanningSession(null);
+      selectedDateWindowRef.current = planSetupDateWindow;
+      customDateRangeRef.current = null;
+      setSelectedDateWindow(planSetupDateWindow);
+      setCustomDateRange(null);
+      setSelectedTime(planSetupTime);
+      setResultMode('food');
+      setPlan({
+        ...EMPTY_PLAN,
+        title: nextName || undefined,
+        status: 'draft',
+        dateWindow: planSetupDateWindow,
+        customDateRange: null,
+        planDateStart: nextDateRange.start,
+        planDateEnd: nextDateRange.end,
+        timeWindow: nextTimeWindow,
+        routeOriginLabel: startingInput || 'Current location',
+        routeStartLocation: resolvedStartingLocation || location || undefined,
+        searchLocation: resolvedSearchLocation || resolvedStartingLocation || undefined,
+        searchLocationLabel: whereInput || startingInput || 'Current location',
+      });
+      setPlanTimes({});
+      setArrivalTimes({});
+      setPendingInsertIndex(null);
+      setSelectedStopKey(null);
+      setTimeEditorKey(null);
+      setCards([]);
+      setVisibleCount(PAGE_SIZE);
+      setSearchNotice('');
+      setLoading(false);
+      setHasInitiatedSearch(false);
+      setPlanSetupOpen(false);
+      setHomeOpen(false);
+      setSavedPlansOpen(false);
+      setPlanSettingsOpen(false);
+      setLocationOverrideOpen(false);
+      setSearchLocationOverrideOpen(false);
+      setCustomDateOpen(false);
+      setRouteImportOpen(false);
+      setPreferencesOpen(false);
+      setAdvancedPreferencesOpen(false);
+      scrollToPlan();
+      addLog(`Plan setup complete: ${planSetupTiming}`);
+    } catch (err) {
+      addLog(`Plan setup failed: ${compactError(err)}`);
+      Alert.alert('Plan setup failed', compactError(err));
+    } finally {
+      setPlanSetupSubmitting(false);
+    }
+  };
+
+  const openSavedPlansHomeAction = () => {
+    closeTransientSurfaces();
+    setPlanSetupOpen(false);
+    setHomeOpen(false);
+    setSavedPlansOpen(true);
+    setPreferencesOpen(false);
+    setAdvancedPreferencesOpen(false);
+    setPlanSettingsOpen(false);
+    scrollToSavedPlans();
+    addLog('Home action: saved plans');
   };
 
   const markStopSelected = (key?: string) => {
@@ -5314,7 +5495,12 @@ function NomNomGoApp() {
       keyboardDismissMode="interactive"
     >
       <View style={[styles.appBanner, isDarkMode && styles.darkPanel]}>
-        <View style={styles.bannerBrand} accessibilityLabel="NomNomGo. Come together.">
+        <TouchableOpacity
+          style={styles.bannerBrand}
+          onPress={openHome}
+          accessibilityRole="button"
+          accessibilityLabel="Go to NomNomGo home"
+        >
           <Image
             source={require('./assets/nom-nom-go-mark-transparent-v19.png')}
             style={styles.bannerLogoMark}
@@ -5339,7 +5525,7 @@ function NomNomGoApp() {
               Come together
             </Text>
           </View>
-        </View>
+        </TouchableOpacity>
         <View style={styles.bannerActions}>
           <TouchableOpacity
             style={[styles.accountIconButton, isDarkMode && styles.darkChip]}
@@ -5435,6 +5621,139 @@ function NomNomGoApp() {
           </TouchableOpacity>
         </TouchableOpacity>
       </Modal>
+
+      {homeOpen ? (
+        <View style={[styles.homeBox, isLightMode && styles.lightPanel, isDarkMode && styles.darkPanel]}>
+          {!planSetupOpen ? (
+            <>
+              <View style={styles.homeTitleBlock}>
+                <Text style={[styles.homeTitle, isDarkMode && styles.darkText]}>NomNomGo</Text>
+                <Text style={[styles.homeSubtitle, isDarkMode && styles.darkMutedText]}>Come together</Text>
+              </View>
+              <View style={styles.homeActionGrid}>
+                <TouchableOpacity
+                  style={[styles.homeMainButton, styles.homeNowButton]}
+                  onPress={() => openPlanSetup('now')}
+                  accessibilityRole="button"
+                  accessibilityLabel="Now"
+                >
+                  <Ionicons name="time-outline" size={24} color="#fffaf3" />
+                  <Text style={styles.homeMainButtonText}>Now</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.homeMainButton, styles.homeLaterButton]}
+                  onPress={() => openPlanSetup('later')}
+                  accessibilityRole="button"
+                  accessibilityLabel="Later"
+                >
+                  <Ionicons name="calendar-outline" size={24} color="#fffaf3" />
+                  <Text style={styles.homeMainButtonText}>Later</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.homeMainButton, styles.homeSavedButton]}
+                  onPress={openSavedPlansHomeAction}
+                  accessibilityRole="button"
+                  accessibilityLabel="Saved or shared plans"
+                >
+                  <Ionicons name="albums-outline" size={24} color="#fffaf3" />
+                  <Text style={styles.homeMainButtonText}>Saved/Shared</Text>
+                </TouchableOpacity>
+              </View>
+            </>
+          ) : (
+            <>
+              <View style={styles.setupHeaderRow}>
+                <View>
+                  <Text style={[styles.homeTitle, isDarkMode && styles.darkText]}>
+                    {planSetupTiming === 'now' ? 'Now' : 'Later'}
+                  </Text>
+                  <Text style={[styles.homeSubtitle, isDarkMode && styles.darkMutedText]}>New plan</Text>
+                </View>
+                <Button label="Back" onPress={() => setPlanSetupOpen(false)} compact />
+              </View>
+
+              <View style={styles.setupField}>
+                <Text style={[styles.setupLabel, isDarkMode && styles.darkMutedText]}>Name</Text>
+                <TextInput
+                  style={[styles.input, isDarkMode && styles.darkPanelInput, Platform.OS === 'web' && styles.webInput]}
+                  value={planSetupName}
+                  onChangeText={setPlanSetupName}
+                  placeholder="Plan name"
+                  placeholderTextColor={isLightMode ? '#64748b' : '#94a3b8'}
+                  returnKeyType="next"
+                />
+              </View>
+
+              <View style={styles.setupField}>
+                <Text style={[styles.setupLabel, isDarkMode && styles.darkMutedText]}>When</Text>
+                <View style={styles.dateChipWrap}>
+                  {dateWindowOptions.filter((option) => option.id !== 'custom').map((option) => {
+                    const active = planSetupDateWindow === option.id;
+                    return (
+                      <TouchableOpacity
+                        key={`setup-date-${option.id}`}
+                        style={[styles.dateChip, active && styles.dateChipActive]}
+                        onPress={() => setPlanSetupDateWindow(option.id)}
+                      >
+                        <Text style={[styles.dateChipText, active && styles.dateChipTextActive]}>{option.label}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+                <View style={styles.chipWrap}>
+                  {TIMES.map((time) => {
+                    const active = planSetupTime === time;
+                    return (
+                      <TouchableOpacity
+                        key={`setup-time-${time}`}
+                        style={[styles.chip, isDarkMode && styles.darkChip, active && styles.chipActive]}
+                        onPress={() => setPlanSetupTime(time)}
+                      >
+                        <Text style={[styles.chipText, isDarkMode && styles.darkMutedText, active && styles.chipTextActive]}>{time}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </View>
+
+              <View style={styles.setupField}>
+                <Text style={[styles.setupLabel, isDarkMode && styles.darkMutedText]}>Where</Text>
+                <TextInput
+                  style={[styles.input, isDarkMode && styles.darkPanelInput, Platform.OS === 'web' && styles.webInput]}
+                  value={planSetupWhere}
+                  onChangeText={setPlanSetupWhere}
+                  placeholder="City, ZIP, or place"
+                  placeholderTextColor={isLightMode ? '#64748b' : '#94a3b8'}
+                  returnKeyType="next"
+                />
+              </View>
+
+              <View style={styles.setupField}>
+                <Text style={[styles.setupLabel, isDarkMode && styles.darkMutedText]}>Starting location</Text>
+                <TextInput
+                  style={[styles.input, isDarkMode && styles.darkPanelInput, Platform.OS === 'web' && styles.webInput]}
+                  value={planSetupStartingLocation}
+                  onChangeText={setPlanSetupStartingLocation}
+                  placeholder="Current location"
+                  placeholderTextColor={isLightMode ? '#64748b' : '#94a3b8'}
+                  returnKeyType="done"
+                  onSubmitEditing={submitPlanSetup}
+                />
+              </View>
+
+              <View style={styles.setupActions}>
+                <Button
+                  label={planSetupSubmitting ? 'Creating' : 'Create plan'}
+                  onPress={submitPlanSetup}
+                  primary
+                  disabled={planSetupSubmitting}
+                />
+              </View>
+            </>
+          )}
+        </View>
+      ) : (
+      <>
 
       {GROUP_SESSION_ENABLED && !activePlanningSession && sessionBuilderOpen ? (
         <View style={[styles.sessionBox, isDarkMode && styles.darkPanel]}>
@@ -6104,7 +6423,10 @@ function NomNomGoApp() {
 
       </View>
 
-      <View style={[styles.savedPlansBox, isLightMode && styles.lightPanel, isDarkMode && styles.darkPanel]}>
+      <View
+        style={[styles.savedPlansBox, isLightMode && styles.lightPanel, isDarkMode && styles.darkPanel]}
+        onLayout={(event) => { savedPlansYRef.current = event.nativeEvent.layout.y; }}
+      >
         <TouchableOpacity style={styles.savedPlansHeader} onPress={() => setSavedPlansOpen((prev) => !prev)}>
           <View style={styles.sectionHeaderTextBlock}>
             <Text style={[styles.sectionTitle, isLightMode && styles.lightSectionTitle, isDarkMode && styles.darkText]}>Saved Plans</Text>
@@ -6411,6 +6733,8 @@ function NomNomGoApp() {
       )}
       </>
       ) : null}
+      </>
+      )}
 
       <Modal
         visible={routeOptionsOpen}
@@ -7236,6 +7560,83 @@ const styles = StyleSheet.create({
     backgroundColor: '#fffdf8',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  homeBox: {
+    backgroundColor: '#fffaf3',
+    borderWidth: 1,
+    borderColor: '#eadccb',
+    borderRadius: 8,
+    padding: 16,
+    marginBottom: 16,
+    gap: 16,
+  },
+  homeTitleBlock: {
+    gap: 2,
+  },
+  homeTitle: {
+    color: '#071827',
+    fontSize: 24,
+    lineHeight: 30,
+    fontWeight: '900',
+  },
+  homeSubtitle: {
+    color: '#526170',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '900',
+  },
+  homeActionGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  homeMainButton: {
+    flex: 1,
+    minWidth: 142,
+    minHeight: 82,
+    borderRadius: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  homeNowButton: {
+    backgroundColor: '#071827',
+  },
+  homeLaterButton: {
+    backgroundColor: '#178f79',
+  },
+  homeSavedButton: {
+    backgroundColor: '#f23b35',
+  },
+  homeMainButtonText: {
+    color: '#fffaf3',
+    fontSize: 16,
+    lineHeight: 20,
+    fontWeight: '900',
+    textAlign: 'center',
+  },
+  setupHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+  setupField: {
+    gap: 8,
+  },
+  setupLabel: {
+    color: '#526170',
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+  },
+  setupActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
   },
   hero: {
     backgroundColor: '#fffaf3',
