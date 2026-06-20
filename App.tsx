@@ -2170,6 +2170,7 @@ function NomNomGoApp() {
   const [lastSearchLocationCenter, setLastSearchLocationCenter] = useState<LatLon | null>(null);
   const [manualSearch, setManualSearch] = useState('');
   const [manualSearchSubmitted, setManualSearchSubmitted] = useState(false);
+  const routeOriginOverrideRef = useRef('');
   const [routeOriginOverride, setRouteOriginOverride] = useState('');
   const [searchLocationOverride, setSearchLocationOverride] = useState('');
   const [locationOverrideOpen, setLocationOverrideOpen] = useState(false);
@@ -2233,6 +2234,7 @@ function NomNomGoApp() {
   const [routeImporting, setRouteImporting] = useState(false);
   selectedDateWindowRef.current = selectedDateWindow;
   customDateRangeRef.current = customDateRange;
+  routeOriginOverrideRef.current = routeOriginOverride;
   savedPlansRef.current = savedPlans;
 
   const keyLoaded = Boolean(GOOGLE_API_KEY);
@@ -2610,43 +2612,25 @@ function NomNomGoApp() {
     setPlanSetupSubmitting(true);
 
     try {
-      let resolvedStartingLocation: LatLon | undefined;
-      let resolvedSearchLocation: LatLon | undefined;
-
       if (startingInput) {
-        const resolved = await resolveLocationInput(startingInput);
-        if (!resolved) {
-          Alert.alert('Starting location not found', `Could not find a location for ${startingInput}.`);
-          addLog(`Plan setup starting location failed: ${startingInput}`);
-          return;
-        }
-        resolvedStartingLocation = { ...resolved, label: startingInput };
-        await saveLocation(resolvedStartingLocation);
+        routeOriginOverrideRef.current = startingInput;
         setRouteOriginOverride(startingInput);
+        setLocation(null);
+        await AsyncStorage.removeItem(STORAGE_LOCATION);
+        resolveRouteOriginInBackground(startingInput);
       } else {
+        routeOriginOverrideRef.current = '';
         setRouteOriginOverride('');
       }
 
       if (whereInput) {
-        const resolved = await resolveLocationInput(whereInput);
-        if (!resolved) {
-          Alert.alert('Plan location not found', `Could not find a location for ${whereInput}.`);
-          addLog(`Plan setup search location failed: ${whereInput}`);
-          return;
-        }
-        resolvedSearchLocation = { ...resolved, label: whereInput };
-        await saveSearchLocation(resolvedSearchLocation);
         setSearchLocationOverride(whereInput);
-      } else if (resolvedStartingLocation) {
-        resolvedSearchLocation = resolvedStartingLocation;
-        await saveSearchLocation(resolvedStartingLocation);
-        setSearchLocationOverride('');
       } else {
-        setSearchLocation(null);
-        setLastSearchLocationCenter(null);
         setSearchLocationOverride('');
-        await AsyncStorage.removeItem(STORAGE_SEARCH_LOCATION);
       }
+      setSearchLocation(null);
+      setLastSearchLocationCenter(null);
+      await AsyncStorage.removeItem(STORAGE_SEARCH_LOCATION);
 
       if (activePlanningSession) await saveActivePlanningSession(null);
       selectedDateWindowRef.current = planSetupDateWindow;
@@ -2669,8 +2653,8 @@ function NomNomGoApp() {
         planDateEnd: nextDateRange.end,
         timeWindow: nextTimeWindow,
         routeOriginLabel: startingInput || 'Current location',
-        routeStartLocation: resolvedStartingLocation || location || undefined,
-        searchLocation: resolvedSearchLocation || resolvedStartingLocation || undefined,
+        routeStartLocation: startingInput ? undefined : location || undefined,
+        searchLocation: undefined,
         searchLocationLabel: whereInput || startingInput || 'Current location',
       });
       setPlanTimes({});
@@ -2981,6 +2965,27 @@ function NomNomGoApp() {
     return next;
   };
 
+  const resolveRouteOriginInBackground = (value: string) => {
+    const query = value.trim();
+    if (!query) return;
+
+    void (async () => {
+      try {
+        const resolved = await resolveLocationInput(query);
+        if (!resolved) {
+          addLog(`Starting location background resolve returned no results: ${query}`);
+          return;
+        }
+        if (routeOriginOverrideRef.current.trim() !== query) return;
+
+        await saveLocation({ ...resolved, label: query });
+        addLog(`Starting location resolved: ${query} ${resolved.latitude.toFixed(4)}, ${resolved.longitude.toFixed(4)}`);
+      } catch (err) {
+        addLog(`Starting location background resolve failed: ${compactError(err)}`);
+      }
+    })();
+  };
+
   const toggleMulti = (value: string, current: string[], setter: (next: string[]) => void, label: string) => {
     addLog(`${label} chip tapped: ${value}`);
     if (value === 'Any') {
@@ -3041,7 +3046,27 @@ function NomNomGoApp() {
     }
   };
 
-  const getSearchLocation = async () => activePlanningSession?.searchLocation || searchLocation || getLocation();
+  const getSearchLocation = async () => {
+    if (activePlanningSession?.searchLocation) return activePlanningSession.searchLocation;
+    if (searchLocation) return searchLocation;
+
+    const searchOverride = searchLocationOverride.trim();
+    const originOverride = routeOriginOverride.trim();
+    const locationQuery = searchOverride || originOverride;
+    if (locationQuery) {
+      const resolved = await resolveLocationInput(locationQuery);
+      if (!resolved) throw new Error(`Could not find a location for ${locationQuery}.`);
+
+      const stamped = { ...resolved, label: locationQuery, ts: Date.now() };
+      setSearchLocation(stamped);
+      setLastSearchLocationCenter(stamped);
+      await AsyncStorage.setItem(STORAGE_SEARCH_LOCATION, JSON.stringify(stamped));
+      addLog(`Search location resolved: ${locationQuery} ${resolved.latitude.toFixed(4)}, ${resolved.longitude.toFixed(4)}`);
+      return stamped;
+    }
+
+    return getLocation();
+  };
 
   const searchNearbyType = async (type: string, center: LatLon, radiusMeters: number): Promise<PlaceCard[]> => {
     if (!GOOGLE_API_KEY) throw new Error('Google Places API key is not loaded.');
