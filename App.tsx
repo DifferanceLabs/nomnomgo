@@ -1512,6 +1512,14 @@ function distanceMeters(a: LatLon, b: Pick<PlaceCard, 'lat' | 'lng'>) {
   return 2 * earthRadius * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
 }
 
+function formatDistanceFromMeters(meters: number) {
+  if (!Number.isFinite(meters)) return undefined;
+  const miles = meters / 1609.344;
+  if (miles < 0.1) return '<0.1 mi';
+  if (miles < 10) return `${miles.toFixed(1)} mi`;
+  return `${Math.round(miles)} mi`;
+}
+
 function favoriteMatchesSearchLocation(entry: { card: PlaceCard; location?: LatLon }, center?: LatLon | null) {
   if (!center) return true;
   if (entry.location) {
@@ -2277,6 +2285,15 @@ function NomNomGoApp() {
   const activeSearchLocation = activePlanningSession?.searchLocation || searchLocation;
   const startingLocationLabel = currentSessionRouteContext?.originLabel || routeOriginOverride.trim() || location?.label || 'Current location';
   const routeStartLocation = currentSessionRouteContext?.location || location || undefined;
+  const lastStopDistanceAnchor = stopSearchCenter(plan.stops[plan.stops.length - 1]);
+  const resultDistanceAnchor = lastStopDistanceAnchor || lastSearchLocationCenter || activeSearchLocation || routeStartLocation || undefined;
+  const resultDistanceContext = lastStopDistanceAnchor
+    ? 'from last stop'
+    : lastSearchLocationCenter || activeSearchLocation
+        ? 'from search area'
+        : routeStartLocation
+          ? 'from start'
+          : undefined;
   const searchLocationLabel = activePlanningSession?.locationLabel || searchLocationOverride.trim() || searchLocation?.label || startingLocationLabel;
   const selectedPreferenceTimeWindow = selectedTime === 'Now' ? undefined : defaultTimeWindowForPreference(selectedTime);
   const activePlanDateWindow = plan.dateWindow || selectedDateWindow;
@@ -6864,6 +6881,11 @@ function NomNomGoApp() {
           {!loading && shownCards.map((card, index) => {
             const isSelected = selectedCards.some((item) => cardToId(item) === card.id);
             const isSuggested = planningSuggestionMode && Boolean(activePlanningSession?.suggestions.some((suggestion) => samePlanningSuggestion(suggestion, resultMode, card)));
+            const isFavorite = memory.favorites.includes(card.id);
+            const distanceText = resultDistanceAnchor && resultDistanceContext
+              ? formatDistanceFromMeters(distanceMeters(resultDistanceAnchor, card))
+              : undefined;
+            const distanceLabel = distanceText ? `${distanceText} ${resultDistanceContext}` : undefined;
             const resultActionLabel = planningSuggestionMode
               ? isSuggested
                 ? 'Suggested'
@@ -6885,8 +6907,21 @@ function NomNomGoApp() {
                   {card.kind === 'event' ? card.eventDateText || 'Date TBA' : card.hoursText || 'Hours unknown'}
                 </Text>
               </View>
-              <Text style={[styles.cardTitle, isDarkMode && styles.darkText]}>{card.title}</Text>
+              <View style={styles.cardTitleRow}>
+                <Text style={[styles.cardTitle, isDarkMode && styles.darkText]}>{card.title}</Text>
+                <TouchableOpacity
+                  style={[styles.cardFavoriteButton, isFavorite && styles.cardFavoriteButtonActive]}
+                  onPress={() => toggleFavorite(card)}
+                  accessibilityRole="button"
+                  accessibilityLabel={isFavorite ? `Unstar ${card.title}` : `Star ${card.title}`}
+                >
+                  <Ionicons name={isFavorite ? 'star' : 'star-outline'} size={20} color={isFavorite ? '#ffc84a' : '#94a3b8'} />
+                </TouchableOpacity>
+              </View>
               <Text style={styles.cardSubtitle}>{card.subtitle}</Text>
+              {distanceLabel ? (
+                <Text style={[styles.cardDistance, isDarkMode && styles.darkMutedText]}>{distanceLabel}</Text>
+              ) : null}
               {card.kind === 'event' && card.source ? (
                 <Text style={[styles.hoursDetail, isDarkMode && styles.darkMutedText]}>Source: {card.source}</Text>
               ) : null}
@@ -6901,11 +6936,6 @@ function NomNomGoApp() {
                   <Button label={card.kind === 'event' ? 'Map' : 'Open Maps'} onPress={() => openCardMaps(card)} compact />
                 ) : null}
                 <Button label="Share" onPress={() => openQuickShare({ kind: 'card', slot: resultMode, card })} compact />
-                <Button
-                  label={memory.favorites.includes(card.id) ? '★' : '☆'}
-                  onPress={() => toggleFavorite(card)}
-                  compact
-                />
               </View>
               <View style={styles.buttonRow}>
                 <Button label="Dismiss" onPress={() => dismissCard(card)} compact />
@@ -9475,6 +9505,24 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '900',
   },
+  cardTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+  },
+  cardFavoriteButton: {
+    width: 34,
+    height: 34,
+    borderRadius: 8,
+    backgroundColor: '#071827',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  cardFavoriteButtonActive: {
+    borderWidth: 1,
+    borderColor: '#ffc84a',
+  },
   shareOverlay: {
     flex: 1,
     backgroundColor: 'rgba(7, 24, 39, 0.72)',
@@ -9814,6 +9862,7 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   cardTitle: {
+    flex: 1,
     color: '#071827',
     fontSize: 19,
     fontWeight: '900',
@@ -9822,6 +9871,12 @@ const styles = StyleSheet.create({
     color: '#178f79',
     fontWeight: '700',
     marginTop: 5,
+  },
+  cardDistance: {
+    color: '#526170',
+    marginTop: 6,
+    fontSize: 12,
+    fontWeight: '900',
   },
   address: {
     color: '#526170',
