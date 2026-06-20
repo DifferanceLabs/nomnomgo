@@ -2199,10 +2199,13 @@ function NomNomGoApp() {
   const savedPlansRef = useRef<SavedPlan[]>([]);
   const [savedPlansOpen, setSavedPlansOpen] = useState(false);
   const [homeOpen, setHomeOpen] = useState(true);
+  const [savedPlansLandingOpen, setSavedPlansLandingOpen] = useState(false);
   const [planSetupOpen, setPlanSetupOpen] = useState(false);
   const [planSetupTiming, setPlanSetupTiming] = useState<'now' | 'later'>('now');
   const [planSetupName, setPlanSetupName] = useState('');
   const [planSetupDateWindow, setPlanSetupDateWindow] = useState<DateWindowId>('today');
+  const [planSetupCustomDateStartInput, setPlanSetupCustomDateStartInput] = useState(formatDateInput(new Date()));
+  const [planSetupCustomDateEndInput, setPlanSetupCustomDateEndInput] = useState(formatDateInput(addLocalDays(new Date(), 6)));
   const [planSetupTime, setPlanSetupTime] = useState('Now');
   const [planSetupWhere, setPlanSetupWhere] = useState('');
   const [planSetupStartingLocation, setPlanSetupStartingLocation] = useState('');
@@ -2256,6 +2259,10 @@ function NomNomGoApp() {
   const titleForResults = resultMode === 'food' ? 'Food places' : activeFood ? 'Activities near your food' : 'Activity options';
   const selectedCards = resultMode === 'food' ? foodItems : activityItems;
   const dateWindowOptions = useMemo(() => DATE_WINDOW_IDS.map((id) => ({ id, label: dateWindowLabel(id, new Date(), customDateRange) })), [customDateRange]);
+  const setupDateWindowOptions = useMemo(() => DATE_WINDOW_IDS.map((id) => ({
+    id,
+    label: id === 'custom' ? 'Choose dates' : dateWindowLabel(id, new Date(), null),
+  })), []);
   const selectedDateWindowText = dateWindowLabel(selectedDateWindow, new Date(), customDateRange);
   const currentTesterName = testerUser?.name || 'Tester';
   let activePlanningSession: PlanningSession | null = null;
@@ -2541,6 +2548,7 @@ function NomNomGoApp() {
   const openHome = () => {
     closeTransientSurfaces();
     setHomeOpen(true);
+    setSavedPlansLandingOpen(false);
     setPlanSetupOpen(false);
     setSavedPlansOpen(false);
     setPlanSettingsOpen(false);
@@ -2552,16 +2560,21 @@ function NomNomGoApp() {
 
   const openPlanSetup = (timing: 'now' | 'later') => {
     closeTransientSurfaces();
-    const nextDateWindow: DateWindowId = timing === 'now' ? 'today' : 'next3';
+    const nextDateWindow: DateWindowId = timing === 'now' ? 'today' : 'tomorrow';
     const nextTime = timing === 'now' ? 'Now' : 'Dinner';
+    const defaultCustomStart = formatDateInput(new Date());
+    const defaultCustomEnd = formatDateInput(addLocalDays(new Date(), 6));
     setPlanSetupTiming(timing);
     setPlanSetupName('');
     setPlanSetupDateWindow(nextDateWindow);
+    setPlanSetupCustomDateStartInput(defaultCustomStart);
+    setPlanSetupCustomDateEndInput(defaultCustomEnd);
     setPlanSetupTime(nextTime);
     setPlanSetupWhere(searchLocationOverride.trim());
     setPlanSetupStartingLocation(routeOriginOverride.trim());
     setPlanSetupOpen(true);
     setHomeOpen(true);
+    setSavedPlansLandingOpen(false);
     setSavedPlansOpen(false);
     scrollToTop();
     addLog(`Home action: ${timing}`);
@@ -2573,8 +2586,27 @@ function NomNomGoApp() {
     const nextName = planSetupName.trim();
     const whereInput = planSetupWhere.trim();
     const startingInput = planSetupStartingLocation.trim();
-    const nextDateRange = dateRangeKeysForWindow(planSetupDateWindow, null);
     const nextTimeWindow = planSetupTime === 'Now' ? undefined : defaultTimeWindowForPreference(planSetupTime);
+    let nextCustomDateRange: CustomDateRange | null = null;
+
+    if (planSetupDateWindow === 'custom') {
+      const start = parseDateInput(planSetupCustomDateStartInput);
+      const end = parseDateInput(planSetupCustomDateEndInput);
+      if (!start || !end) {
+        Alert.alert('Check dates', 'Use dates like 2026-06-12.');
+        return;
+      }
+      if (end < start) {
+        Alert.alert('Check dates', 'End date must be the same as or after the start date.');
+        return;
+      }
+      nextCustomDateRange = {
+        start: formatDateInput(start),
+        end: formatDateInput(end),
+      };
+    }
+
+    const nextDateRange = dateRangeKeysForWindow(planSetupDateWindow, nextCustomDateRange);
     setPlanSetupSubmitting(true);
 
     try {
@@ -2613,13 +2645,18 @@ function NomNomGoApp() {
         setSearchLocation(null);
         setLastSearchLocationCenter(null);
         setSearchLocationOverride('');
+        await AsyncStorage.removeItem(STORAGE_SEARCH_LOCATION);
       }
 
       if (activePlanningSession) await saveActivePlanningSession(null);
       selectedDateWindowRef.current = planSetupDateWindow;
-      customDateRangeRef.current = null;
+      customDateRangeRef.current = nextCustomDateRange;
       setSelectedDateWindow(planSetupDateWindow);
-      setCustomDateRange(null);
+      setCustomDateRange(nextCustomDateRange);
+      if (nextCustomDateRange) {
+        setCustomDateStartInput(nextCustomDateRange.start);
+        setCustomDateEndInput(nextCustomDateRange.end);
+      }
       setSelectedTime(planSetupTime);
       setResultMode('food');
       setPlan({
@@ -2627,7 +2664,7 @@ function NomNomGoApp() {
         title: nextName || undefined,
         status: 'draft',
         dateWindow: planSetupDateWindow,
-        customDateRange: null,
+        customDateRange: nextCustomDateRange,
         planDateStart: nextDateRange.start,
         planDateEnd: nextDateRange.end,
         timeWindow: nextTimeWindow,
@@ -2648,6 +2685,7 @@ function NomNomGoApp() {
       setHasInitiatedSearch(false);
       setPlanSetupOpen(false);
       setHomeOpen(false);
+      setSavedPlansLandingOpen(false);
       setSavedPlansOpen(false);
       setPlanSettingsOpen(false);
       setLocationOverrideOpen(false);
@@ -2670,6 +2708,7 @@ function NomNomGoApp() {
     closeTransientSurfaces();
     setPlanSetupOpen(false);
     setHomeOpen(false);
+    setSavedPlansLandingOpen(true);
     setSavedPlansOpen(true);
     setPreferencesOpen(false);
     setAdvancedPreferencesOpen(false);
@@ -4942,6 +4981,9 @@ function NomNomGoApp() {
     setTimeEditorKey(null);
     setHasInitiatedSearch(false);
     setCards([]);
+    setHomeOpen(false);
+    setSavedPlansLandingOpen(false);
+    setPlanSetupOpen(false);
     setTimeout(() => scrollRef.current?.scrollTo({ y: 0, animated: true }), 100);
     addLog(`Saved plan loaded: ${saved.title}`);
   };
@@ -5687,7 +5729,7 @@ function NomNomGoApp() {
               <View style={styles.setupField}>
                 <Text style={[styles.setupLabel, isDarkMode && styles.darkMutedText]}>When</Text>
                 <View style={styles.dateChipWrap}>
-                  {dateWindowOptions.filter((option) => option.id !== 'custom').map((option) => {
+                  {setupDateWindowOptions.map((option) => {
                     const active = planSetupDateWindow === option.id;
                     return (
                       <TouchableOpacity
@@ -5700,6 +5742,28 @@ function NomNomGoApp() {
                     );
                   })}
                 </View>
+                {planSetupDateWindow === 'custom' ? (
+                  <View style={styles.customDateBox}>
+                    <View style={styles.customDateInputs}>
+                      <TextInput
+                        style={[styles.input, styles.customDateInput]}
+                        value={planSetupCustomDateStartInput}
+                        onChangeText={setPlanSetupCustomDateStartInput}
+                        placeholder="Start YYYY-MM-DD"
+                        placeholderTextColor="#64748b"
+                        keyboardType="numbers-and-punctuation"
+                      />
+                      <TextInput
+                        style={[styles.input, styles.customDateInput]}
+                        value={planSetupCustomDateEndInput}
+                        onChangeText={setPlanSetupCustomDateEndInput}
+                        placeholder="End YYYY-MM-DD"
+                        placeholderTextColor="#64748b"
+                        keyboardType="numbers-and-punctuation"
+                      />
+                    </View>
+                  </View>
+                ) : null}
                 <View style={styles.chipWrap}>
                   {TIMES.map((time) => {
                     const active = planSetupTime === time;
@@ -5753,6 +5817,9 @@ function NomNomGoApp() {
           )}
         </View>
       ) : (
+      <>
+
+      {!savedPlansLandingOpen ? (
       <>
 
       {GROUP_SESSION_ENABLED && !activePlanningSession && sessionBuilderOpen ? (
@@ -6423,13 +6490,18 @@ function NomNomGoApp() {
 
       </View>
 
+      </>
+      ) : null}
+
       <View
         style={[styles.savedPlansBox, isLightMode && styles.lightPanel, isDarkMode && styles.darkPanel]}
         onLayout={(event) => { savedPlansYRef.current = event.nativeEvent.layout.y; }}
       >
         <TouchableOpacity style={styles.savedPlansHeader} onPress={() => setSavedPlansOpen((prev) => !prev)}>
           <View style={styles.sectionHeaderTextBlock}>
-            <Text style={[styles.sectionTitle, isLightMode && styles.lightSectionTitle, isDarkMode && styles.darkText]}>Saved Plans</Text>
+            <Text style={[styles.sectionTitle, isLightMode && styles.lightSectionTitle, isDarkMode && styles.darkText]}>
+              {savedPlansLandingOpen ? 'Saved/Shared Plans' : 'Saved Plans'}
+            </Text>
             <Text style={[styles.savedPlansHint, isLightMode && styles.lightMutedText, isDarkMode && styles.darkMutedText]}>
               {visibleSavedPlans.length ? `${visibleSavedPlans.length} saved or shared for ${currentTesterName}` : 'Saved and shared plans will show here.'}
             </Text>
@@ -6463,7 +6535,7 @@ function NomNomGoApp() {
         ) : null}
       </View>
 
-      {!isPlanLocked ? (
+      {!savedPlansLandingOpen && !isPlanLocked ? (
       <>
       <View style={[styles.pairingBox, isLightMode && styles.lightPairingBox, isDarkMode && styles.darkAccentPanel]}>
           <TouchableOpacity style={styles.pairingHeader} onPress={toggleSuggestedPairingsOpen}>
