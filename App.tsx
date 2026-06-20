@@ -37,6 +37,7 @@ import {
 } from './routeHandoff';
 
 type PlanSlot = 'food' | 'activity';
+type StopTravelMode = 'car' | 'walk' | 'bike' | 'train' | 'plane';
 type PairingSuggestion = {
   label: string;
   slot: PlanSlot;
@@ -63,6 +64,11 @@ type LatLon = {
   longitude: number;
   label?: string;
   ts?: number;
+};
+
+type CityState = {
+  city: string;
+  state?: string;
 };
 
 type PlaceCard = {
@@ -92,6 +98,7 @@ type ItineraryStop = {
   key: string;
   slot: PlanSlot;
   item: PlaceCard | string;
+  travelMode?: StopTravelMode;
   featureOptions?: string[];
   selectedFeatures?: string[];
   featuresExpanded?: boolean;
@@ -288,6 +295,13 @@ const MOODS = ['Easy', 'Fun', 'Hungry', 'Tired', 'Bored', 'Date', 'Social', 'New
 const TIMES = ['Now', 'Morning', 'Lunch', 'Afternoon', 'Dinner', 'Late night'];
 const WEATHER = ['Mild', 'Nice', 'Hot', 'Cold', 'Rainy', 'Unknown'];
 const DATE_WINDOW_IDS: DateWindowId[] = ['today', 'tomorrow', 'next3', 'weekend', 'nextWeekend', 'custom'];
+const TRAVEL_MODE_OPTIONS: Array<{ id: StopTravelMode; label: string; icon: React.ComponentProps<typeof Ionicons>['name'] }> = [
+  { id: 'car', label: 'Drive', icon: 'car-outline' },
+  { id: 'walk', label: 'Walk', icon: 'walk-outline' },
+  { id: 'bike', label: 'Bike', icon: 'bicycle-outline' },
+  { id: 'train', label: 'Train', icon: 'train-outline' },
+  { id: 'plane', label: 'Plane', icon: 'airplane-outline' },
+];
 const DEFAULT_FOOD_SELECTIONS = ['Any'];
 const DEFAULT_ACTIVITY_SELECTIONS = ['Any'];
 const DEFAULT_DIETARY_SELECTIONS = ['Any'];
@@ -1045,6 +1059,29 @@ function addressCityCandidates(value: string) {
   return candidates;
 }
 
+function addressCityStateCandidates(value: string) {
+  const candidates: CityState[] = [];
+  const addCandidate = (cityValue?: string, stateValue?: string) => {
+    if (!cityValue) return;
+    const city = normalizeCityCandidate(cityValue);
+    const state = stateValue?.trim().toUpperCase();
+    if (!city) return;
+    candidates.push({ city, state: state && /^[A-Z]{2}$/.test(state) ? state : undefined });
+  };
+
+  Array.from(value.matchAll(/,\s*([^,\d]+?)\s*,?\s+([A-Z]{2})(?:\s+\d{5})?\b/g)).forEach((match) => {
+    addCandidate(match[1], match[2]);
+  });
+
+  const commaParts = value.split(',').map((part) => part.trim()).filter(Boolean);
+  if (commaParts.length >= 3) {
+    const stateMatch = commaParts[commaParts.length - 1].match(/\b([A-Z]{2})\b/);
+    addCandidate(commaParts[commaParts.length - 2], stateMatch?.[1]);
+  }
+
+  return candidates;
+}
+
 function labelCityCandidates(value: string) {
   const words = value.match(/[A-Za-z][A-Za-z.'-]*/g) || [];
   if (!words.length) return [];
@@ -1066,18 +1103,37 @@ function labelCityCandidates(value: string) {
   return candidates;
 }
 
-function cityForPlace(item: PlaceCard | string) {
+function cityStateLabel(value?: CityState) {
+  if (!value?.city) return undefined;
+  return value.state ? `${value.city}, ${value.state}` : value.city;
+}
+
+function cityStateForPlace(item: PlaceCard | string) {
   if (typeof item === 'string') {
-    return addressCityCandidates(item)[0] || labelCityCandidates(item)[0];
+    const cityState = addressCityStateCandidates(item)[0];
+    if (cityState) return cityState;
+    const city = addressCityCandidates(item)[0] || labelCityCandidates(item)[0];
+    return city ? { city } : undefined;
   }
 
+  const addressCityState = item.address ? addressCityStateCandidates(item.address)[0] : undefined;
+  if (addressCityState) return addressCityState;
+
+  const subtitleCityState = item.subtitle ? addressCityStateCandidates(item.subtitle)[0] : undefined;
+  if (subtitleCityState) return subtitleCityState;
+
   const addressCity = item.address ? addressCityCandidates(item.address)[0] : undefined;
-  if (addressCity) return addressCity;
+  if (addressCity) return { city: addressCity };
 
   const subtitleCity = item.subtitle ? addressCityCandidates(item.subtitle)[0] : undefined;
-  if (subtitleCity) return subtitleCity;
+  if (subtitleCity) return { city: subtitleCity };
 
-  return labelCityCandidates(item.title)[0];
+  const labelCity = labelCityCandidates(item.title)[0];
+  return labelCity ? { city: labelCity } : undefined;
+}
+
+function cityForPlace(item: PlaceCard | string) {
+  return cityStateForPlace(item)?.city;
 }
 
 function importedRouteCity(routeImport: GoogleMapsRouteImport) {
@@ -1569,6 +1625,14 @@ function isWalkableAfterTeslaStop(previous?: ItineraryStop, current?: ItineraryS
   return distanceMeters(previousCoords, { lat: currentCoords.latitude, lng: currentCoords.longitude }) <= WALKING_DISTANCE_METERS;
 }
 
+function travelModeIconName(mode: StopTravelMode) {
+  return TRAVEL_MODE_OPTIONS.find((option) => option.id === mode)?.icon || 'car-outline';
+}
+
+function travelModeLabel(mode: StopTravelMode) {
+  return TRAVEL_MODE_OPTIONS.find((option) => option.id === mode)?.label || 'Drive';
+}
+
 function estimateDriveMinutes(from: LatLon | undefined, to: PlaceCard | string) {
   const toCoords = stopCoords(to);
   if (!from || !toCoords) return 15;
@@ -1577,6 +1641,24 @@ function estimateDriveMinutes(from: LatLon | undefined, to: PlaceCard | string) 
   if (miles <= 5) return Math.round(miles * 3 + 5);
   if (miles <= 15) return Math.round(miles * 2 + 6);
   return Math.round(miles * 1.35 + 7);
+}
+
+function estimateTravelMinutes(from: LatLon | undefined, to: PlaceCard | string, mode: StopTravelMode) {
+  const toCoords = stopCoords(to);
+  if (!from || !toCoords) {
+    if (mode === 'walk') return 15;
+    if (mode === 'bike') return 10;
+    if (mode === 'train') return 25;
+    if (mode === 'plane') return 90;
+    return estimateDriveMinutes(from, to);
+  }
+
+  const miles = distanceMeters(from, { lat: toCoords.latitude, lng: toCoords.longitude }) / 1609.344;
+  if (mode === 'walk') return Math.max(2, Math.round(miles * 20));
+  if (mode === 'bike') return Math.max(3, Math.round(miles * 6 + 2));
+  if (mode === 'train') return Math.max(12, Math.round(miles * 2.2 + 12));
+  if (mode === 'plane') return Math.max(60, Math.round(miles * 0.9 + 75));
+  return estimateDriveMinutes(from, to);
 }
 
 function defaultStopDurationMinutes(stop: ItineraryStop) {
@@ -2216,13 +2298,26 @@ function NomNomGoApp() {
       const name = cardToName(stop.item);
       if (!name) return undefined;
       const arrival = savedArrivalClockTime(saved, stop);
-      return arrival ? `${formatClockTime(arrival)} ${name}` : name;
+      const place = cityStateLabel(cityStateForPlace(stop.item));
+      const labeledName = place ? `${name} (${place})` : name;
+      return arrival ? `${formatClockTime(arrival)} ${labeledName}` : labeledName;
     }).filter(Boolean);
     return stops.join(' - ') || 'No stops';
   };
 
   const durationForStop = (stop: ItineraryStop) =>
     (planTimes[stop.key]?.hours || 0) * 60 + (planTimes[stop.key]?.minutes || 0) || defaultStopDurationMinutes(stop);
+
+  const effectiveTravelModeForStop = (stop: ItineraryStop, index: number): StopTravelMode => {
+    if (stop.travelMode) return stop.travelMode;
+    return isWalkableAfterTeslaStop(plan.stops[index - 1], stop) ? 'walk' : 'car';
+  };
+
+  const travelOriginForStop = (index: number) =>
+    index > 0 ? stopCoords(plan.stops[index - 1].item) : routeStartLocation;
+
+  const travelMinutesForStop = (stop: ItineraryStop, index: number) =>
+    estimateTravelMinutes(travelOriginForStop(index), stop.item, effectiveTravelModeForStop(stop, index));
 
   const arrivalOverrideForStop = (stop: ItineraryStop) => {
     const override = arrivalTimes[stop.key];
@@ -2237,10 +2332,11 @@ function NomNomGoApp() {
 
     for (let index = 0; index <= targetIndex; index += 1) {
       const stop = plan.stops[index];
-      const walkableAfterTesla = isWalkableAfterTeslaStop(plan.stops[index - 1], stop);
+      const travelMode = effectiveTravelModeForStop(stop, index);
+      const walkableAfterTesla = travelMode === 'walk' && isWalkableAfterTeslaStop(plan.stops[index - 1], stop);
       const estimatedArrival = walkableAfterTesla && typeof previousArrival === 'number'
         ? previousArrival
-        : elapsed + estimateDriveMinutes(from, stop.item);
+        : elapsed + estimateTravelMinutes(from, stop.item, travelMode);
       const arrival = arrivalOverrideForStop(stop) ?? estimatedArrival;
       if (index === targetIndex) return arrival;
       elapsed = walkableAfterTesla
@@ -2260,6 +2356,15 @@ function NomNomGoApp() {
     const stay = formatStopTime(stopTimeFromMinutes(durationForStop(stop)));
     return `Est. ${arrival} - ${stay} stop`;
   };
+  const travelMetaForStop = (stop: ItineraryStop, index: number) => {
+    const mode = effectiveTravelModeForStop(stop, index);
+    return {
+      mode,
+      icon: travelModeIconName(mode),
+      label: travelModeLabel(mode),
+      duration: formatStopTime(stopTimeFromMinutes(travelMinutesForStop(stop, index))) || '0 min',
+    };
+  };
   const displayedArrivalTimeForStop = (stop: ItineraryStop, index: number) =>
     arrivalTimes[stop.key] ||
     (plan.status === 'locked' ? plan.lockedArrivalTimes?.[stop.key] : undefined) ||
@@ -2273,7 +2378,7 @@ function NomNomGoApp() {
   };
   const firstStop = plan.stops[0];
   const firstStopArrivalMinutes = firstStop ? itineraryArrivalMinutes(0) : undefined;
-  const firstStopTravelMinutes = firstStop && routeStartLocation ? estimateDriveMinutes(routeStartLocation, firstStop.item) : undefined;
+  const firstStopTravelMinutes = firstStop ? travelMinutesForStop(firstStop, 0) : undefined;
   const leaveForFirstStopText = firstStop && typeof firstStopArrivalMinutes === 'number' && typeof firstStopTravelMinutes === 'number'
     ? `Leave around ${formatClockAfterMinutes(Math.max(0, firstStopArrivalMinutes - firstStopTravelMinutes), activePlanTimelineBaseMs)} from ${startingLocationLabel}`
     : undefined;
@@ -4297,6 +4402,7 @@ function NomNomGoApp() {
     slot: stop.slot,
     itemId: cardToId(stop.item),
     name: cardToName(stop.item) || '',
+    travelMode: stop.travelMode || '',
     duration: timeSignature(duration),
     arrival: timeSignature(arrival),
     features: [...(stop.selectedFeatures || [])].sort(),
@@ -4914,6 +5020,17 @@ function NomNomGoApp() {
       }),
       savedPlanId: undefined,
     }));
+  };
+
+  const setStopTravelMode = (key: string, travelMode: StopTravelMode) => {
+    if (isPlanLocked) return;
+    setPlan((prev) => ({
+      ...prev,
+      stops: prev.stops.map((stop) => stop.key === key ? { ...stop, travelMode } : stop),
+      lockedArrivalTimes: undefined,
+      savedPlanId: undefined,
+    }));
+    addLog(`Stop travel mode set: ${travelModeLabel(travelMode)}`);
   };
 
   const openDirections = async () => {
@@ -5665,20 +5782,25 @@ function NomNomGoApp() {
             ) : null}
             <View style={styles.lockedStopList}>
               {plan.stops.map((stop, index) => {
-                const stopCity = cityForPlace(stop.item);
-                const walkableAfterTesla = isWalkableAfterTeslaStop(plan.stops[index - 1], stop);
+                const stopCityState = cityStateLabel(cityStateForPlace(stop.item));
+                const travelMeta = travelMetaForStop(stop, index);
+                const walkableAfterTesla = travelMeta.mode === 'walk' && isWalkableAfterTeslaStop(plan.stops[index - 1], stop);
                 return (
                   <TouchableOpacity key={`locked-${stop.key}`} style={styles.lockedStopRow} onPress={() => openStopMaps(stop)}>
                     <Text style={styles.lockedStopIndex}>{index + 1}</Text>
+                    <View style={styles.lockedStopTravelBlock}>
+                      <Ionicons name={travelMeta.icon} size={16} color="#178f79" />
+                      <Text style={styles.lockedStopTravelText} numberOfLines={1}>{travelMeta.duration}</Text>
+                    </View>
                     <Text style={styles.lockedStopTime}>{formatClockTime(displayedArrivalTimeForStop(stop, index))}</Text>
                     {walkableAfterTesla ? (
                       <Ionicons name="walk-outline" size={14} color="#178f79" />
                     ) : null}
                     <View style={styles.lockedStopTextBlock}>
                       <Text style={styles.lockedStopName} numberOfLines={1}>{cardToName(stop.item) || 'Stop'}</Text>
-                      {stopCity ? (
+                      {stopCityState ? (
                         <View style={styles.lockedStopCityPill}>
-                          <Text style={styles.lockedStopCityText} numberOfLines={1}>{stopCity}</Text>
+                          <Text style={styles.lockedStopCityText} numberOfLines={1}>{stopCityState}</Text>
                         </View>
                       ) : null}
                     </View>
@@ -5712,7 +5834,11 @@ function NomNomGoApp() {
                 title={isImportedGoogleMapsDraft ? 'Stop' : stop.slot === 'food' ? 'Food' : 'Activity'}
                 value={cardToName(stop.item) || (stop.slot === 'food' ? 'Food stop' : 'Activity stop')}
                 detail={stepDetail(stop, index)}
-                walkable={isWalkableAfterTeslaStop(plan.stops[index - 1], stop)}
+                cityState={cityStateLabel(cityStateForPlace(stop.item))}
+                travelMeta={travelMetaForStop(stop, index)}
+                walkable={travelMetaForStop(stop, index).mode === 'walk' && isWalkableAfterTeslaStop(plan.stops[index - 1], stop)}
+                travelModeOptions={TRAVEL_MODE_OPTIONS}
+                onTravelModePress={(travelMode) => setStopTravelMode(stop.key, travelMode)}
                 featureOptions={stop.featureOptions || []}
                 selectedFeatures={stop.selectedFeatures || []}
                 featuresExpanded={Boolean(stop.featuresExpanded)}
@@ -6350,6 +6476,10 @@ function NomNomGoApp() {
                 {plan.stops.map((stop, index) => (
                   <View key={`preview-${stop.key}`} style={styles.planPreviewStopRow}>
                     <Text style={styles.planPreviewStopIndex}>{index + 1}</Text>
+                    <View style={styles.planPreviewTravelBlock}>
+                      <Ionicons name={travelMetaForStop(stop, index).icon} size={15} color="#178f79" />
+                      <Text style={styles.planPreviewTravelText} numberOfLines={1}>{travelMetaForStop(stop, index).duration}</Text>
+                    </View>
                     <Text style={styles.planPreviewStopTime}>{formatClockTime(displayedArrivalTimeForStop(stop, index))}</Text>
                     <Text style={styles.planPreviewStopName} numberOfLines={1}>{cardToName(stop.item) || 'Stop'}</Text>
                   </View>
@@ -6392,6 +6522,10 @@ function NomNomGoApp() {
                 {plan.stops.map((stop, index) => (
                   <View key={`share-locked-${stop.key}`} style={styles.shareLockedStopRow}>
                     <Text style={styles.shareLockedStopIndex}>{index + 1}</Text>
+                    <View style={styles.shareLockedTravelBlock}>
+                      <Ionicons name={travelMetaForStop(stop, index).icon} size={15} color="#178f79" />
+                      <Text style={styles.shareLockedTravelText} numberOfLines={1}>{travelMetaForStop(stop, index).duration}</Text>
+                    </View>
                     <Text style={styles.shareLockedStopTime}>{formatClockTime(displayedArrivalTimeForStop(stop, index))}</Text>
                     <Text style={styles.shareLockedStopName} numberOfLines={1}>{cardToName(stop.item) || 'Stop'}</Text>
                   </View>
@@ -6662,7 +6796,11 @@ function PlanStep({
   title,
   value,
   detail,
+  cityState,
+  travelMeta,
   walkable,
+  travelModeOptions,
+  onTravelModePress,
   featureOptions,
   selectedFeatures,
   featuresExpanded,
@@ -6688,7 +6826,11 @@ function PlanStep({
   title: string;
   value: string;
   detail: string;
+  cityState?: string;
+  travelMeta?: { mode: StopTravelMode; icon: React.ComponentProps<typeof Ionicons>['name']; label: string; duration: string };
   walkable?: boolean;
+  travelModeOptions?: Array<{ id: StopTravelMode; label: string; icon: React.ComponentProps<typeof Ionicons>['name'] }>;
+  onTravelModePress?: (mode: StopTravelMode) => void;
   featureOptions?: string[];
   selectedFeatures?: string[];
   featuresExpanded?: boolean;
@@ -6720,14 +6862,49 @@ function PlanStep({
         {!last ? <View style={styles.stepLine} /> : null}
       </View>
       <TouchableOpacity style={[styles.stepCard, isDarkMode && styles.darkCard, active && styles.stepCardActive]} onPress={onPress}>
-        <Text style={styles.stepTitle}>{title}</Text>
-        <Text style={[styles.stepValue, isDarkMode && !active && styles.darkText, active && styles.stepValueActive]}>{value}</Text>
+        <View style={styles.stepTopLine}>
+          <View style={styles.stepTextBlock}>
+            <Text style={styles.stepTitle}>{title}</Text>
+            <Text style={[styles.stepValue, isDarkMode && !active && styles.darkText, active && styles.stepValueActive]}>{value}</Text>
+            {cityState ? (
+              <Text style={[styles.stepCityState, isDarkMode && !active && styles.darkMutedText]} numberOfLines={1}>{cityState}</Text>
+            ) : null}
+          </View>
+          {travelMeta ? (
+            <View style={styles.stepTravelBadge}>
+              <Ionicons name={travelMeta.icon} size={18} color="#178f79" />
+              <Text style={styles.stepTravelDuration} numberOfLines={1}>{travelMeta.duration}</Text>
+            </View>
+          ) : null}
+        </View>
         <View style={styles.stepDetailRow}>
           {walkable ? (
             <Ionicons name="walk-outline" size={13} color={isDarkMode && !active ? '#fffaf3' : '#178f79'} />
           ) : null}
           <Text style={[styles.stepDetail, isDarkMode && !active && styles.darkMutedText, active && styles.stepDetailActive]}>{detail}</Text>
         </View>
+        {travelModeOptions && onTravelModePress && travelMeta ? (
+          <View style={styles.travelModeRow}>
+            {travelModeOptions.map((option) => {
+              const selected = option.id === travelMeta.mode;
+              return (
+                <TouchableOpacity
+                  key={option.id}
+                  style={[styles.travelModeButton, selected && styles.travelModeButtonSelected]}
+                  onPress={(event: GestureResponderEvent) => {
+                    event.stopPropagation();
+                    onTravelModePress(option.id);
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Use ${option.label.toLowerCase()} to this stop`}
+                >
+                  <Ionicons name={option.icon} size={15} color={selected ? '#fffaf3' : '#178f79'} />
+                  <Text style={[styles.travelModeButtonText, selected && styles.travelModeButtonTextSelected]}>{option.label}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        ) : null}
         {featureOptions && featureOptions.length > 1 && onToggleFeaturesOpen ? (
           <View style={styles.stepFeatureBox}>
             <TouchableOpacity
@@ -7890,6 +8067,19 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '900',
   },
+  lockedStopTravelBlock: {
+    width: 42,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 1,
+  },
+  lockedStopTravelText: {
+    color: '#526170',
+    fontSize: 9,
+    lineHeight: 11,
+    fontWeight: '900',
+    textAlign: 'center',
+  },
   lockedStopTextBlock: {
     flex: 1,
     minWidth: 0,
@@ -7970,6 +8160,15 @@ const styles = StyleSheet.create({
     borderColor: '#66c5a8',
     backgroundColor: '#eefaf5',
   },
+  stepTopLine: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+  },
+  stepTextBlock: {
+    flex: 1,
+    minWidth: 0,
+  },
   stepTitle: {
     color: '#f23b35',
     fontSize: 12,
@@ -7985,6 +8184,32 @@ const styles = StyleSheet.create({
   stepValueActive: {
     color: '#071827',
   },
+  stepCityState: {
+    color: '#526170',
+    fontSize: 11,
+    lineHeight: 14,
+    fontWeight: '800',
+    marginTop: 2,
+  },
+  stepTravelBadge: {
+    minWidth: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#c9eadf',
+    backgroundColor: '#f8fffc',
+    paddingHorizontal: 6,
+    paddingVertical: 5,
+    gap: 2,
+  },
+  stepTravelDuration: {
+    color: '#178f79',
+    fontSize: 10,
+    lineHeight: 12,
+    fontWeight: '900',
+    textAlign: 'center',
+  },
   stepDetail: {
     color: '#526170',
     fontSize: 12,
@@ -7998,6 +8223,37 @@ const styles = StyleSheet.create({
   },
   stepDetailActive: {
     color: '#526170',
+  },
+  travelModeRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 8,
+  },
+  travelModeButton: {
+    minHeight: 30,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#c9eadf',
+    backgroundColor: '#f8fffc',
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  travelModeButtonSelected: {
+    backgroundColor: '#178f79',
+    borderColor: '#178f79',
+  },
+  travelModeButtonText: {
+    color: '#178f79',
+    fontSize: 11,
+    lineHeight: 13,
+    fontWeight: '900',
+  },
+  travelModeButtonTextSelected: {
+    color: '#fffaf3',
   },
   stepFeatureSummary: {
     color: '#178f79',
@@ -8694,6 +8950,19 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '900',
   },
+  planPreviewTravelBlock: {
+    width: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 1,
+  },
+  planPreviewTravelText: {
+    color: '#526170',
+    fontSize: 9,
+    lineHeight: 11,
+    fontWeight: '900',
+    textAlign: 'center',
+  },
   planPreviewStopName: {
     flex: 1,
     color: '#071827',
@@ -8909,6 +9178,19 @@ const styles = StyleSheet.create({
     color: '#178f79',
     fontSize: 12,
     fontWeight: '900',
+  },
+  shareLockedTravelBlock: {
+    width: 42,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 1,
+  },
+  shareLockedTravelText: {
+    color: '#526170',
+    fontSize: 9,
+    lineHeight: 11,
+    fontWeight: '900',
+    textAlign: 'center',
   },
   shareLockedStopName: {
     flex: 1,
