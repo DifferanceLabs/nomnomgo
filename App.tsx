@@ -2943,6 +2943,53 @@ function NomNomGoApp() {
     return features;
   };
 
+  const resolveLocationWithGooglePlaces = async (query: string, label: string) => {
+    if (!GOOGLE_API_KEY) return undefined;
+
+    try {
+      addLog(`Google Places location fallback: ${query}`);
+      await recordPlacesUsage('text');
+      const response = await withTimeout(
+        fetch('https://places.googleapis.com/v1/places:searchText', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Goog-Api-Key': GOOGLE_API_KEY,
+            'X-Goog-FieldMask': FIELD_MASK,
+          },
+          body: JSON.stringify({
+            textQuery: query,
+            maxResultCount: 1,
+          }),
+        }),
+        12000,
+        `Google Places location ${query}`,
+      );
+
+      const text = await response.text();
+      addLog(`Google Places location status: ${response.status}`);
+      if (!response.ok) {
+        addLog(`Google Places location failed: ${response.status} ${text.slice(0, 140)}`);
+        return undefined;
+      }
+
+      const json = JSON.parse(text);
+      const place = Array.isArray(json?.places) ? json.places[0] : undefined;
+      const latitude = place?.location?.latitude;
+      const longitude = place?.location?.longitude;
+      if (typeof latitude !== 'number' || typeof longitude !== 'number') return undefined;
+
+      return {
+        latitude,
+        longitude,
+        label,
+      };
+    } catch (err) {
+      addLog(`Google Places location fallback failed: ${compactError(err)}`);
+      return undefined;
+    }
+  };
+
   const resolveLocationInput = async (value: string) => {
     const localPreset = LOCAL_TEST_LOCATIONS[normalizePlaceName(value)];
     if (localPreset) return { ...localPreset };
@@ -2952,15 +2999,23 @@ function NomNomGoApp() {
     if (next) return next;
 
     const query = isZip ? `${value}, USA` : value;
-    const results = await withTimeout(Location.geocodeAsync(query), 12000, `Location ${value}`);
-    const match = results[0];
-    if (!match) return undefined;
+    try {
+      const results = await withTimeout(Location.geocodeAsync(query), 12000, `Location ${value}`);
+      const match = results[0];
+      if (match) {
+        next = {
+          latitude: match.latitude,
+          longitude: match.longitude,
+          label: value,
+        };
+      }
+    } catch (err) {
+      addLog(`Location geocode failed, trying Places fallback: ${compactError(err)}`);
+    }
 
-    next = {
-      latitude: match.latitude,
-      longitude: match.longitude,
-      label: value,
-    };
+    next = next || await resolveLocationWithGooglePlaces(query, value);
+    if (!next) return undefined;
+
     if (isZip) await writeCachedZip(value, next);
     return next;
   };
@@ -3048,10 +3103,17 @@ function NomNomGoApp() {
 
   const getSearchLocation = async () => {
     if (activePlanningSession?.searchLocation) return activePlanningSession.searchLocation;
-    if (searchLocation) return searchLocation;
 
     const searchOverride = searchLocationOverride.trim();
     const originOverride = routeOriginOverride.trim();
+    const cachedSearchLabel = searchLocation?.label?.trim().toLowerCase();
+    if (searchOverride && searchLocation && cachedSearchLabel === searchOverride.toLowerCase()) return searchLocation;
+
+    if (!searchOverride && searchLocation) return searchLocation;
+
+    const cachedOriginLabel = location?.label?.trim().toLowerCase();
+    if (!searchOverride && originOverride && location && cachedOriginLabel === originOverride.toLowerCase()) return location;
+
     const locationQuery = searchOverride || originOverride;
     if (locationQuery) {
       const resolved = await resolveLocationInput(locationQuery);
@@ -3843,6 +3905,25 @@ function NomNomGoApp() {
     }, 25);
   };
 
+  const beginSettingsLocationSearch = () => {
+    setResultFilter('all');
+    setHasInitiatedSearch(true);
+    setCards([]);
+    setVisibleCount(PAGE_SIZE);
+    setSearchNotice('');
+    setLoading(true);
+    scrollToResults();
+  };
+
+  const searchAfterSettingsLocationChange = (centerOverride?: LatLon) => {
+    if (!hasInitiatedSearch) {
+      void searchForSlot(resultMode, true, false, centerOverride);
+      return;
+    }
+
+    refreshAfterSearchContextChange(centerOverride);
+  };
+
   const rememberFavoriteCardsFromResults = async (slot: PlanSlot, nextCards: PlaceCard[]) => {
     const missingFavorites = nextCards.filter((card) =>
       memory.favorites.includes(card.id) && !memory.favoriteCards?.[card.id],
@@ -3959,9 +4040,11 @@ function NomNomGoApp() {
     }
 
     addLog(`Location override tapped: ${value}`);
+    beginSettingsLocationSearch();
     try {
       const next = await resolveLocationInput(value);
       if (!next) {
+        setLoading(false);
         Alert.alert('Location not found', `Could not find a location for ${value}.`);
         addLog(`Location geocode returned no results: ${value}`);
         return;
@@ -3977,9 +4060,11 @@ function NomNomGoApp() {
       addLog(`Location override saved: ${value} ${next.latitude.toFixed(4)}, ${next.longitude.toFixed(4)}`);
       setLocationOverrideOpen(false);
       setPreferencesOpen(false);
-      refreshAfterSearchContextChange(activePlanningSession?.searchLocation || searchLocation || next);
+      const refreshCenter = activePlanningSession?.searchLocation || searchLocation || (searchLocationOverride.trim() ? undefined : next);
+      searchAfterSettingsLocationChange(refreshCenter);
       addLog('Starting location saved; refreshing active results');
     } catch (err) {
+      setLoading(false);
       addLog(`Location override failed: ${compactError(err)}`);
       Alert.alert('Location search failed', compactError(err));
     }
@@ -4006,9 +4091,11 @@ function NomNomGoApp() {
     }
 
     addLog(`Search location tapped: ${value}`);
+    beginSettingsLocationSearch();
     try {
       const next = await resolveLocationInput(value);
       if (!next) {
+        setLoading(false);
         Alert.alert('Location not found', `Could not find a location for ${value}.`);
         addLog(`Search location geocode returned no results: ${value}`);
         return;
@@ -4025,9 +4112,10 @@ function NomNomGoApp() {
       addLog(`Search location saved: ${value} ${next.latitude.toFixed(4)}, ${next.longitude.toFixed(4)}`);
       setSearchLocationOverrideOpen(false);
       setPreferencesOpen(false);
-      refreshAfterSearchContextChange(next);
+      searchAfterSettingsLocationChange(next);
       addLog('Search location saved; refreshing active results');
     } catch (err) {
+      setLoading(false);
       addLog(`Search location failed: ${compactError(err)}`);
       Alert.alert('Search location failed', compactError(err));
     }
@@ -6357,7 +6445,7 @@ function NomNomGoApp() {
               <Text style={[styles.routeOriginHint, isDarkMode && styles.darkMutedText]}>
                 Use a ZIP, address, or place to route from somewhere else.
               </Text>
-              <View style={styles.inputRow}>
+              <View style={styles.settingsLocationInputGroup}>
                 <TextInput
                   style={styles.input}
                   value={routeOriginOverride}
@@ -6367,10 +6455,12 @@ function NomNomGoApp() {
                   returnKeyType="search"
                   onSubmitEditing={searchFromLocationOverride}
                 />
-                {routeOriginOverride.trim() || location ? (
-                  <Button label="Clear" onPress={clearLocationOverride} compact />
-                ) : null}
-                <Button label="Use" onPress={searchFromLocationOverride} compact />
+                <View style={styles.settingsLocationActionRow}>
+                  {routeOriginOverride.trim() || location ? (
+                    <Button label="Clear" onPress={clearLocationOverride} compact />
+                  ) : null}
+                  <Button label="Use" onPress={searchFromLocationOverride} compact />
+                </View>
               </View>
             </>
           ) : null}
@@ -6387,7 +6477,7 @@ function NomNomGoApp() {
               <Text style={[styles.routeOriginHint, isDarkMode && styles.darkMutedText]}>
                 Use this when you want to find places somewhere different from where the plan starts.
               </Text>
-              <View style={styles.inputRow}>
+              <View style={styles.settingsLocationInputGroup}>
                 <TextInput
                   style={styles.input}
                   value={searchLocationOverride}
@@ -6397,10 +6487,12 @@ function NomNomGoApp() {
                   returnKeyType="search"
                   onSubmitEditing={searchFromSearchLocationOverride}
                 />
-                {searchLocationOverride.trim() || searchLocation ? (
-                  <Button label="Clear" onPress={clearSearchLocationOverride} compact />
-                ) : null}
-                <Button label="Use" onPress={searchFromSearchLocationOverride} compact />
+                <View style={styles.settingsLocationActionRow}>
+                  {searchLocationOverride.trim() || searchLocation ? (
+                    <Button label="Clear" onPress={clearSearchLocationOverride} compact />
+                  ) : null}
+                  <Button label="Use" onPress={searchFromSearchLocationOverride} compact />
+                </View>
               </View>
             </>
           ) : null}
@@ -9109,8 +9201,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: 6,
   },
+  settingsLocationInputGroup: {
+    gap: 8,
+    marginTop: 6,
+  },
+  settingsLocationActionRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    alignItems: 'center',
+  },
   input: {
     flex: 1,
+    minWidth: 0,
     minHeight: 44,
     borderRadius: 8,
     borderWidth: 1,
