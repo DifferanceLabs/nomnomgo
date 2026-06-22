@@ -2211,6 +2211,7 @@ function NomNomGoApp() {
   const [savedPlansLandingOpen, setSavedPlansLandingOpen] = useState(false);
   const [planSetupOpen, setPlanSetupOpen] = useState(false);
   const [planSetupTiming, setPlanSetupTiming] = useState<'now' | 'later'>('now');
+  const [planSetupIntent, setPlanSetupIntent] = useState<PlanningIntent>('both');
   const [planSetupName, setPlanSetupName] = useState('');
   const [planSetupDateWindow, setPlanSetupDateWindow] = useState<DateWindowId>('today');
   const [planSetupCustomDateStartInput, setPlanSetupCustomDateStartInput] = useState(formatDateInput(new Date()));
@@ -2584,6 +2585,7 @@ function NomNomGoApp() {
     const defaultCustomStart = formatDateInput(new Date());
     const defaultCustomEnd = formatDateInput(addLocalDays(new Date(), 6));
     setPlanSetupTiming(timing);
+    setPlanSetupIntent('both');
     setPlanSetupName('');
     setPlanSetupDateWindow(nextDateWindow);
     setPlanSetupCustomDateStartInput(defaultCustomStart);
@@ -2605,10 +2607,14 @@ function NomNomGoApp() {
     const nextName = planSetupName.trim();
     const whereInput = planSetupWhere.trim();
     const startingInput = planSetupStartingLocation.trim();
-    const nextTimeWindow = planSetupTime === 'Now' ? undefined : defaultTimeWindowForPreference(planSetupTime);
+    const isNowSetup = planSetupTiming === 'now';
+    const effectiveDateWindow: DateWindowId = isNowSetup ? 'today' : planSetupDateWindow;
+    const effectiveTime = isNowSetup ? 'Now' : planSetupTime;
+    const initialSearchSlot: PlanSlot = isNowSetup && planSetupIntent === 'activity' ? 'activity' : 'food';
+    const nextTimeWindow = effectiveTime === 'Now' ? undefined : defaultTimeWindowForPreference(effectiveTime);
     let nextCustomDateRange: CustomDateRange | null = null;
 
-    if (planSetupDateWindow === 'custom') {
+    if (!isNowSetup && effectiveDateWindow === 'custom') {
       const start = parseDateInput(planSetupCustomDateStartInput);
       const end = parseDateInput(planSetupCustomDateEndInput);
       if (!start || !end) {
@@ -2625,7 +2631,7 @@ function NomNomGoApp() {
       };
     }
 
-    const nextDateRange = dateRangeKeysForWindow(planSetupDateWindow, nextCustomDateRange);
+    const nextDateRange = dateRangeKeysForWindow(effectiveDateWindow, nextCustomDateRange, new Date());
     setPlanSetupSubmitting(true);
 
     try {
@@ -2650,21 +2656,21 @@ function NomNomGoApp() {
       await AsyncStorage.removeItem(STORAGE_SEARCH_LOCATION);
 
       if (activePlanningSession) await saveActivePlanningSession(null);
-      selectedDateWindowRef.current = planSetupDateWindow;
+      selectedDateWindowRef.current = effectiveDateWindow;
       customDateRangeRef.current = nextCustomDateRange;
-      setSelectedDateWindow(planSetupDateWindow);
+      setSelectedDateWindow(effectiveDateWindow);
       setCustomDateRange(nextCustomDateRange);
       if (nextCustomDateRange) {
         setCustomDateStartInput(nextCustomDateRange.start);
         setCustomDateEndInput(nextCustomDateRange.end);
       }
-      setSelectedTime(planSetupTime);
-      setResultMode('food');
+      setSelectedTime(effectiveTime);
+      setResultMode(initialSearchSlot);
       setPlan({
         ...EMPTY_PLAN,
         title: nextName || undefined,
         status: 'draft',
-        dateWindow: planSetupDateWindow,
+        dateWindow: effectiveDateWindow,
         customDateRange: nextCustomDateRange,
         planDateStart: nextDateRange.start,
         planDateEnd: nextDateRange.end,
@@ -5844,71 +5850,134 @@ function NomNomGoApp() {
                 <Button label="Back" onPress={() => setPlanSetupOpen(false)} compact />
               </View>
 
-              <View style={styles.setupField}>
-                <Text style={[styles.setupLabel, isDarkMode && styles.darkMutedText]}>Name</Text>
-                <TextInput
-                  style={[styles.input, isDarkMode && styles.darkPanelInput, Platform.OS === 'web' && styles.webInput]}
-                  value={planSetupName}
-                  onChangeText={setPlanSetupName}
-                  placeholder="Plan name"
-                  placeholderTextColor={isLightMode ? '#64748b' : '#94a3b8'}
-                  returnKeyType="next"
-                />
-              </View>
-
-              <View style={styles.setupField}>
-                <Text style={[styles.setupLabel, isDarkMode && styles.darkMutedText]}>When</Text>
-                <View style={styles.dateChipWrap}>
-                  {setupDateWindowOptions.map((option) => {
-                    const active = planSetupDateWindow === option.id;
-                    return (
-                      <TouchableOpacity
-                        key={`setup-date-${option.id}`}
-                        style={[styles.dateChip, active && styles.dateChipActive]}
-                        onPress={() => setPlanSetupDateWindow(option.id)}
-                      >
-                        <Text style={[styles.dateChipText, active && styles.dateChipTextActive]}>{option.label}</Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
-                {planSetupDateWindow === 'custom' ? (
-                  <View style={styles.customDateBox}>
-                    <View style={styles.customDateInputs}>
-                      <TextInput
-                        style={[styles.input, styles.customDateInput]}
-                        value={planSetupCustomDateStartInput}
-                        onChangeText={setPlanSetupCustomDateStartInput}
-                        placeholder="Start YYYY-MM-DD"
-                        placeholderTextColor="#64748b"
-                        keyboardType="numbers-and-punctuation"
-                      />
-                      <TextInput
-                        style={[styles.input, styles.customDateInput]}
-                        value={planSetupCustomDateEndInput}
-                        onChangeText={setPlanSetupCustomDateEndInput}
-                        placeholder="End YYYY-MM-DD"
-                        placeholderTextColor="#64748b"
-                        keyboardType="numbers-and-punctuation"
-                      />
+              {planSetupTiming === 'now' ? (
+                <View style={styles.setupPreferenceBlock}>
+                  <View style={styles.setupField}>
+                    <Text style={[styles.setupLabel, isDarkMode && styles.darkMutedText]}>Looking for</Text>
+                    <View style={[styles.filterTabs, styles.setupIntentTabs]}>
+                      {(['food', 'activity', 'both'] as PlanningIntent[]).map((intent) => (
+                        <FilterTab
+                          key={`setup-intent-${intent}`}
+                          label={planningIntentLabel(intent)}
+                          active={planSetupIntent === intent}
+                          onPress={() => {
+                            setPlanSetupIntent(intent);
+                            setResultMode(intent === 'activity' ? 'activity' : 'food');
+                            addLog(`Now setup intent selected: ${planningIntentLabel(intent)}`);
+                          }}
+                        />
+                      ))}
                     </View>
                   </View>
-                ) : null}
-                <View style={styles.chipWrap}>
-                  {TIMES.map((time) => {
-                    const active = planSetupTime === time;
-                    return (
-                      <TouchableOpacity
-                        key={`setup-time-${time}`}
-                        style={[styles.chip, isDarkMode && styles.darkChip, active && styles.chipActive]}
-                        onPress={() => setPlanSetupTime(time)}
-                      >
-                        <Text style={[styles.chipText, isDarkMode && styles.darkMutedText, active && styles.chipTextActive]}>{time}</Text>
-                      </TouchableOpacity>
-                    );
-                  })}
+                  {planningIntentIncludesSlot(planSetupIntent, 'food') ? (
+                    <>
+                      <PreferenceGroup
+                        label="Food filters"
+                        items={FOOD_QUICK_FILTERS}
+                        selected={selectedFoods}
+                        onPress={(value) => toggleMulti(value, selectedFoods, setSelectedFoods, 'Food')}
+                      />
+                      <PreferenceGroup
+                        label="Cuisine"
+                        items={CUISINES}
+                        selected={selectedFoods}
+                        previewCount={8}
+                        expanded={Boolean(expandedPreferenceGroups.setupCuisine)}
+                        onToggleExpanded={() => togglePreferenceGroupExpanded('setupCuisine')}
+                        onPress={(value) => toggleMulti(value, selectedFoods, setSelectedFoods, 'Food')}
+                      />
+                      <PreferenceGroup
+                        label="Dietary needs"
+                        items={DIETARY_PREFERENCES}
+                        selected={selectedDietary}
+                        previewCount={4}
+                        expanded={Boolean(expandedPreferenceGroups.setupDietary)}
+                        onToggleExpanded={() => togglePreferenceGroupExpanded('setupDietary')}
+                        onPress={(value) => toggleMulti(value, selectedDietary, setSelectedDietary, 'Dietary')}
+                      />
+                    </>
+                  ) : null}
+                  {planningIntentIncludesSlot(planSetupIntent, 'activity') ? (
+                    <PreferenceGroup
+                      label="Activity type"
+                      items={ACTIVITIES}
+                      selected={selectedActivities}
+                      previewCount={8}
+                      expanded={Boolean(expandedPreferenceGroups.setupActivity)}
+                      onToggleExpanded={() => togglePreferenceGroupExpanded('setupActivity')}
+                      onPress={(value) => toggleMulti(value, selectedActivities, setSelectedActivities, 'Activity')}
+                    />
+                  ) : null}
                 </View>
-              </View>
+              ) : (
+                <>
+                  <View style={styles.setupField}>
+                    <Text style={[styles.setupLabel, isDarkMode && styles.darkMutedText]}>Name</Text>
+                    <TextInput
+                      style={[styles.input, isDarkMode && styles.darkPanelInput, Platform.OS === 'web' && styles.webInput]}
+                      value={planSetupName}
+                      onChangeText={setPlanSetupName}
+                      placeholder="Plan name"
+                      placeholderTextColor={isLightMode ? '#64748b' : '#94a3b8'}
+                      returnKeyType="next"
+                    />
+                  </View>
+
+                  <View style={styles.setupField}>
+                    <Text style={[styles.setupLabel, isDarkMode && styles.darkMutedText]}>When</Text>
+                    <View style={styles.dateChipWrap}>
+                      {setupDateWindowOptions.map((option) => {
+                        const active = planSetupDateWindow === option.id;
+                        return (
+                          <TouchableOpacity
+                            key={`setup-date-${option.id}`}
+                            style={[styles.dateChip, active && styles.dateChipActive]}
+                            onPress={() => setPlanSetupDateWindow(option.id)}
+                          >
+                            <Text style={[styles.dateChipText, active && styles.dateChipTextActive]}>{option.label}</Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+                    {planSetupDateWindow === 'custom' ? (
+                      <View style={styles.customDateBox}>
+                        <View style={styles.customDateInputs}>
+                          <TextInput
+                            style={[styles.input, styles.customDateInput]}
+                            value={planSetupCustomDateStartInput}
+                            onChangeText={setPlanSetupCustomDateStartInput}
+                            placeholder="Start YYYY-MM-DD"
+                            placeholderTextColor="#64748b"
+                            keyboardType="numbers-and-punctuation"
+                          />
+                          <TextInput
+                            style={[styles.input, styles.customDateInput]}
+                            value={planSetupCustomDateEndInput}
+                            onChangeText={setPlanSetupCustomDateEndInput}
+                            placeholder="End YYYY-MM-DD"
+                            placeholderTextColor="#64748b"
+                            keyboardType="numbers-and-punctuation"
+                          />
+                        </View>
+                      </View>
+                    ) : null}
+                    <View style={styles.chipWrap}>
+                      {TIMES.map((time) => {
+                        const active = planSetupTime === time;
+                        return (
+                          <TouchableOpacity
+                            key={`setup-time-${time}`}
+                            style={[styles.chip, isDarkMode && styles.darkChip, active && styles.chipActive]}
+                            onPress={() => setPlanSetupTime(time)}
+                          >
+                            <Text style={[styles.chipText, isDarkMode && styles.darkMutedText, active && styles.chipTextActive]}>{time}</Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+                  </View>
+                </>
+              )}
 
               <View style={styles.setupField}>
                 <Text style={[styles.setupLabel, isDarkMode && styles.darkMutedText]}>Where</Text>
@@ -6631,7 +6700,7 @@ function NomNomGoApp() {
         style={[styles.savedPlansBox, isLightMode && styles.lightPanel, isDarkMode && styles.darkPanel]}
         onLayout={(event) => { savedPlansYRef.current = event.nativeEvent.layout.y; }}
       >
-        <TouchableOpacity style={styles.savedPlansHeader} onPress={() => setSavedPlansOpen((prev) => !prev)}>
+        <TouchableOpacity style={styles.savedPlansHeader} onPress={savedPlansLandingOpen ? openHome : () => setSavedPlansOpen((prev) => !prev)}>
           <View style={styles.sectionHeaderTextBlock}>
             <Text style={[styles.sectionTitle, isLightMode && styles.lightSectionTitle, isDarkMode && styles.darkText]}>
               {savedPlansLandingOpen ? 'Saved/Shared Plans' : 'Saved Plans'}
@@ -6640,7 +6709,7 @@ function NomNomGoApp() {
               {visibleSavedPlans.length ? `${visibleSavedPlans.length} saved or shared for ${currentTesterName}` : 'Saved and shared plans will show here.'}
             </Text>
           </View>
-          <HeaderAction label={savedPlansOpen ? 'Hide' : 'Show'} />
+          <HeaderAction label={savedPlansLandingOpen ? 'Back' : savedPlansOpen ? 'Hide' : 'Show'} />
         </TouchableOpacity>
         {savedPlansOpen ? (
           <View style={styles.savedPlansList}>
@@ -7821,10 +7890,10 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   homeNowButton: {
-    backgroundColor: '#071827',
+    backgroundColor: '#178f79',
   },
   homeLaterButton: {
-    backgroundColor: '#178f79',
+    backgroundColor: '#071827',
   },
   homeSavedButton: {
     backgroundColor: '#f23b35',
@@ -7844,6 +7913,13 @@ const styles = StyleSheet.create({
   },
   setupField: {
     gap: 8,
+  },
+  setupPreferenceBlock: {
+    gap: 14,
+  },
+  setupIntentTabs: {
+    flexWrap: 'wrap',
+    marginBottom: 0,
   },
   setupLabel: {
     color: '#526170',
