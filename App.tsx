@@ -7080,7 +7080,6 @@ function NomNomGoApp() {
                 cityState={cityStateLabel(cityStateForPlace(stop.item))}
                 travelMeta={travelMetaForStop(stop, index)}
                 walkable={travelMetaForStop(stop, index).mode === 'walk' && isWalkableAfterTeslaStop(plan.stops[index - 1], stop)}
-                travelModeOptions={TRAVEL_MODE_OPTIONS}
                 onTravelModePress={(travelMode) => setStopTravelMode(stop.key, travelMode)}
                 featureOptions={stop.featureOptions || []}
                 selectedFeatures={stop.selectedFeatures || []}
@@ -8160,7 +8159,6 @@ function PlanStep({
   cityState,
   travelMeta,
   walkable,
-  travelModeOptions,
   onTravelModePress,
   featureOptions,
   selectedFeatures,
@@ -8192,7 +8190,6 @@ function PlanStep({
   cityState?: string;
   travelMeta?: { mode: StopTravelMode; icon: React.ComponentProps<typeof Ionicons>['name']; label: string; duration: string };
   walkable?: boolean;
-  travelModeOptions?: Array<{ id: StopTravelMode; label: string; icon: React.ComponentProps<typeof Ionicons>['name'] }>;
   onTravelModePress?: (mode: StopTravelMode) => void;
   featureOptions?: string[];
   selectedFeatures?: string[];
@@ -8218,13 +8215,7 @@ function PlanStep({
   onRemovePress?: () => void;
 }) {
   const isDarkMode = useColorScheme() === 'dark';
-  const [travelModesExpanded, setTravelModesExpanded] = useState(false);
-  const visibleTravelModeOptions = travelModeOptions?.filter((option) =>
-    option.id === 'car' || option.id === 'walk' || travelModesExpanded || option.id === travelMeta?.mode,
-  );
-  const hiddenTravelModeCount = travelModeOptions?.filter((option) =>
-    option.id !== 'car' && option.id !== 'walk' && option.id !== travelMeta?.mode,
-  ).length || 0;
+  const nextTravelMode = travelMeta?.mode === 'walk' ? 'car' : 'walk';
   const renderStepAction = (label?: string, onStepAction?: () => void, highlighted = false) => {
     if (!label || !onStepAction) return null;
     return (
@@ -8260,10 +8251,22 @@ function PlanStep({
             ) : null}
           </View>
           {travelMeta ? (
-            <View style={styles.stepTravelBadge}>
+            <TouchableOpacity
+              style={styles.stepTravelBadge}
+              onPress={(event: GestureResponderEvent) => {
+                event.stopPropagation();
+                Keyboard.dismiss();
+                onTravelModePress?.(nextTravelMode);
+              }}
+              disabled={!onTravelModePress}
+              accessibilityRole={onTravelModePress ? 'button' : undefined}
+              accessibilityLabel={onTravelModePress
+                ? `${travelMeta.label}, ${travelMeta.duration}. Switch to ${travelModeLabel(nextTravelMode)}.`
+                : `${travelMeta.label}, ${travelMeta.duration}`}
+            >
               <Ionicons name={travelMeta.icon} size={18} color="#178f79" />
               <Text style={styles.stepTravelDuration} numberOfLines={1}>{travelMeta.duration}</Text>
-            </View>
+            </TouchableOpacity>
           ) : null}
         </View>
         <View style={styles.stepDetailRow}>
@@ -8272,40 +8275,6 @@ function PlanStep({
           ) : null}
           <Text style={[styles.stepDetail, isDarkMode && !active && styles.darkMutedText, active && styles.stepDetailActive]}>{detail}</Text>
         </View>
-        {travelModeOptions && onTravelModePress && travelMeta ? (
-          <View style={styles.travelModeRow}>
-            {visibleTravelModeOptions?.map((option) => {
-              const selected = option.id === travelMeta.mode;
-              return (
-                <TouchableOpacity
-                  key={option.id}
-                  style={[styles.travelModeButton, selected && styles.travelModeButtonSelected]}
-                  onPress={(event: GestureResponderEvent) => {
-                    event.stopPropagation();
-                    onTravelModePress(option.id);
-                  }}
-                  accessibilityRole="button"
-                  accessibilityLabel={`Use ${option.label.toLowerCase()} to this stop`}
-                >
-                  <Ionicons name={option.icon} size={15} color={selected ? '#fffaf3' : '#178f79'} />
-                </TouchableOpacity>
-              );
-            })}
-            {hiddenTravelModeCount > 0 ? (
-              <TouchableOpacity
-                style={[styles.travelModeButton, styles.travelModeMoreButton, travelModesExpanded && styles.travelModeButtonSelected]}
-                onPress={(event: GestureResponderEvent) => {
-                  event.stopPropagation();
-                  setTravelModesExpanded((prev) => !prev);
-                }}
-                accessibilityRole="button"
-                accessibilityLabel={travelModesExpanded ? 'Hide more transportation modes' : 'Show more transportation modes'}
-              >
-                <Ionicons name="ellipsis-horizontal" size={16} color={travelModesExpanded ? '#fffaf3' : '#178f79'} />
-              </TouchableOpacity>
-            ) : null}
-          </View>
-        ) : null}
         {featureOptions && featureOptions.length > 1 && onToggleFeaturesOpen ? (
           <View style={styles.stepFeatureBox}>
             <TouchableOpacity
@@ -9708,30 +9677,6 @@ const styles = StyleSheet.create({
   },
   stepDetailActive: {
     color: '#526170',
-  },
-  travelModeRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 6,
-    marginTop: 8,
-  },
-  travelModeButton: {
-    width: 38,
-    height: 38,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#c9eadf',
-    backgroundColor: '#f8fffc',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  travelModeButtonSelected: {
-    backgroundColor: '#178f79',
-    borderColor: '#178f79',
-  },
-  travelModeMoreButton: {
-    width: 38,
   },
   stepFeatureSummary: {
     color: '#178f79',
