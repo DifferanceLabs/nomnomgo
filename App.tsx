@@ -10400,7 +10400,7 @@ const styles = StyleSheet.create({
     minWidth: 0,
   },
   cardHeaderActions: {
-    width: 78,
+    width: 34,
     alignItems: 'center',
     gap: 8,
   },
@@ -10415,7 +10415,7 @@ const styles = StyleSheet.create({
     color: '#178f79',
   },
   cardHours: {
-    width: 78,
+    width: 82,
     color: '#526170',
     fontSize: 12,
     fontWeight: '900',
