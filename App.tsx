@@ -7674,6 +7674,13 @@ function NomNomGoApp() {
               : isSelected
                 ? 'Deselect'
                 : 'Add';
+            const resultActionIcon: React.ComponentProps<typeof Ionicons>['name'] = planningSuggestionMode
+              ? isSuggested
+                ? 'checkmark-done-outline'
+                : 'chatbubble-ellipses-outline'
+              : isSelected
+                ? 'remove-circle-outline'
+                : 'add-outline';
             return (
             <View key={`${card.id}-${index}`} style={[styles.card, isDarkMode && styles.darkCard, (isSelected || isSuggested) && styles.cardSelected]}>
               <View style={styles.cardTopRow}>
@@ -7705,21 +7712,21 @@ function NomNomGoApp() {
               {card.address ? <Text style={[styles.address, isDarkMode && styles.darkMutedText]}>{card.address}</Text> : null}
               {card.todayHours ? <Text style={[styles.hoursDetail, isDarkMode && styles.darkMutedText]}>{card.todayHours}</Text> : null}
               <View style={styles.buttonRow}>
-                <Button label={resultActionLabel} onPress={() => selectCard(card)} success={!isSelected && !isSuggested} compact />
+                <CardIconButton label={resultActionLabel} icon={resultActionIcon} onPress={() => selectCard(card)} success={!isSelected && !isSuggested} />
                 {card.kind === 'event' && card.eventUrl ? (
-                  <Button label="Open event" onPress={() => openCardEvent(card)} compact />
+                  <CardIconButton label="Open event" icon="ticket-outline" onPress={() => openCardEvent(card)} />
                 ) : null}
                 {card.kind !== 'event' || card.mapsUri || (typeof card.lat === 'number' && typeof card.lng === 'number') ? (
-                  <Button label="Map" onPress={() => openCardMaps(card)} compact />
+                  <CardIconButton label="Map" icon="map-outline" onPress={() => openCardMaps(card)} />
                 ) : null}
                 {canOpenPlaceWebsite(card) ? (
-                  <Button label="Website" onPress={() => openCardWebsite(card)} compact />
+                  <CardIconButton label="Website" icon="globe-outline" onPress={() => openCardWebsite(card)} />
                 ) : null}
-                <Button label="Share" onPress={() => openQuickShare({ kind: 'card', slot: resultMode, card })} compact />
+                <CardIconButton label="Share" icon="share-outline" onPress={() => openQuickShare({ kind: 'card', slot: resultMode, card })} />
               </View>
               <View style={styles.buttonRow}>
-                <Button label="Dismiss" onPress={() => dismissCard(card)} compact />
-                <Button label="Don't rec again" onPress={() => neverRecommendCard(card)} compact />
+                <CardIconButton label="Dismiss" icon="close-outline" onPress={() => dismissCard(card)} />
+                <CardIconButton label="Don't recommend again" icon="ban-outline" onPress={() => neverRecommendCard(card)} />
               </View>
             </View>
             );
@@ -8107,14 +8114,35 @@ function PlanningSuggestionCard({
         </Text>
       ) : null}
       <View style={styles.buttonRow}>
-        <Button label={voted ? 'Unvote' : 'Vote'} onPress={onVote} primary={!voted} compact />
-        {onOpenEvent ? <Button label="Open event" onPress={onOpenEvent} compact /> : null}
-        {onOpenMap ? <Button label="Map" onPress={onOpenMap} compact /> : null}
-        {onOpenWebsite ? <Button label="Website" onPress={onOpenWebsite} compact /> : null}
-        {canRemove ? <Button label="Remove" onPress={onRemove} compact /> : null}
+        <CardIconButton label={voted ? 'Unvote' : 'Vote'} icon={voted ? 'thumbs-up' : 'thumbs-up-outline'} onPress={onVote} success={!voted} />
+        {onOpenEvent ? <CardIconButton label="Open event" icon="ticket-outline" onPress={onOpenEvent} /> : null}
+        {onOpenMap ? <CardIconButton label="Map" icon="map-outline" onPress={onOpenMap} /> : null}
+        {onOpenWebsite ? <CardIconButton label="Website" icon="globe-outline" onPress={onOpenWebsite} /> : null}
+        {canRemove ? <CardIconButton label="Remove" icon="trash-outline" onPress={onRemove} /> : null}
       </View>
     </View>
   );
+}
+
+function stepActionIconForLabel(label: string): React.ComponentProps<typeof Ionicons>['name'] {
+  switch (label) {
+    case 'Adjust time':
+      return 'time-outline';
+    case 'Map':
+      return 'map-outline';
+    case 'Website':
+      return 'globe-outline';
+    case 'Share':
+      return 'share-outline';
+    case 'Up':
+      return 'arrow-up-outline';
+    case 'Down':
+      return 'arrow-down-outline';
+    case 'Remove':
+      return 'trash-outline';
+    default:
+      return 'ellipse-outline';
+  }
 }
 
 function PlanStep({
@@ -8190,6 +8218,23 @@ function PlanStep({
   const hiddenTravelModeCount = travelModeOptions?.filter((option) =>
     option.id !== 'car' && option.id !== 'walk' && option.id !== travelMeta?.mode,
   ).length || 0;
+  const renderStepAction = (label?: string, onStepAction?: () => void, highlighted = false) => {
+    if (!label || !onStepAction) return null;
+    return (
+      <TouchableOpacity
+        style={[styles.stepActionButton, highlighted && styles.stepActionButtonActive]}
+        onPress={(event: GestureResponderEvent) => {
+          event.stopPropagation();
+          Keyboard.dismiss();
+          onStepAction();
+        }}
+        accessibilityRole="button"
+        accessibilityLabel={label}
+      >
+        <Ionicons name={stepActionIconForLabel(label)} size={18} color={highlighted ? '#071827' : '#526170'} />
+      </TouchableOpacity>
+    );
+  };
   return (
     <View style={styles.stepRow}>
       <View style={styles.stepRail}>
@@ -8236,7 +8281,6 @@ function PlanStep({
                   accessibilityLabel={`Use ${option.label.toLowerCase()} to this stop`}
                 >
                   <Ionicons name={option.icon} size={15} color={selected ? '#fffaf3' : '#178f79'} />
-                  <Text style={[styles.travelModeButtonText, selected && styles.travelModeButtonTextSelected]}>{option.label}</Text>
                 </TouchableOpacity>
               );
             })}
@@ -8301,90 +8345,13 @@ function PlanStep({
         ) : null}
         {actionLabel && onActionPress || mapLabel && onMapPress || websiteLabel && onWebsitePress || shareLabel && onSharePress || moveUpLabel && onMoveUpPress || moveDownLabel && onMoveDownPress || removeLabel && onRemovePress ? (
           <View style={styles.stepActionRow}>
-            {actionLabel && onActionPress ? (
-              <TouchableOpacity
-                style={[styles.stepActionButton, active && styles.stepActionButtonActive]}
-                onPress={(event: GestureResponderEvent) => {
-                  event.stopPropagation();
-                  Keyboard.dismiss();
-                  onActionPress();
-                }}
-              >
-                <Text style={[styles.stepActionText, active && styles.stepActionTextActive]}>{actionLabel}</Text>
-              </TouchableOpacity>
-            ) : null}
-            {mapLabel && onMapPress ? (
-              <TouchableOpacity
-                style={styles.stepActionButton}
-                onPress={(event: GestureResponderEvent) => {
-                  event.stopPropagation();
-                  Keyboard.dismiss();
-                  onMapPress();
-                }}
-              >
-                <Text style={styles.stepActionText}>{mapLabel}</Text>
-              </TouchableOpacity>
-            ) : null}
-            {websiteLabel && onWebsitePress ? (
-              <TouchableOpacity
-                style={styles.stepActionButton}
-                onPress={(event: GestureResponderEvent) => {
-                  event.stopPropagation();
-                  Keyboard.dismiss();
-                  onWebsitePress();
-                }}
-              >
-                <Text style={styles.stepActionText}>{websiteLabel}</Text>
-              </TouchableOpacity>
-            ) : null}
-            {shareLabel && onSharePress ? (
-              <TouchableOpacity
-                style={styles.stepActionButton}
-                onPress={(event: GestureResponderEvent) => {
-                  event.stopPropagation();
-                  Keyboard.dismiss();
-                  onSharePress();
-                }}
-              >
-                <Text style={styles.stepActionText}>{shareLabel}</Text>
-              </TouchableOpacity>
-            ) : null}
-            {moveUpLabel && onMoveUpPress ? (
-              <TouchableOpacity
-                style={styles.stepActionButton}
-                onPress={(event: GestureResponderEvent) => {
-                  event.stopPropagation();
-                  Keyboard.dismiss();
-                  onMoveUpPress();
-                }}
-              >
-                <Text style={styles.stepActionText}>{moveUpLabel}</Text>
-              </TouchableOpacity>
-            ) : null}
-            {moveDownLabel && onMoveDownPress ? (
-              <TouchableOpacity
-                style={styles.stepActionButton}
-                onPress={(event: GestureResponderEvent) => {
-                  event.stopPropagation();
-                  Keyboard.dismiss();
-                  onMoveDownPress();
-                }}
-              >
-                <Text style={styles.stepActionText}>{moveDownLabel}</Text>
-              </TouchableOpacity>
-            ) : null}
-            {removeLabel && onRemovePress ? (
-              <TouchableOpacity
-                style={styles.stepActionButton}
-                onPress={(event: GestureResponderEvent) => {
-                  event.stopPropagation();
-                  Keyboard.dismiss();
-                  onRemovePress();
-                }}
-              >
-                <Text style={styles.stepActionText}>{removeLabel}</Text>
-              </TouchableOpacity>
-            ) : null}
+            {renderStepAction(actionLabel, onActionPress, active)}
+            {renderStepAction(mapLabel, onMapPress)}
+            {renderStepAction(websiteLabel, onWebsitePress)}
+            {renderStepAction(shareLabel, onSharePress)}
+            {renderStepAction(moveUpLabel, onMoveUpPress)}
+            {renderStepAction(moveDownLabel, onMoveDownPress)}
+            {renderStepAction(removeLabel, onRemovePress)}
           </View>
         ) : null}
       </TouchableOpacity>
@@ -8452,6 +8419,42 @@ function TimeStepper({
         </TouchableOpacity>
       </View>
     </View>
+  );
+}
+
+function CardIconButton({
+  label,
+  icon,
+  onPress,
+  primary,
+  success,
+  disabled,
+}: {
+  label: string;
+  icon: React.ComponentProps<typeof Ionicons>['name'];
+  onPress: () => void;
+  primary?: boolean;
+  success?: boolean;
+  disabled?: boolean;
+}) {
+  return (
+    <TouchableOpacity
+      style={[
+        styles.cardIconButton,
+        primary && styles.primaryButton,
+        success && styles.successButton,
+        disabled && styles.disabledButton,
+      ]}
+      onPress={() => {
+        Keyboard.dismiss();
+        void onPress();
+      }}
+      disabled={disabled}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+    >
+      <Ionicons name={icon} size={20} color="#fffaf3" />
+    </TouchableOpacity>
   );
 }
 
@@ -9703,34 +9706,22 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   travelModeButton: {
-    minHeight: 30,
+    width: 38,
+    height: 38,
     borderRadius: 8,
     borderWidth: 1,
     borderColor: '#c9eadf',
     backgroundColor: '#f8fffc',
-    paddingHorizontal: 8,
-    paddingVertical: 5,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
+    justifyContent: 'center',
   },
   travelModeButtonSelected: {
     backgroundColor: '#178f79',
     borderColor: '#178f79',
   },
   travelModeMoreButton: {
-    minWidth: 36,
-    justifyContent: 'center',
-    paddingHorizontal: 9,
-  },
-  travelModeButtonText: {
-    color: '#178f79',
-    fontSize: 11,
-    lineHeight: 13,
-    fontWeight: '900',
-  },
-  travelModeButtonTextSelected: {
-    color: '#fffaf3',
+    width: 38,
   },
   stepFeatureSummary: {
     color: '#178f79',
@@ -9819,25 +9810,18 @@ const styles = StyleSheet.create({
     marginTop: 9,
   },
   stepActionButton: {
-    alignSelf: 'flex-start',
+    width: 42,
+    height: 42,
     borderRadius: 8,
     borderWidth: 1,
     borderColor: '#eadccb',
-    paddingHorizontal: 10,
-    paddingVertical: 7,
     backgroundColor: '#fffdf8',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   stepActionButtonActive: {
     borderColor: '#66c5a8',
     backgroundColor: '#dff7ef',
-  },
-  stepActionText: {
-    color: '#526170',
-    fontSize: 12,
-    fontWeight: '900',
-  },
-  stepActionTextActive: {
-    color: '#071827',
   },
   itineraryAddRow: {
     flexDirection: 'row',
@@ -10162,6 +10146,14 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     paddingHorizontal: 13,
     paddingVertical: 10,
+    backgroundColor: '#071827',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  cardIconButton: {
+    width: 44,
+    height: 42,
+    borderRadius: 8,
     backgroundColor: '#071827',
     justifyContent: 'center',
     alignItems: 'center',
