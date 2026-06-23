@@ -60,6 +60,7 @@ type DateWindowId = 'today' | 'tomorrow' | 'next3' | 'weekend' | 'nextWeekend' |
 type PlanStatus = 'draft' | 'locked';
 type PlanType = 'local_plan' | 'day_plan' | 'trip_plan';
 type SavedPlanTimeSchema = 'clock-arrivals-v1';
+type RsvpStatus = 'going' | 'maybe' | 'cant_make_it';
 type CustomDateRange = {
   start: string;
   end: string;
@@ -139,6 +140,9 @@ type ItineraryStop = {
 type ConfirmedPlan = {
   stops: ItineraryStop[];
   title?: string;
+  sharedPlanId?: string;
+  owner?: string;
+  intent?: PlanningIntent;
   sourceUrl?: string;
   routeProvider?: GoogleMapsRouteProvider;
   status?: PlanStatus;
@@ -160,6 +164,9 @@ type ConfirmedPlan = {
   chargingStops?: ChargingStopIdea[];
   nearbyPlacesDuringCharging?: NearbyChargingPlaceIdea[];
   lockedArrivalTimes?: Record<string, StopTime | undefined>;
+  rsvps?: Record<string, RsvpStatus>;
+  participantSuggestions?: PlanningSuggestion[];
+  finalizedSuggestionIds?: string[];
 };
 
 type StopTime = {
@@ -273,6 +280,31 @@ type PlanningSession = {
   updatedAt: number;
 };
 
+type BetaPlanRecord = {
+  id: string;
+  owner: string;
+  participants: string[];
+  title: string;
+  source: 'now' | 'later' | 'saved';
+  locationLabel: string;
+  searchLocation?: LatLon;
+  routeOriginLabel?: string;
+  routeStartLocation?: LatLon;
+  dateWindow: DateWindowId;
+  customDateRange?: CustomDateRange | null;
+  planDateStart: string;
+  planDateEnd: string;
+  timeWindow?: string;
+  intent: PlanningIntent;
+  stops: ItineraryStop[];
+  suggestions: PlanningSuggestion[];
+  finalizedSuggestionIds: string[];
+  rsvps: Record<string, RsvpStatus>;
+  status: 'planning' | 'finalized';
+  createdAt: number;
+  updatedAt: number;
+};
+
 type SearchCacheEntry = {
   ts: number;
   cards: PlaceCard[];
@@ -302,6 +334,8 @@ const STORAGE_USAGE_METER = 'nomNomGoUsageMeterV1';
 const STORAGE_SAVED_PLANS = 'nomNomGoSavedPlansV1';
 const STORAGE_PLANNING_SESSIONS = 'nomNomGoPlanningSessionsV1';
 const STORAGE_ACTIVE_PLANNING_SESSION = 'nomNomGoActivePlanningSessionV1';
+const STORAGE_BETA_PLANS = 'nomNomGoBetaPlansV1';
+const STORAGE_ACTIVE_BETA_PLAN = 'nomNomGoActiveBetaPlanV1';
 const EVENT_PROVIDER_CACHE_VERSION = 'ticketmaster-v1';
 const LOCATION_TTL_MS = 10 * 60 * 1000;
 const SEARCH_CACHE_TTL_MS = 15 * 60 * 1000;
@@ -327,6 +361,11 @@ const FACTORY_EXPERIENCE_URL = 'https://factoryatfranklin.com/experience/';
 const DEV_SHARE_USERS = ['Alex', 'Jordan', 'Taylor', 'Morgan'];
 const TEST_USERS = ['BDM', ...DEV_SHARE_USERS];
 const GROUP_SESSION_ENABLED = false;
+const RSVP_OPTIONS: Array<{ status: RsvpStatus; label: string }> = [
+  { status: 'going', label: 'Going' },
+  { status: 'maybe', label: 'Maybe' },
+  { status: 'cant_make_it', label: "Can't make it" },
+];
 const LOCAL_TEST_LOCATIONS: Record<string, LatLon> = {
   'franklin tn': { latitude: 35.9251, longitude: -86.8689, label: 'Franklin, TN' },
   'franklin tennessee': { latitude: 35.9251, longitude: -86.8689, label: 'Franklin, TN' },
@@ -2235,6 +2274,220 @@ function suggestionToStop(suggestion: PlanningSuggestion, suffix = ''): Itinerar
   };
 }
 
+function shortDateToken(dateKey?: string) {
+  const date = dateKey ? parseDateInput(dateKey) : null;
+  return date ? date.toLocaleDateString([], { month: 'short', day: 'numeric' }) : '';
+}
+
+function conciseDateTitle(windowId: DateWindowId, dateStart?: string, customRange?: CustomDateRange | null) {
+  if (windowId === 'today') return 'Today';
+  if (windowId === 'tomorrow') return 'Tomorrow';
+  if (windowId === 'weekend') return 'This Weekend';
+  if (windowId === 'nextWeekend') return 'Next Weekend';
+  if (windowId === 'custom' && customRange) return shortDateToken(customRange.start) || 'Soon';
+  return shortDateToken(dateStart) || 'Soon';
+}
+
+function defaultBetaPlanTitle({
+  intent,
+  dateWindow,
+  customDateRange,
+  planDateStart,
+  timePreference,
+}: {
+  intent: PlanningIntent;
+  dateWindow: DateWindowId;
+  customDateRange?: CustomDateRange | null;
+  planDateStart?: string;
+  timePreference?: string;
+}) {
+  const dateTitle = conciseDateTitle(dateWindow, planDateStart, customDateRange);
+  if (timePreference === 'Dinner') return `Dinner ${dateTitle}`;
+  if (timePreference === 'Lunch') return `Lunch ${dateTitle}`;
+  if (intent === 'activity') return `Activity ${dateTitle}`;
+  if (intent === 'food') return `Food ${dateTitle}`;
+  return `Local Plan ${shortDateToken(planDateStart) || dateTitle}`;
+}
+
+function rsvpStatusLabel(status: RsvpStatus) {
+  return RSVP_OPTIONS.find((option) => option.status === status)?.label || status;
+}
+
+function rsvpCountsFor(rsvps: Record<string, RsvpStatus> = {}) {
+  return Object.values(rsvps).reduce<Record<RsvpStatus, number>>((counts, status) => {
+    counts[status] += 1;
+    return counts;
+  }, { going: 0, maybe: 0, cant_make_it: 0 });
+}
+
+function rsvpSummaryText(rsvps: Record<string, RsvpStatus> = {}) {
+  const counts = rsvpCountsFor(rsvps);
+  return `${counts.going} Going | ${counts.maybe} Maybe | ${counts.cant_make_it} Can't make it`;
+}
+
+function betaPlanLocationLabel(plan: BetaPlanRecord) {
+  return plan.locationLabel || plan.searchLocation?.label || plan.routeOriginLabel || 'Location TBD';
+}
+
+function betaPlanDateLabel(plan: BetaPlanRecord) {
+  return absoluteDateRangeLabel(plan.planDateStart, plan.planDateEnd) ||
+    dateWindowLabel(plan.dateWindow, new Date(plan.createdAt), plan.customDateRange);
+}
+
+function betaPlanFinalLabel(plan: BetaPlanRecord) {
+  const finalStops = plan.status === 'finalized' ? plan.stops : [];
+  if (finalStops.length) {
+    return finalStops.map((stop) => cardToName(stop.item)).filter(Boolean).join(' + ');
+  }
+  const finalSuggestion = plan.suggestions.find((suggestion) => plan.finalizedSuggestionIds.includes(suggestion.id));
+  return finalSuggestion ? cardToName(finalSuggestion.item) || 'Final option' : '';
+}
+
+function publicBetaPlanSnapshot(plan: BetaPlanRecord): BetaPlanRecord {
+  return {
+    ...plan,
+    suggestions: plan.suggestions.slice(0, 30),
+    stops: plan.stops.slice(0, 8),
+  };
+}
+
+function encodeBetaPlanSnapshot(plan: BetaPlanRecord) {
+  return encodeURIComponent(JSON.stringify(publicBetaPlanSnapshot(plan)));
+}
+
+function decodeBetaPlanSnapshot(rawValue?: string | null) {
+  if (!rawValue) return null;
+  const candidates = [rawValue];
+  try {
+    candidates.push(decodeURIComponent(rawValue));
+  } catch {
+    // Already decoded by URLSearchParams.
+  }
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate) as BetaPlanRecord;
+      if (parsed?.id && parsed?.title) {
+        return {
+          ...parsed,
+          participants: parsed.participants || [],
+          suggestions: parsed.suggestions || [],
+          finalizedSuggestionIds: parsed.finalizedSuggestionIds || [],
+          rsvps: parsed.rsvps || {},
+          stops: parsed.stops || [],
+          status: parsed.status || 'planning',
+        };
+      }
+    } catch {
+      // Try the next representation.
+    }
+  }
+  return null;
+}
+
+function sharedBetaPlanFromCurrentWebUrl() {
+  if (Platform.OS !== 'web' || typeof window === 'undefined') return null;
+  const query = new URLSearchParams(window.location.search);
+  const queryPlan = decodeBetaPlanSnapshot(query.get('shared_plan'));
+  if (queryPlan) return queryPlan;
+  const hash = window.location.hash.replace(/^#/, '');
+  const hashParams = new URLSearchParams(hash);
+  return decodeBetaPlanSnapshot(hashParams.get('shared_plan') || hashParams.get('plan'));
+}
+
+function betaPlanShareUrl(plan: BetaPlanRecord) {
+  if (Platform.OS !== 'web' || typeof window === 'undefined') return undefined;
+  const baseUrl = `${window.location.origin}${window.location.pathname}`;
+  return `${baseUrl}#shared_plan=${encodeBetaPlanSnapshot(plan)}`;
+}
+
+function betaPlanShareMessage(plan: BetaPlanRecord, shareUrl?: string) {
+  return [
+    `${plan.title}`,
+    `${betaPlanDateLabel(plan)} | ${plan.timeWindow || 'Time TBD'} | ${planningIntentLabel(plan.intent)}`,
+    `Where: ${betaPlanLocationLabel(plan)}`,
+    plan.status === 'finalized' && betaPlanFinalLabel(plan) ? `Final plan: ${betaPlanFinalLabel(plan)}` : 'RSVP and suggestions are open.',
+    shareUrl ? `Open plan: ${shareUrl}` : 'Shared plan link is available from NomNomGo web.',
+    '',
+    'Shared from NomNomGo',
+  ].filter(Boolean).join('\n');
+}
+
+function confirmedPlanFromBetaRecord(record: BetaPlanRecord): ConfirmedPlan {
+  return {
+    title: record.title,
+    sharedPlanId: record.id,
+    owner: record.owner,
+    intent: record.intent,
+    stops: record.stops || [],
+    status: record.status === 'finalized' ? 'locked' : 'draft',
+    dateWindow: record.dateWindow,
+    customDateRange: record.customDateRange || null,
+    planDateStart: record.planDateStart,
+    planDateEnd: record.planDateEnd,
+    timeWindow: record.timeWindow,
+    routeOriginLabel: record.routeOriginLabel,
+    routeStartLocation: record.routeStartLocation,
+    searchLocation: record.searchLocation,
+    searchLocationLabel: record.locationLabel,
+    rsvps: record.rsvps,
+    participantSuggestions: record.suggestions,
+    finalizedSuggestionIds: record.finalizedSuggestionIds,
+  };
+}
+
+function toIcsUtc(ms: number) {
+  return new Date(ms).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+}
+
+function escapeIcsText(value?: string) {
+  return (value || '')
+    .replace(/\\/g, '\\\\')
+    .replace(/\n/g, '\\n')
+    .replace(/,/g, '\\,')
+    .replace(/;/g, '\\;');
+}
+
+function calendarRangeForBetaPlan(plan: BetaPlanRecord) {
+  const parsedWindow = plan.timeWindow ? parsePlanningTimeWindow(plan.timeWindow) : undefined;
+  const startClock = parsedWindow?.start ?? 18 * 60;
+  const endClock = parsedWindow?.end ?? startClock + 180;
+  const startsAt = localDateClockMs(plan.planDateStart, startClock);
+  const endsAt = localDateClockMs(plan.planDateStart, Math.max(endClock, startClock + 60));
+  return { startsAt, endsAt };
+}
+
+function betaPlanIcs(plan: BetaPlanRecord, shareUrl?: string) {
+  const { startsAt, endsAt } = calendarRangeForBetaPlan(plan);
+  const finalLabel = betaPlanFinalLabel(plan);
+  const notes = [
+    finalLabel ? `Final plan: ${finalLabel}` : undefined,
+    rsvpSummaryText(plan.rsvps),
+    shareUrl,
+    'Shared from NomNomGo',
+  ].filter(Boolean).join('\n');
+  return [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//NomNomGo//Closed Beta MVP//EN',
+    'CALSCALE:GREGORIAN',
+    'BEGIN:VEVENT',
+    `UID:${escapeIcsText(plan.id)}@nomnomgo`,
+    `DTSTAMP:${toIcsUtc(Date.now())}`,
+    `DTSTART:${toIcsUtc(startsAt)}`,
+    `DTEND:${toIcsUtc(endsAt)}`,
+    `SUMMARY:${escapeIcsText(plan.title)}`,
+    `LOCATION:${escapeIcsText(finalLabel || betaPlanLocationLabel(plan))}`,
+    `DESCRIPTION:${escapeIcsText(notes)}`,
+    'END:VEVENT',
+    'END:VCALENDAR',
+  ].join('\r\n');
+}
+
+function safeCalendarFileName(title: string) {
+  const safe = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48);
+  return `${safe || 'nomnomgo-plan'}.ics`;
+}
+
 const DIFFERANCE_LOGIN_URL = 'https://differancelabs.com/login';
 const LAUNCH_TOKEN_PARAM = 'dl_launch_token';
 const LIGHT_WEB_BACKGROUND = '#fff7ed';
@@ -2465,6 +2718,12 @@ function NomNomGoApp() {
   const [usageMeter, setUsageMeter] = useState<UsageMeter>(emptyUsageMeter());
   const [planningSessions, setPlanningSessions] = useState<PlanningSession[]>([]);
   const [activePlanningSessionId, setActivePlanningSessionId] = useState<string | null>(null);
+  const [betaPlans, setBetaPlans] = useState<BetaPlanRecord[]>([]);
+  const betaPlansRef = useRef<BetaPlanRecord[]>([]);
+  const [activeBetaPlanId, setActiveBetaPlanId] = useState<string | null>(null);
+  const [visitorBetaPlan, setVisitorBetaPlan] = useState<BetaPlanRecord | null>(null);
+  const [visitorName, setVisitorName] = useState('');
+  const [betaSuggestionInput, setBetaSuggestionInput] = useState('');
   const [sessionBuilderOpen, setSessionBuilderOpen] = useState(false);
   const [sessionInvitees, setSessionInvitees] = useState<string[]>([]);
   const [sessionLocationInput, setSessionLocationInput] = useState('');
@@ -2479,6 +2738,7 @@ function NomNomGoApp() {
   customDateRangeRef.current = customDateRange;
   routeOriginOverrideRef.current = routeOriginOverride;
   savedPlansRef.current = savedPlans;
+  betaPlansRef.current = betaPlans;
 
   const keyLoaded = Boolean(GOOGLE_API_KEY);
   const savedFavoriteResultCards = Object.values(memory.favoriteCards || {})
@@ -2524,6 +2784,7 @@ function NomNomGoApp() {
   });
   const selectedDateWindowText = dateWindowLabel(selectedDateWindow, new Date(), customDateRange);
   const currentTesterName = testerUser?.name || 'Tester';
+  const activeBetaPlan = betaPlans.find((betaPlan) => betaPlan.id === activeBetaPlanId) || null;
   let activePlanningSession: PlanningSession | null = null;
   if (GROUP_SESSION_ENABLED) {
     activePlanningSession = planningSessions.find((session) =>
@@ -2776,6 +3037,51 @@ function NomNomGoApp() {
     await AsyncStorage.setItem(STORAGE_SAVED_PLANS, JSON.stringify(next.slice(0, 40)));
   };
 
+  const saveBetaPlans = async (nextOrUpdater: BetaPlanRecord[] | ((current: BetaPlanRecord[]) => BetaPlanRecord[])) => {
+    const next = typeof nextOrUpdater === 'function'
+      ? nextOrUpdater(betaPlansRef.current)
+      : nextOrUpdater;
+    const trimmed = next
+      .slice()
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .slice(0, 40);
+    betaPlansRef.current = trimmed;
+    setBetaPlans(trimmed);
+    await AsyncStorage.setItem(STORAGE_BETA_PLANS, JSON.stringify(trimmed));
+  };
+
+  const saveActiveBetaPlan = async (id: string | null) => {
+    setActiveBetaPlanId(id);
+    if (id) {
+      await AsyncStorage.setItem(STORAGE_ACTIVE_BETA_PLAN, JSON.stringify(id));
+    } else {
+      await AsyncStorage.removeItem(STORAGE_ACTIVE_BETA_PLAN);
+    }
+  };
+
+  const patchBetaPlan = async (id: string, updater: (record: BetaPlanRecord) => BetaPlanRecord) => {
+    let updatedRecord: BetaPlanRecord | null = null;
+    await saveBetaPlans((current) => current.map((record) => {
+      if (record.id !== id) return record;
+      updatedRecord = { ...updater(record), updatedAt: Date.now() };
+      return updatedRecord;
+    }));
+    if (updatedRecord && visitorBetaPlan?.id === id) setVisitorBetaPlan(updatedRecord);
+    return updatedRecord;
+  };
+
+  useEffect(() => {
+    if (Platform.OS !== 'web' || typeof window === 'undefined') return undefined;
+    const openSharedPlanFromUrl = () => {
+      const sharedPlan = sharedBetaPlanFromCurrentWebUrl();
+      if (!sharedPlan) return;
+      setVisitorBetaPlan(sharedPlan);
+      void saveBetaPlans((current) => [sharedPlan, ...current.filter((record) => record.id !== sharedPlan.id)]);
+    };
+    window.addEventListener('hashchange', openSharedPlanFromUrl);
+    return () => window.removeEventListener('hashchange', openSharedPlanFromUrl);
+  }, []);
+
   const recordPlacesUsage = async (kind: 'nearby' | 'text') => {
     const current = normalizeUsageMeter(usageMeter);
     const next = {
@@ -2866,6 +3172,72 @@ function NomNomGoApp() {
     addLog('Home opened');
   };
 
+  const createBetaPlanRecord = async ({
+    source,
+    title,
+    dateWindow,
+    customDateRange,
+    planDateStart,
+    planDateEnd,
+    timeWindow,
+    timePreference,
+    intent,
+    locationLabel,
+    searchLocation: nextSearchLocation,
+    routeOriginLabel,
+    routeStartLocation: nextRouteStartLocation,
+  }: {
+    source: BetaPlanRecord['source'];
+    title?: string;
+    dateWindow: DateWindowId;
+    customDateRange?: CustomDateRange | null;
+    planDateStart: string;
+    planDateEnd: string;
+    timeWindow?: string;
+    timePreference?: string;
+    intent: PlanningIntent;
+    locationLabel: string;
+    searchLocation?: LatLon;
+    routeOriginLabel?: string;
+    routeStartLocation?: LatLon;
+  }) => {
+    const stamp = Date.now();
+    const resolvedTitle = title?.trim() || defaultBetaPlanTitle({
+      intent,
+      dateWindow,
+      customDateRange,
+      planDateStart,
+      timePreference,
+    });
+    const record: BetaPlanRecord = {
+      id: `beta-plan-${stamp}`,
+      owner: currentTesterName,
+      participants: [currentTesterName],
+      title: resolvedTitle,
+      source,
+      locationLabel: locationLabel || 'Current location',
+      searchLocation: nextSearchLocation,
+      routeOriginLabel: routeOriginLabel || 'Current location',
+      routeStartLocation: nextRouteStartLocation,
+      dateWindow,
+      customDateRange: customDateRange || null,
+      planDateStart,
+      planDateEnd,
+      timeWindow,
+      intent,
+      stops: [],
+      suggestions: [],
+      finalizedSuggestionIds: [],
+      rsvps: { [currentTesterName]: 'going' },
+      status: 'planning',
+      createdAt: stamp,
+      updatedAt: stamp,
+    };
+    await saveBetaPlans((current) => [record, ...current.filter((item) => item.id !== record.id)]);
+    await saveActiveBetaPlan(record.id);
+    return record;
+  };
+
   const startNowPlan = async () => {
     closeTransientSurfaces();
     const effectiveDateWindow: DateWindowId = 'today';
@@ -2874,6 +3246,18 @@ function NomNomGoApp() {
       planDateStart: nextDateRange.start,
       planDateEnd: nextDateRange.end,
       destinationLabel: '',
+    });
+    const betaRecord = await createBetaPlanRecord({
+      source: 'now',
+      dateWindow: effectiveDateWindow,
+      customDateRange: null,
+      planDateStart: nextDateRange.start,
+      planDateEnd: nextDateRange.end,
+      timeWindow: undefined,
+      timePreference: 'Now',
+      intent: 'both',
+      locationLabel: 'Current location',
+      routeOriginLabel: 'Current location',
     });
 
     routeOriginOverrideRef.current = '';
@@ -2894,6 +3278,10 @@ function NomNomGoApp() {
     setResultMode('food');
     setPlan({
       ...EMPTY_PLAN,
+      title: betaRecord.title,
+      sharedPlanId: betaRecord.id,
+      owner: betaRecord.owner,
+      intent: betaRecord.intent,
       status: 'draft',
       dateWindow: effectiveDateWindow,
       customDateRange: null,
@@ -2909,6 +3297,9 @@ function NomNomGoApp() {
       vehicleProfile: undefined,
       chargingStops: [],
       nearbyPlacesDuringCharging: [],
+      rsvps: betaRecord.rsvps,
+      participantSuggestions: [],
+      finalizedSuggestionIds: [],
     });
     setPlanTimes({});
     setArrivalTimes({});
@@ -2998,6 +3389,13 @@ function NomNomGoApp() {
       stops: [],
     });
     const nextVehicleProfile = vehicleProfileForPlan(nextRoadTripMode, undefined, [], whereInput);
+    const nextTitle = nextName || defaultBetaPlanTitle({
+      intent: planSetupIntent,
+      dateWindow: effectiveDateWindow,
+      customDateRange: nextCustomDateRange,
+      planDateStart: nextDateRange.start,
+      timePreference: effectiveTime,
+    });
     setPlanSetupSubmitting(true);
 
     try {
@@ -3032,9 +3430,26 @@ function NomNomGoApp() {
       }
       setSelectedTime(effectiveTime);
       setResultMode(initialSearchSlot);
+      const betaRecord = await createBetaPlanRecord({
+        source: isNowSetup ? 'now' : 'later',
+        title: nextTitle,
+        dateWindow: effectiveDateWindow,
+        customDateRange: nextCustomDateRange,
+        planDateStart: nextDateRange.start,
+        planDateEnd: nextDateRange.end,
+        timeWindow: nextTimeWindow,
+        timePreference: effectiveTime,
+        intent: planSetupIntent,
+        locationLabel: whereInput || startingInput || 'Current location',
+        routeOriginLabel: startingInput || 'Current location',
+        routeStartLocation: startingInput ? undefined : location || undefined,
+      });
       setPlan({
         ...EMPTY_PLAN,
-        title: nextName || undefined,
+        title: betaRecord.title,
+        sharedPlanId: betaRecord.id,
+        owner: betaRecord.owner,
+        intent: betaRecord.intent,
         status: 'draft',
         dateWindow: effectiveDateWindow,
         customDateRange: nextCustomDateRange,
@@ -3050,6 +3465,9 @@ function NomNomGoApp() {
         vehicleProfile: nextVehicleProfile,
         chargingStops: [],
         nearbyPlacesDuringCharging: [],
+        rsvps: betaRecord.rsvps,
+        participantSuggestions: [],
+        finalizedSuggestionIds: [],
       });
       setPlanTimes({});
       setArrivalTimes({});
@@ -3154,8 +3572,10 @@ function NomNomGoApp() {
       AsyncStorage.getItem(STORAGE_SAVED_PLANS),
       AsyncStorage.getItem(STORAGE_PLANNING_SESSIONS),
       AsyncStorage.getItem(STORAGE_ACTIVE_PLANNING_SESSION),
+      AsyncStorage.getItem(STORAGE_BETA_PLANS),
+      AsyncStorage.getItem(STORAGE_ACTIVE_BETA_PLAN),
     ])
-      .then(([rawUser, rawUsage, rawSavedPlans, rawPlanningSessions, rawActivePlanningSession]) => {
+      .then(([rawUser, rawUsage, rawSavedPlans, rawPlanningSessions, rawActivePlanningSession, rawBetaPlans, rawActiveBetaPlan]) => {
         if (rawUser) {
           const user = JSON.parse(rawUser) as TesterUser;
           if (user.name) {
@@ -3171,6 +3591,28 @@ function NomNomGoApp() {
         }
         if (rawPlanningSessions) setPlanningSessions(JSON.parse(rawPlanningSessions) as PlanningSession[]);
         if (rawActivePlanningSession) setActivePlanningSessionId(JSON.parse(rawActivePlanningSession) as string);
+        const parsedBetaPlans = rawBetaPlans ? JSON.parse(rawBetaPlans) as BetaPlanRecord[] : [];
+        if (parsedBetaPlans.length) {
+          betaPlansRef.current = parsedBetaPlans;
+          setBetaPlans(parsedBetaPlans);
+        }
+        if (rawActiveBetaPlan) {
+          const parsedActiveBetaPlanId = JSON.parse(rawActiveBetaPlan) as string;
+          setActiveBetaPlanId(parsedActiveBetaPlanId);
+          const activeRecord = parsedBetaPlans.find((record) => record.id === parsedActiveBetaPlanId);
+          if (activeRecord) {
+            setPlan(confirmedPlanFromBetaRecord(activeRecord));
+            setHomeOpen(false);
+            setSavedPlansLandingOpen(false);
+          }
+        }
+        const sharedPlan = sharedBetaPlanFromCurrentWebUrl();
+        if (sharedPlan) {
+          setVisitorBetaPlan(sharedPlan);
+          betaPlansRef.current = [sharedPlan, ...parsedBetaPlans.filter((record) => record.id !== sharedPlan.id)];
+          setBetaPlans(betaPlansRef.current);
+          void AsyncStorage.setItem(STORAGE_BETA_PLANS, JSON.stringify(betaPlansRef.current.slice(0, 40)));
+        }
       })
       .catch((err) => addLog(`Tester profile load failed: ${compactError(err)}`))
       .finally(() => setAuthLoaded(true));
@@ -5342,7 +5784,7 @@ function NomNomGoApp() {
     };
   };
 
-  const planTitle = plan.title || titleForPlanStops(plan.stops);
+  const planTitle = plan.title || activeBetaPlan?.title || titleForPlanStops(plan.stops);
   const isPlanLocked = plan.status === 'locked';
   const isImportedGoogleMapsPlan = plan.routeProvider === 'google_maps';
   const isImportedGoogleMapsDraft = isImportedGoogleMapsPlan && plan.status === 'draft';
@@ -5421,9 +5863,56 @@ function NomNomGoApp() {
     featuresExpanded: false,
   });
 
+  const betaPlanRecordFromCurrentState = (base?: BetaPlanRecord | null): BetaPlanRecord => {
+    const stamp = Date.now();
+    const context = currentPlanContext(plan.stops);
+    const status: BetaPlanRecord['status'] = plan.status === 'locked' ? 'finalized' : base?.status || 'planning';
+    return {
+      id: base?.id || plan.sharedPlanId || `beta-plan-${stamp}`,
+      owner: base?.owner || plan.owner || currentTesterName,
+      participants: unique([...(base?.participants || []), currentTesterName, ...(plan.invitees || [])]),
+      title: plan.title?.trim() || base?.title || titleForPlanStops(plan.stops),
+      source: base?.source || 'now',
+      locationLabel: context.searchLocationLabel || base?.locationLabel || 'Current location',
+      searchLocation: context.searchLocation || base?.searchLocation,
+      routeOriginLabel: context.routeOriginLabel || base?.routeOriginLabel || 'Current location',
+      routeStartLocation: context.routeStartLocation || base?.routeStartLocation,
+      dateWindow: context.dateWindow,
+      customDateRange: context.customDateRange || null,
+      planDateStart: context.planDateStart,
+      planDateEnd: context.planDateEnd,
+      timeWindow: context.timeWindow,
+      intent: plan.intent || base?.intent || 'both',
+      stops: plan.stops.map((stop) => cloneStopForSavedPlan(stop)),
+      suggestions: base?.suggestions || plan.participantSuggestions || [],
+      finalizedSuggestionIds: base?.finalizedSuggestionIds || plan.finalizedSuggestionIds || [],
+      rsvps: base?.rsvps || plan.rsvps || { [currentTesterName]: 'going' },
+      status,
+      createdAt: base?.createdAt || stamp,
+      updatedAt: stamp,
+    };
+  };
+
+  const ensureActiveBetaPlanRecord = async () => {
+    const existing = activeBetaPlan || betaPlansRef.current.find((record) => record.id === plan.sharedPlanId) || null;
+    const nextRecord = betaPlanRecordFromCurrentState(existing);
+    await saveBetaPlans((current) => [nextRecord, ...current.filter((record) => record.id !== nextRecord.id)]);
+    if (activeBetaPlanId !== nextRecord.id) await saveActiveBetaPlan(nextRecord.id);
+    if (plan.sharedPlanId !== nextRecord.id) {
+      setPlan((prev) => ({ ...prev, sharedPlanId: nextRecord.id, owner: nextRecord.owner }));
+    }
+    return nextRecord;
+  };
+
   const renamePlan = (title: string) => {
     if (isPlanLocked) return;
     setPlan((prev) => ({ ...prev, title, savedPlanId: undefined }));
+    if (activeBetaPlanId) {
+      void patchBetaPlan(activeBetaPlanId, (record) => ({
+        ...record,
+        title: title.trim() || record.title,
+      }));
+    }
   };
 
   const togglePlanInvitee = (user: string) => {
@@ -5453,8 +5942,11 @@ function NomNomGoApp() {
     addLog(`Plan stop moved ${direction < 0 ? 'up' : 'down'}`);
   };
 
-  const lockPlan = () => {
-    if (!plan.stops.length) return;
+  const lockPlan = async () => {
+    if (!plan.stops.length) {
+      Alert.alert('Choose a final option', 'Add a food place, activity, or participant suggestion before finalizing.');
+      return;
+    }
     const lockedArrivalTimes = currentDisplayedArrivalTimes();
     const context = currentPlanContext(plan.stops);
     setPlan((prev) => ({
@@ -5465,6 +5957,14 @@ function NomNomGoApp() {
       lockedArrivalTimes,
       savedPlanId: undefined,
     }));
+    const nextRecord = betaPlanRecordFromCurrentState(activeBetaPlan);
+    await saveBetaPlans((current) => [{
+      ...nextRecord,
+      status: 'finalized',
+      stops: plan.stops.map((stop) => cloneStopForSavedPlan(stop)),
+      updatedAt: Date.now(),
+    }, ...current.filter((record) => record.id !== nextRecord.id)]);
+    if (activeBetaPlanId !== nextRecord.id) await saveActiveBetaPlan(nextRecord.id);
     setTimeEditorKey(null);
     setLocationOverrideOpen(false);
     setSearchLocationOverrideOpen(false);
@@ -5472,11 +5972,14 @@ function NomNomGoApp() {
     setPreferencesOpen(false);
     setRouteImportOpen(false);
     addLog('Plan locked');
-    showToast('Plan locked');
+    showToast('Plan finalized');
   };
 
   const unlockPlan = () => {
     setPlan((prev) => ({ ...prev, status: 'draft', lockedArrivalTimes: undefined, savedPlanId: undefined }));
+    if (activeBetaPlanId) {
+      void patchBetaPlan(activeBetaPlanId, (record) => ({ ...record, status: 'planning' }));
+    }
     addLog('Plan unlocked');
     showToast('Plan ready to edit');
   };
@@ -6058,6 +6561,10 @@ function NomNomGoApp() {
 
   const sharePlan = async () => {
     try {
+      if (activeBetaPlanId || plan.sharedPlanId) {
+        await shareActiveBetaPlan();
+        return;
+      }
       await Share.share({ message: sharePlanText() });
       addLog('Plan shared as text');
     } catch (err) {
@@ -6078,6 +6585,202 @@ function NomNomGoApp() {
     setPlan((prev) => ({ ...prev, invitees: unique([...(prev.invitees || []), user]) }));
     addLog(`Plan shared in-app to ${user}: ${shared.title}`);
     showToast(`Shared to ${user}`);
+  };
+
+  const setActiveBetaRsvp = async (status: RsvpStatus) => {
+    const record = await ensureActiveBetaPlanRecord();
+    await patchBetaPlan(record.id, (current) => ({
+      ...current,
+      rsvps: {
+        ...current.rsvps,
+        [currentTesterName]: status,
+      },
+      participants: unique([...current.participants, currentTesterName]),
+    }));
+    setPlan((prev) => ({
+      ...prev,
+      rsvps: {
+        ...(prev.rsvps || {}),
+        [currentTesterName]: status,
+      },
+    }));
+    showToast(`RSVP: ${rsvpStatusLabel(status)}`);
+  };
+
+  const addActiveBetaSuggestion = async (slot: PlanSlot) => {
+    const value = betaSuggestionInput.trim();
+    if (!value) return;
+    const record = await ensureActiveBetaPlanRecord();
+    const existing = record.suggestions.find((suggestion) => samePlanningSuggestion(suggestion, slot, value));
+    if (existing) {
+      showToast('Suggestion already added');
+      setBetaSuggestionInput('');
+      return;
+    }
+    const suggestion: PlanningSuggestion = {
+      id: makePlanningSuggestionId(slot, value),
+      slot,
+      item: value,
+      source: 'manual',
+      addedBy: currentTesterName,
+      createdAt: Date.now(),
+      votes: [],
+    };
+    await patchBetaPlan(record.id, (current) => ({
+      ...current,
+      suggestions: [suggestion, ...current.suggestions],
+      status: current.status === 'finalized' ? current.status : 'planning',
+    }));
+    setPlan((prev) => ({
+      ...prev,
+      participantSuggestions: [suggestion, ...(prev.participantSuggestions || [])],
+    }));
+    setBetaSuggestionInput('');
+    showToast('Suggestion added');
+  };
+
+  const finalizeBetaSuggestion = async (suggestion: PlanningSuggestion) => {
+    if (activeBetaPlan && activeBetaPlan.owner !== currentTesterName) {
+      showToast(`${activeBetaPlan.owner} can finalize this plan`);
+      return;
+    }
+    const record = await ensureActiveBetaPlanRecord();
+    const finalStop = suggestionToStop(suggestion, `-beta-final-${record.id}`);
+    const nextStops = [finalStop];
+    const context = currentPlanContext(nextStops);
+    const lockedArrivalTimes: Record<string, StopTime | undefined> = {
+      [finalStop.key]: clockTimeFromOffsetMinutes(estimateDriveMinutes(routeStartLocation, finalStop.item), activePlanTimelineBaseMs),
+    };
+    setPlan((prev) => ({
+      ...prev,
+      ...context,
+      title: prev.title || record.title,
+      stops: nextStops,
+      status: 'locked',
+      lockedArrivalTimes,
+      finalizedSuggestionIds: [suggestion.id],
+      savedPlanId: undefined,
+    }));
+    setPlanTimes({});
+    setArrivalTimes({});
+    setPendingInsertIndex(null);
+    setSelectedStopKey(finalStop.key);
+    setTimeEditorKey(null);
+    await patchBetaPlan(record.id, (current) => ({
+      ...current,
+      status: 'finalized',
+      stops: nextStops.map((stop) => cloneStopForSavedPlan(stop)),
+      finalizedSuggestionIds: [suggestion.id],
+    }));
+    showToast('Plan finalized');
+    scrollToPlan();
+  };
+
+  const shareActiveBetaPlan = async () => {
+    try {
+      const record = await ensureActiveBetaPlanRecord();
+      const shareUrl = betaPlanShareUrl(record);
+      await Share.share({ message: betaPlanShareMessage(record, shareUrl) });
+      addLog('Beta plan shared');
+    } catch (err) {
+      addLog(`Beta plan share failed: ${compactError(err)}`);
+      Alert.alert('Could not share plan', compactError(err));
+    }
+  };
+
+  const addActiveBetaPlanToCalendar = async () => {
+    try {
+      const record = await ensureActiveBetaPlanRecord();
+      const shareUrl = betaPlanShareUrl(record);
+      const ics = betaPlanIcs(record, shareUrl);
+      const fileName = safeCalendarFileName(record.title);
+      if (Platform.OS === 'web' && typeof document !== 'undefined' && typeof URL !== 'undefined' && typeof Blob !== 'undefined') {
+        const blob = new Blob([ics], { type: 'text/calendar;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = fileName;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+        showToast('Calendar file downloaded');
+      } else {
+        await Share.share({ title: fileName, message: ics });
+        showToast('Calendar export opened');
+      }
+      addLog('Calendar export created');
+    } catch (err) {
+      addLog(`Calendar export failed: ${compactError(err)}`);
+      Alert.alert('Could not create calendar file', compactError(err));
+    }
+  };
+
+  const patchVisitorBetaPlan = async (updater: (record: BetaPlanRecord) => BetaPlanRecord) => {
+    if (!visitorBetaPlan) return null;
+    const updated = { ...updater(visitorBetaPlan), updatedAt: Date.now() };
+    setVisitorBetaPlan(updated);
+    await saveBetaPlans((current) => [updated, ...current.filter((record) => record.id !== updated.id)]);
+    return updated;
+  };
+
+  const visitorDisplayName = () => visitorName.trim() || (testerAuthenticated ? currentTesterName : 'Guest');
+
+  const setVisitorRsvp = async (status: RsvpStatus) => {
+    const name = visitorDisplayName();
+    await patchVisitorBetaPlan((record) => ({
+      ...record,
+      participants: unique([...record.participants, name]),
+      rsvps: {
+        ...record.rsvps,
+        [name]: status,
+      },
+    }));
+    showToast(`RSVP: ${rsvpStatusLabel(status)}`);
+  };
+
+  const addVisitorSuggestion = async () => {
+    if (!visitorBetaPlan) return;
+    const value = betaSuggestionInput.trim();
+    if (!value) return;
+    const name = visitorDisplayName();
+    const slot: PlanSlot = visitorBetaPlan.intent === 'activity' ? 'activity' : 'food';
+    const suggestion: PlanningSuggestion = {
+      id: makePlanningSuggestionId(slot, value),
+      slot,
+      item: value,
+      source: 'manual',
+      addedBy: name,
+      createdAt: Date.now(),
+      votes: [],
+    };
+    await patchVisitorBetaPlan((record) => ({
+      ...record,
+      participants: unique([...record.participants, name]),
+      suggestions: [suggestion, ...record.suggestions.filter((item) => !samePlanningSuggestion(item, slot, value))],
+    }));
+    setBetaSuggestionInput('');
+    showToast('Suggestion added');
+  };
+
+  const addVisitorPlanToCalendar = async () => {
+    if (!visitorBetaPlan) return;
+    const ics = betaPlanIcs(visitorBetaPlan, betaPlanShareUrl(visitorBetaPlan));
+    const fileName = safeCalendarFileName(visitorBetaPlan.title);
+    if (Platform.OS === 'web' && typeof document !== 'undefined' && typeof URL !== 'undefined' && typeof Blob !== 'undefined') {
+      const blob = new Blob([ics], { type: 'text/calendar;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      showToast('Calendar file downloaded');
+      return;
+    }
+    await Share.share({ title: fileName, message: ics });
   };
 
   const suggestedPairings = useMemo<PairingSuggestion[]>(() => {
@@ -6251,6 +6954,16 @@ function NomNomGoApp() {
     resultMode === 'food' ? summarizeSelection('Dietary', selectedDietary) : '',
   ].filter(Boolean);
 
+  const betaPlanRsvps = activeBetaPlan?.rsvps || plan.rsvps || {};
+  const betaPlanSuggestions = activeBetaPlan?.suggestions || plan.participantSuggestions || [];
+  const betaPlanRsvpSummary = rsvpSummaryText(betaPlanRsvps);
+  const currentBetaRsvp = betaPlanRsvps[currentTesterName];
+  const activeBetaPlanOwner = activeBetaPlan?.owner || plan.owner || currentTesterName;
+  const canFinalizeActiveBetaPlan = activeBetaPlanOwner === currentTesterName;
+  const activeBetaPlanFinalLabel = activeBetaPlan ? betaPlanFinalLabel(activeBetaPlan) : plan.stops.map((stop) => cardToName(stop.item)).filter(Boolean).join(' + ');
+  const selectedDraftFinalLabel = plan.stops.map((stop) => cardToName(stop.item)).filter(Boolean).join(' + ');
+  const showBetaPlanDetail = Boolean(activeBetaPlan || plan.sharedPlanId || !homeOpen);
+
   const quickShareUsers = unique(TEST_USERS.filter((user) => user !== currentTesterName));
   const planPeopleSummary = planInvitees.length ? unique([currentTesterName, ...planInvitees]).join(', ') : 'Just Me';
 
@@ -6261,6 +6974,147 @@ function NomNomGoApp() {
           <ActivityIndicator color="#f23b35" />
           <Text style={styles.authHint}>Loading NomNomGo</Text>
         </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (visitorBetaPlan) {
+    const visitorRsvps = visitorBetaPlan.rsvps || {};
+    const visitorNameValue = visitorDisplayName();
+    const visitorRsvp = visitorRsvps[visitorNameValue];
+    const visitorFinal = betaPlanFinalLabel(visitorBetaPlan);
+    return (
+      <SafeAreaView style={[styles.safeArea, isLightMode && styles.lightScreen, isDarkMode && styles.darkScreen]} edges={['top', 'left', 'right']}>
+        <KeyboardAvoidingView
+          style={styles.keyboardAvoider}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          keyboardVerticalOffset={0}
+        >
+          <ScrollView
+            style={[styles.screen, isLightMode && styles.lightScreen, isDarkMode && styles.darkScreen]}
+            contentContainerStyle={styles.content}
+            keyboardShouldPersistTaps="handled"
+          >
+            <View style={[styles.appBanner, isDarkMode && styles.darkPanel]}>
+              <TouchableOpacity
+                style={styles.bannerBrand}
+                onPress={() => setVisitorBetaPlan(null)}
+                accessibilityRole="button"
+                accessibilityLabel="Open NomNomGo"
+              >
+                <Image
+                  source={require('./assets/nom-nom-go-mark-transparent-v19.png')}
+                  style={styles.bannerLogoMark}
+                  resizeMode="contain"
+                />
+                <View style={styles.bannerBrandText}>
+                  <View style={styles.bannerNameRow}>
+                    <Text style={[styles.bannerName, styles.bannerNameMain, isDarkMode && styles.bannerNameMainDark]} numberOfLines={1}>NomNom</Text>
+                    <Text style={[styles.bannerName, styles.bannerNameGo]} numberOfLines={1}>Go</Text>
+                  </View>
+                  <Text style={[styles.bannerTagline, isDarkMode && styles.darkMutedText]} numberOfLines={1}>Come together</Text>
+                </View>
+              </TouchableOpacity>
+            </View>
+
+            {toastMessage ? (
+              <View style={styles.toastBox}>
+                <Text style={styles.toastText}>{toastMessage}</Text>
+              </View>
+            ) : null}
+
+            <View style={[styles.visitorPlanBox, isDarkMode && styles.darkPanel]}>
+              <Text style={[styles.betaPlanEyebrow, isDarkMode && styles.darkMutedText]}>Shared Plan</Text>
+              <Text style={[styles.betaPlanTitle, isDarkMode && styles.darkText]}>{visitorBetaPlan.title}</Text>
+              <View style={styles.betaDetailGrid}>
+                <PlanLine label="When" value={`${betaPlanDateLabel(visitorBetaPlan)} | ${visitorBetaPlan.timeWindow || 'Time TBD'}`} />
+                <PlanLine label="Where" value={betaPlanLocationLabel(visitorBetaPlan)} />
+                <PlanLine label="Looking for" value={planningIntentLabel(visitorBetaPlan.intent)} />
+                <PlanLine label="RSVP" value={rsvpSummaryText(visitorRsvps)} />
+              </View>
+              {visitorBetaPlan.status === 'finalized' && visitorFinal ? (
+                <View style={styles.betaFinalBox}>
+                  <Text style={styles.betaFinalLabel}>Final plan</Text>
+                  <Text style={styles.betaFinalValue}>{visitorFinal}</Text>
+                </View>
+              ) : null}
+
+              <View style={styles.betaSection}>
+                <Text style={[styles.sessionSubhead, isDarkMode && styles.darkText]}>Your name</Text>
+                <TextInput
+                  style={[styles.input, isDarkMode && styles.darkPanelInput, Platform.OS === 'web' && styles.webInput]}
+                  value={visitorName}
+                  onChangeText={setVisitorName}
+                  placeholder={testerAuthenticated ? currentTesterName : 'Guest'}
+                  placeholderTextColor={isLightMode ? '#64748b' : '#94a3b8'}
+                  returnKeyType="done"
+                />
+              </View>
+
+              <View style={styles.betaSection}>
+                <Text style={[styles.sessionSubhead, isDarkMode && styles.darkText]}>RSVP</Text>
+                <View style={styles.rsvpButtonRow}>
+                  {RSVP_OPTIONS.map((option) => {
+                    const active = visitorRsvp === option.status;
+                    return (
+                      <TouchableOpacity
+                        key={`visitor-rsvp-${option.status}`}
+                        style={[styles.rsvpButton, isDarkMode && styles.darkChip, active && styles.rsvpButtonActive]}
+                        onPress={() => setVisitorRsvp(option.status)}
+                      >
+                        <Text style={[styles.rsvpButtonText, isDarkMode && styles.darkMutedText, active && styles.rsvpButtonTextActive]}>
+                          {option.label}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </View>
+
+              {visitorBetaPlan.status !== 'finalized' ? (
+                <View style={styles.betaSection}>
+                  <Text style={[styles.sessionSubhead, isDarkMode && styles.darkText]}>Suggest an option</Text>
+                  <View style={styles.inputRow}>
+                    <TextInput
+                      style={[styles.input, isDarkMode && styles.darkPanelInput, Platform.OS === 'web' && styles.webInput]}
+                      value={betaSuggestionInput}
+                      onChangeText={setBetaSuggestionInput}
+                      placeholder="Place or idea"
+                      placeholderTextColor={isLightMode ? '#64748b' : '#94a3b8'}
+                      returnKeyType="done"
+                      onSubmitEditing={addVisitorSuggestion}
+                    />
+                    <Button label="Suggest" onPress={addVisitorSuggestion} compact />
+                  </View>
+                </View>
+              ) : null}
+
+              <View style={styles.betaSection}>
+                <Text style={[styles.sessionSubhead, isDarkMode && styles.darkText]}>Suggestions</Text>
+                {visitorBetaPlan.suggestions.length ? visitorBetaPlan.suggestions.map((suggestion) => (
+                  <View key={suggestion.id} style={[styles.betaSuggestionRow, isDarkMode && styles.darkCard]}>
+                    <View style={styles.betaSuggestionTextBlock}>
+                      <Text style={[styles.betaSuggestionTitle, isDarkMode && styles.darkText]}>{cardToName(suggestion.item) || 'Suggestion'}</Text>
+                      <Text style={[styles.betaSuggestionMeta, isDarkMode && styles.darkMutedText]}>
+                        {suggestion.slot === 'food' ? 'Food' : 'Activity'} by {suggestion.addedBy}
+                      </Text>
+                    </View>
+                  </View>
+                )) : (
+                  <Text style={[styles.empty, isDarkMode && styles.darkMutedText]}>No suggestions yet.</Text>
+                )}
+              </View>
+
+              <View style={styles.betaActions}>
+                <Button label="Add to Calendar" onPress={addVisitorPlanToCalendar} primary compact />
+                <Button label="Open App" onPress={() => setVisitorBetaPlan(null)} compact />
+              </View>
+              <Text style={[styles.betaLocalOnlyText, isDarkMode && styles.darkMutedText]}>
+                Local beta placeholder: RSVP and suggestions are stored on this device until shared backend sync is added.
+              </Text>
+            </View>
+          </ScrollView>
+        </KeyboardAvoidingView>
       </SafeAreaView>
     );
   }
@@ -6587,12 +7441,12 @@ function NomNomGoApp() {
               ) : (
                 <>
                   <View style={styles.setupField}>
-                    <Text style={[styles.setupLabel, isDarkMode && styles.darkMutedText]}>Name</Text>
+                    <Text style={[styles.setupLabel, isDarkMode && styles.darkMutedText]}>Name optional</Text>
                     <TextInput
                       style={[styles.input, isDarkMode && styles.darkPanelInput, Platform.OS === 'web' && styles.webInput]}
                       value={planSetupName}
                       onChangeText={setPlanSetupName}
-                      placeholder="Plan name"
+                      placeholder="Dinner Tomorrow"
                       placeholderTextColor={isLightMode ? '#64748b' : '#94a3b8'}
                       returnKeyType="next"
                     />
@@ -6683,14 +7537,14 @@ function NomNomGoApp() {
                 <View style={[styles.inferredPlanTypeBox, isDarkMode && styles.darkChip]}>
                   <Text style={[styles.setupLabel, isDarkMode && styles.darkMutedText]}>Plan type</Text>
                   <Text style={[styles.inferredPlanTypeText, isDarkMode && styles.darkText]}>
-                    {planTypeLabel(planSetupInferredPlanType)} inferred
+                    {planTypeLabel(planSetupInferredPlanType)}
                   </Text>
                 </View>
               ) : null}
 
               <View style={styles.setupActions}>
                 <Button
-                  label={planSetupSubmitting ? 'Creating' : 'Create plan'}
+                  label={planSetupSubmitting ? 'Starting' : 'Start Planning'}
                   onPress={submitPlanSetup}
                   primary
                   disabled={planSetupSubmitting}
@@ -6972,6 +7826,130 @@ function NomNomGoApp() {
         style={[styles.planBox, isDarkMode && styles.darkPanel]}
         onLayout={(event) => { planBoxYRef.current = event.nativeEvent.layout.y; }}
       >
+        {showBetaPlanDetail ? (
+          <View style={[styles.betaPlanDetailCard, isDarkMode && styles.darkCard]}>
+            <View style={styles.betaPlanHeader}>
+              <View style={styles.betaPlanTitleBlock}>
+                <Text style={[styles.betaPlanEyebrow, isDarkMode && styles.darkMutedText]}>
+                  {isPlanLocked ? 'Finalized Plan' : 'Plan Detail'}
+                </Text>
+                {isPlanLocked ? (
+                  <Text style={[styles.betaPlanTitle, isDarkMode && styles.darkText]} numberOfLines={2}>
+                    {planTitle}
+                  </Text>
+                ) : (
+                  <TextInput
+                    style={[styles.betaPlanTitleInput, isDarkMode && styles.darkPanelInput]}
+                    value={plan.title ?? planTitle}
+                    onChangeText={renamePlan}
+                    placeholder={activeBetaPlan?.title || 'Plan title'}
+                    placeholderTextColor={isLightMode ? '#64748b' : '#94a3b8'}
+                  />
+                )}
+              </View>
+              <View style={[styles.betaStatusPill, isPlanLocked && styles.betaStatusPillLocked]}>
+                <Text style={styles.betaStatusText}>{isPlanLocked ? 'Final' : 'Planning'}</Text>
+              </View>
+            </View>
+
+            <View style={styles.betaDetailGrid}>
+              <PlanLine label="When" value={`${activePlanDateLabel} | ${activePlanTimeWindow || 'Time TBD'}`} />
+              <PlanLine label="Search area" value={searchLocationLabel} />
+              <PlanLine label="Start" value={startingLocationLabel} />
+              <PlanLine label="Looking for" value={planningIntentLabel(plan.intent || activeBetaPlan?.intent || 'both')} />
+              <PlanLine label="RSVP" value={betaPlanRsvpSummary} />
+            </View>
+
+            <View style={styles.betaFinalBox}>
+              <Text style={styles.betaFinalLabel}>{isPlanLocked ? 'Final place/activity' : 'Selected final option'}</Text>
+              <Text style={styles.betaFinalValue}>
+                {isPlanLocked
+                  ? activeBetaPlanFinalLabel || selectedDraftFinalLabel || 'Final option selected'
+                  : selectedDraftFinalLabel || 'Pick a food place, activity, or suggestion when ready.'}
+              </Text>
+            </View>
+
+            <View style={styles.betaSection}>
+              <View style={styles.betaSectionHeader}>
+                <Text style={[styles.sessionSubhead, isDarkMode && styles.darkText]}>Your RSVP</Text>
+                {currentBetaRsvp ? (
+                  <Text style={[styles.betaSuggestionMeta, isDarkMode && styles.darkMutedText]}>{rsvpStatusLabel(currentBetaRsvp)}</Text>
+                ) : null}
+              </View>
+              <View style={styles.rsvpButtonRow}>
+                {RSVP_OPTIONS.map((option) => {
+                  const active = currentBetaRsvp === option.status;
+                  return (
+                    <TouchableOpacity
+                      key={`owner-rsvp-${option.status}`}
+                      style={[styles.rsvpButton, isDarkMode && styles.darkChip, active && styles.rsvpButtonActive]}
+                      onPress={() => setActiveBetaRsvp(option.status)}
+                    >
+                      <Text style={[styles.rsvpButtonText, isDarkMode && styles.darkMutedText, active && styles.rsvpButtonTextActive]}>
+                        {option.label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </View>
+
+            {!isPlanLocked ? (
+              <View style={styles.betaSection}>
+                <Text style={[styles.sessionSubhead, isDarkMode && styles.darkText]}>Participant suggestion</Text>
+                <View style={styles.inputRow}>
+                  <TextInput
+                    style={[styles.input, isDarkMode && styles.darkPanelInput, Platform.OS === 'web' && styles.webInput]}
+                    value={betaSuggestionInput}
+                    onChangeText={setBetaSuggestionInput}
+                    placeholder="Place or idea"
+                    placeholderTextColor={isLightMode ? '#64748b' : '#94a3b8'}
+                    returnKeyType="done"
+                    onSubmitEditing={() => addActiveBetaSuggestion(resultMode)}
+                  />
+                  <Button label="Food" onPress={() => addActiveBetaSuggestion('food')} compact />
+                  <Button label="Activity" onPress={() => addActiveBetaSuggestion('activity')} compact />
+                </View>
+              </View>
+            ) : null}
+
+            <View style={styles.betaSection}>
+              <Text style={[styles.sessionSubhead, isDarkMode && styles.darkText]}>Suggestions</Text>
+              {betaPlanSuggestions.length ? betaPlanSuggestions.map((suggestion) => (
+                <View key={suggestion.id} style={[styles.betaSuggestionRow, isDarkMode && styles.darkCard]}>
+                  <View style={styles.betaSuggestionTextBlock}>
+                    <Text style={[styles.betaSuggestionTitle, isDarkMode && styles.darkText]}>{cardToName(suggestion.item) || 'Suggestion'}</Text>
+                    <Text style={[styles.betaSuggestionMeta, isDarkMode && styles.darkMutedText]}>
+                      {suggestion.slot === 'food' ? 'Food' : 'Activity'} by {suggestion.addedBy}
+                    </Text>
+                  </View>
+                  {!isPlanLocked && canFinalizeActiveBetaPlan ? (
+                    <Button label="Finalize" onPress={() => finalizeBetaSuggestion(suggestion)} primary compact />
+                  ) : null}
+                </View>
+              )) : (
+                <Text style={[styles.empty, isDarkMode && styles.darkMutedText]}>Suggestions will appear here.</Text>
+              )}
+            </View>
+
+            <View style={styles.betaActions}>
+              <Button label="Share Plan" onPress={shareActiveBetaPlan} primary compact />
+              <Button
+                label={isPlanLocked ? 'Finalized' : 'Finalize Plan'}
+                onPress={lockPlan}
+                compact
+                disabled={isPlanLocked || !canFinalizeActiveBetaPlan || !plan.stops.length}
+              />
+              {isPlanLocked ? (
+                <Button label="Add to Calendar" onPress={addActiveBetaPlanToCalendar} success compact />
+              ) : null}
+            </View>
+            <Text style={[styles.betaLocalOnlyText, isDarkMode && styles.darkMutedText]}>
+              Local beta placeholder: shared RSVP and suggestions use this device's local storage until backend sync is added.
+            </Text>
+          </View>
+        ) : null}
+
         {!isPlanLocked ? (
           <View style={[styles.planPeopleBox, isDarkMode && styles.darkChip]}>
             <View style={styles.planPeopleHeader}>
@@ -7030,9 +8008,9 @@ function NomNomGoApp() {
               </Text>
             </View>
             <View style={styles.planHeaderActions}>
-              <Button label="Lock In" onPress={lockPlan} primary compact />
+              <Button label="Finalize Plan" onPress={lockPlan} primary compact />
               <Button label="Save" onPress={saveCurrentPlan} compact />
-              <Button label="Invite" onPress={() => setSharePreviewOpen(true)} compact />
+              <Button label="Share Plan" onPress={() => setSharePreviewOpen(true)} compact />
               <Button label={isImportedGoogleMapsPlan && plan.sourceUrl ? 'Open route' : 'Route'} onPress={openRouteOptions} compact />
             </View>
           </View>
@@ -7126,7 +8104,7 @@ function NomNomGoApp() {
           <View style={styles.lockedPlanActions}>
             <Button label="Unlock/Edit" onPress={unlockPlan} compact />
             {!isCurrentPlanSaved ? <Button label="Save" onPress={saveCurrentPlan} compact /> : null}
-            <Button label="Invite" onPress={() => setSharePreviewOpen(true)} compact />
+            <Button label="Share Plan" onPress={() => setSharePreviewOpen(true)} compact />
             <Button label={isImportedGoogleMapsPlan && plan.sourceUrl ? 'Open route' : 'Route'} onPress={openRouteOptions} primary compact />
           </View>
           </>
@@ -7990,7 +8968,7 @@ function NomNomGoApp() {
             ) : null}
           </View>
           <View style={[styles.shareControlPanel, isDarkMode && styles.darkModalCard]}>
-            <Text style={styles.quickShareHint}>Invite NNG users</Text>
+            <Text style={styles.quickShareHint}>Share with NNG users</Text>
             <View style={styles.quickShareUserList}>
               {quickShareUsers.map((user) => {
                 const selected = planInvitees.includes(user);
@@ -8014,7 +8992,7 @@ function NomNomGoApp() {
               ))}
             </View>
             <View style={styles.shareActions}>
-              <Button label="Text contacts" onPress={sharePlan} primary />
+              <Button label="Share Plan" onPress={sharePlan} primary />
               <Button label="Close" onPress={() => setSharePreviewOpen(false)} />
             </View>
           </View>
@@ -8043,7 +9021,7 @@ function NomNomGoApp() {
               ))}
             </View>
             <View style={styles.shareActions}>
-              <Button label="Text contacts" onPress={textQuickTarget} primary />
+              <Button label="Share" onPress={textQuickTarget} primary />
               <Button label="Close" onPress={() => setQuickShareTarget(null)} />
             </View>
           </View>
@@ -8169,10 +9147,11 @@ function FilterTab({
 }
 
 function PlanLine({ label, value }: { label: string; value: string }) {
+  const isDarkMode = useColorScheme() === 'dark';
   return (
     <View style={styles.planLine}>
-      <Text style={styles.planLabel}>{label}:</Text>
-      <Text style={styles.planValue}>{value}</Text>
+      <Text style={[styles.planLabel, isDarkMode && styles.darkMutedText]}>{label}:</Text>
+      <Text style={[styles.planValue, isDarkMode && styles.darkText]}>{value}</Text>
     </View>
   );
 }
@@ -9439,6 +10418,178 @@ const styles = StyleSheet.create({
     padding: 14,
     marginBottom: 16,
   },
+  visitorPlanBox: {
+    borderWidth: 1,
+    borderColor: '#66c5a8',
+    borderRadius: 8,
+    backgroundColor: '#fffdf8',
+    padding: 14,
+    gap: 14,
+  },
+  betaPlanDetailCard: {
+    borderWidth: 1,
+    borderColor: '#66c5a8',
+    borderRadius: 8,
+    backgroundColor: '#f8fffc',
+    padding: 12,
+    gap: 12,
+    marginBottom: 14,
+  },
+  betaPlanHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  betaPlanTitleBlock: {
+    flex: 1,
+    minWidth: 0,
+    gap: 4,
+  },
+  betaPlanEyebrow: {
+    color: '#526170',
+    fontSize: 11,
+    lineHeight: 15,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+  },
+  betaPlanTitle: {
+    color: '#071827',
+    fontSize: 22,
+    lineHeight: 27,
+    fontWeight: '900',
+  },
+  betaPlanTitleInput: {
+    minHeight: 42,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#eadccb',
+    backgroundColor: '#fffdf8',
+    color: '#071827',
+    paddingHorizontal: 10,
+    fontSize: 20,
+    lineHeight: 24,
+    fontWeight: '900',
+  },
+  betaStatusPill: {
+    borderRadius: 999,
+    backgroundColor: '#fff0d1',
+    borderWidth: 1,
+    borderColor: '#ffc84a',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  betaStatusPillLocked: {
+    backgroundColor: '#dff7ef',
+    borderColor: '#66c5a8',
+  },
+  betaStatusText: {
+    color: '#071827',
+    fontSize: 11,
+    lineHeight: 14,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+  },
+  betaDetailGrid: {
+    gap: 2,
+  },
+  betaFinalBox: {
+    borderWidth: 1,
+    borderColor: '#eadccb',
+    borderRadius: 8,
+    backgroundColor: '#fff7ed',
+    padding: 10,
+    gap: 3,
+  },
+  betaFinalLabel: {
+    color: '#526170',
+    fontSize: 11,
+    lineHeight: 15,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+  },
+  betaFinalValue: {
+    color: '#071827',
+    fontSize: 15,
+    lineHeight: 20,
+    fontWeight: '900',
+  },
+  betaSection: {
+    gap: 8,
+  },
+  betaSectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 8,
+  },
+  rsvpButtonRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  rsvpButton: {
+    minHeight: 38,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#eadccb',
+    backgroundColor: '#fffdf8',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    justifyContent: 'center',
+  },
+  rsvpButtonActive: {
+    borderColor: '#66c5a8',
+    backgroundColor: '#178f79',
+  },
+  rsvpButtonText: {
+    color: '#071827',
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '900',
+  },
+  rsvpButtonTextActive: {
+    color: '#fffaf3',
+  },
+  betaSuggestionRow: {
+    borderWidth: 1,
+    borderColor: '#eadccb',
+    borderRadius: 8,
+    backgroundColor: '#fffdf8',
+    padding: 10,
+    gap: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  betaSuggestionTextBlock: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  betaSuggestionTitle: {
+    color: '#071827',
+    fontSize: 14,
+    lineHeight: 18,
+    fontWeight: '900',
+  },
+  betaSuggestionMeta: {
+    color: '#526170',
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '800',
+  },
+  betaActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  betaLocalOnlyText: {
+    color: '#526170',
+    fontSize: 11,
+    lineHeight: 15,
+    fontWeight: '800',
+  },
   planPeopleBox: {
     borderWidth: 1,
     borderColor: '#c7eadf',
@@ -10291,7 +11442,7 @@ const styles = StyleSheet.create({
     marginBottom: 5,
   },
   planLabel: {
-    width: 72,
+    width: 96,
     color: '#178f79',
     fontWeight: '800',
   },
@@ -10307,6 +11458,7 @@ const styles = StyleSheet.create({
   },
   inputRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 8,
     alignItems: 'center',
     marginTop: 6,
