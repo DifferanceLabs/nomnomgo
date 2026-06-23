@@ -37,6 +37,7 @@ import {
 } from './routeHandoff';
 
 type PlanSlot = 'food' | 'activity';
+type NowExperienceMode = 'closed' | 'home' | 'food' | 'activity';
 type StopTravelMode = 'car' | 'walk' | 'bike' | 'train' | 'plane';
 type PairingSuggestion = {
   label: string;
@@ -199,6 +200,17 @@ type UsageMeter = {
 type QuickShareTarget =
   | { kind: 'card'; slot: PlanSlot; card: PlaceCard }
   | { kind: 'stop'; stop: ItineraryStop; index: number };
+
+type NowDestinationSelection = {
+  slot: PlanSlot;
+  item: PlaceCard | string;
+  category: string;
+};
+
+type PeoplePickerGroup = {
+  name: string;
+  members: string[];
+};
 
 type SavedPlan = {
   id: string;
@@ -389,6 +401,29 @@ const DEFAULT_FOOD_SELECTIONS = ['Any'];
 const DEFAULT_ACTIVITY_SELECTIONS = ['Any'];
 const DEFAULT_DIETARY_SELECTIONS = ['Any'];
 const FOOD_QUICK_FILTERS = ['Any', 'Open now', 'Close by', 'No Fast Food'];
+const NOW_FOOD_CATEGORIES = ['Restaurants', 'Coffee', 'Dessert', 'Breakfast', 'Lunch', 'Dinner'];
+const NOW_ACTIVITY_CATEGORIES = ['Outdoor', 'Family', 'Arcade', 'Bowling', 'Movie', 'Shopping', 'Entertainment'];
+const NOW_FOOD_CATEGORY_SELECTIONS: Record<string, string[]> = {
+  Restaurants: ['Any'],
+  Coffee: ['Coffee'],
+  Dessert: ['Dessert'],
+  Breakfast: ['Breakfast'],
+  Lunch: ['Any'],
+  Dinner: ['Any'],
+};
+const NOW_ACTIVITY_CATEGORY_SELECTIONS: Record<string, string[]> = {
+  Outdoor: ['Park'],
+  Family: ['Any'],
+  Arcade: ['Arcade'],
+  Bowling: ['Bowling'],
+  Movie: ['Movies'],
+  Shopping: ['Shopping'],
+  Entertainment: ['Events'],
+};
+const PEOPLE_PICKER_GROUPS: PeoplePickerGroup[] = [
+  { name: 'Dinner Crew', members: ['Alex', 'Jordan'] },
+  { name: 'Weekend Group', members: ['Taylor', 'Morgan'] },
+];
 const CUISINES = [
   'Pizza',
   'Burgers',
@@ -2301,6 +2336,36 @@ function titleDatePhrase(windowId: DateWindowId, dateStart?: string, customRange
   return weekdayTitle(dateStart) || shortDateToken(dateStart) || 'Soon';
 }
 
+function nowFoodSelectionsForCategory(category: string) {
+  return NOW_FOOD_CATEGORY_SELECTIONS[category] || DEFAULT_FOOD_SELECTIONS;
+}
+
+function nowActivitySelectionsForCategory(category: string) {
+  return NOW_ACTIVITY_CATEGORY_SELECTIONS[category] || DEFAULT_ACTIVITY_SELECTIONS;
+}
+
+function nowFoodTitlePrefix(category: string, now = new Date()) {
+  if (['Coffee', 'Dessert', 'Breakfast', 'Lunch', 'Dinner'].includes(category)) return category;
+  const hour = now.getHours();
+  if (hour < 11) return 'Breakfast';
+  if (hour < 16) return 'Lunch';
+  return 'Dinner';
+}
+
+function nowActivityTitlePrefix(category: string) {
+  if (category === 'Movie') return 'Movie';
+  if (['Arcade', 'Bowling', 'Shopping'].includes(category)) return category;
+  if (category === 'Outdoor') return 'Outdoor stop';
+  if (category === 'Family') return 'Family outing';
+  return 'Activity';
+}
+
+function contextualNowPlanTitle(slot: PlanSlot, item: PlaceCard | string, category: string) {
+  const destination = cardToName(item) || (slot === 'food' ? 'a place to eat' : 'an activity');
+  const prefix = slot === 'food' ? nowFoodTitlePrefix(category) : nowActivityTitlePrefix(category);
+  return `${prefix} at ${destination}`;
+}
+
 function defaultBetaPlanTitle({
   intent,
   dateWindow,
@@ -2326,7 +2391,7 @@ function defaultBetaPlanTitle({
   if (timePreference === 'Late night') return `${titleDate} Night Out`;
   if (intent === 'activity') return `${titleDate} Activity`;
   if (intent === 'food') return `${titleDate} Food`;
-  return `Local Plan ${shortDateToken(planDateStart) || dateTitle}`;
+  return `${titleDate || dateTitle} Outing`;
 }
 
 function rsvpStatusLabel(status: RsvpStatus) {
@@ -2725,6 +2790,13 @@ function NomNomGoApp() {
   const [planSetupStartingLocation, setPlanSetupStartingLocation] = useState('Current location');
   const [planSetupInvitees, setPlanSetupInvitees] = useState<string[]>([]);
   const [planSetupSubmitting, setPlanSetupSubmitting] = useState(false);
+  const [nowMode, setNowMode] = useState<NowExperienceMode>('closed');
+  const [nowFoodCategory, setNowFoodCategory] = useState(NOW_FOOD_CATEGORIES[0]);
+  const [nowActivityCategory, setNowActivityCategory] = useState(NOW_ACTIVITY_CATEGORIES[0]);
+  const [nowSelectedPeople, setNowSelectedPeople] = useState<string[]>([]);
+  const [nowPeoplePickerOpen, setNowPeoplePickerOpen] = useState(false);
+  const [nowSelectedDestination, setNowSelectedDestination] = useState<NowDestinationSelection | null>(null);
+  const [nowPlanCreating, setNowPlanCreating] = useState(false);
   const [suggestedPairingsOpen, setSuggestedPairingsOpen] = useState(true);
   const [suggestedPairingsExpanded, setSuggestedPairingsExpanded] = useState(false);
   const [toastMessage, setToastMessage] = useState('');
@@ -2773,6 +2845,9 @@ function NomNomGoApp() {
   });
   const filteredCards = resultFilter === 'favorites' ? favoriteOnlyCards : cards;
   const shownCards = filteredCards.slice(0, visibleCount);
+  const nowExperienceActive = nowMode !== 'closed';
+  const nowDiscovering = nowMode === 'food' || nowMode === 'activity';
+  const nowCategoryLabel = nowMode === 'food' ? nowFoodCategory : nowMode === 'activity' ? nowActivityCategory : '';
   const foodItems = planItems(plan, 'food');
   const activityItems = planItems(plan, 'activity');
   const hasFood = foodItems.length > 0;
@@ -2781,7 +2856,15 @@ function NomNomGoApp() {
   const activeActivity = hasActivity;
   const activeStopCount = plan.stops.length;
   const hasAnyActiveStop = activeFood || activeActivity;
-  const titleForResults = resultMode === 'food' ? 'Food places' : activeFood ? 'Activities near your food' : 'Activity options';
+  const titleForResults = nowDiscovering
+    ? resultMode === 'food'
+      ? `Nearby ${nowFoodCategory.toLowerCase()}`
+      : `Nearby ${nowActivityCategory.toLowerCase()}`
+    : resultMode === 'food'
+      ? 'Food places'
+      : activeFood
+        ? 'Activities near your food'
+        : 'Activity options';
   const selectedCards = resultMode === 'food' ? foodItems : activityItems;
   const dateWindowOptions = useMemo(() => DATE_WINDOW_IDS.map((id) => ({ id, label: dateWindowLabel(id, new Date(), customDateRange) })), [customDateRange]);
   const setupDateWindowOptions = useMemo(() => DATE_WINDOW_IDS.map((id) => ({
@@ -3153,6 +3236,7 @@ function NomNomGoApp() {
     setAccountSettingsOpen(false);
     setPeopleGroupsOpen(false);
     setPlanPeopleOpen(false);
+    setNowPeoplePickerOpen(false);
     setSharePreviewOpen(false);
     setPlanPreviewOpen(false);
     setQuickShareTarget(null);
@@ -3166,6 +3250,8 @@ function NomNomGoApp() {
   const openHome = () => {
     closeTransientSurfaces();
     setHomeOpen(true);
+    setNowMode('closed');
+    setNowSelectedDestination(null);
     setSavedPlansLandingOpen(false);
     setPlanSetupOpen(false);
     setSavedPlansOpen(false);
@@ -3192,6 +3278,7 @@ function NomNomGoApp() {
     routeOriginLabel,
     routeStartLocation: nextRouteStartLocation,
     participants,
+    stops,
   }: {
     source: BetaPlanRecord['source'];
     title?: string;
@@ -3207,6 +3294,7 @@ function NomNomGoApp() {
     routeOriginLabel?: string;
     routeStartLocation?: LatLon;
     participants?: string[];
+    stops?: ItineraryStop[];
   }) => {
     const stamp = Date.now();
     const resolvedTitle = title?.trim() || defaultBetaPlanTitle({
@@ -3232,7 +3320,7 @@ function NomNomGoApp() {
       planDateEnd,
       timeWindow,
       intent,
-      stops: [],
+      stops: stops || [],
       suggestions: [],
       finalizedSuggestionIds: [],
       rsvps: { [currentTesterName]: 'going' },
@@ -3247,67 +3335,27 @@ function NomNomGoApp() {
 
   const startNowPlan = async () => {
     closeTransientSurfaces();
-    const effectiveDateWindow: DateWindowId = 'today';
-    const nextDateRange = dateRangeKeysForWindow(effectiveDateWindow, null, new Date());
-    const nextPlanType = inferPlanType({
-      planDateStart: nextDateRange.start,
-      planDateEnd: nextDateRange.end,
-      destinationLabel: '',
-    });
-    const betaRecord = await createBetaPlanRecord({
-      source: 'now',
-      dateWindow: effectiveDateWindow,
-      customDateRange: null,
-      planDateStart: nextDateRange.start,
-      planDateEnd: nextDateRange.end,
-      timeWindow: undefined,
-      timePreference: 'Now',
-      intent: 'both',
-      locationLabel: 'Current location',
-      routeOriginLabel: 'Current location',
-    });
+    if (activePlanningSession) await saveActivePlanningSession(null);
+    if (activeBetaPlanId) await saveActiveBetaPlan(null);
 
+    const effectiveDateWindow: DateWindowId = 'today';
     routeOriginOverrideRef.current = '';
     setRouteOriginOverride('');
     setSearchLocationOverride('');
-    setLocation(null);
     setSearchLocation(null);
     setLastSearchLocationCenter(null);
-    await AsyncStorage.removeItem(STORAGE_LOCATION);
     await AsyncStorage.removeItem(STORAGE_SEARCH_LOCATION);
 
-    if (activePlanningSession) await saveActivePlanningSession(null);
     selectedDateWindowRef.current = effectiveDateWindow;
     customDateRangeRef.current = null;
     setSelectedDateWindow(effectiveDateWindow);
     setCustomDateRange(null);
     setSelectedTime('Now');
     setResultMode('food');
-    setPlan({
-      ...EMPTY_PLAN,
-      title: betaRecord.title,
-      sharedPlanId: betaRecord.id,
-      owner: betaRecord.owner,
-      intent: betaRecord.intent,
-      status: 'draft',
-      dateWindow: effectiveDateWindow,
-      customDateRange: null,
-      planDateStart: nextDateRange.start,
-      planDateEnd: nextDateRange.end,
-      planType: nextPlanType,
-      timeWindow: undefined,
-      routeOriginLabel: 'Current location',
-      routeStartLocation: undefined,
-      searchLocation: undefined,
-      searchLocationLabel: 'Current location',
-      roadTripMode: false,
-      vehicleProfile: undefined,
-      chargingStops: [],
-      nearbyPlacesDuringCharging: [],
-      rsvps: betaRecord.rsvps,
-      participantSuggestions: [],
-      finalizedSuggestionIds: [],
-    });
+    setSelectedFoods([...DEFAULT_FOOD_SELECTIONS]);
+    setSelectedActivities([...DEFAULT_ACTIVITY_SELECTIONS]);
+    setSelectedDietary([...DEFAULT_DIETARY_SELECTIONS]);
+    setPlan(EMPTY_PLAN);
     setPlanTimes({});
     setArrivalTimes({});
     setPendingInsertIndex(null);
@@ -3318,6 +3366,7 @@ function NomNomGoApp() {
     setSearchNotice('');
     setLoading(false);
     setHasInitiatedSearch(false);
+    setResultFilter('all');
     setPlanSetupOpen(false);
     setHomeOpen(false);
     setSavedPlansLandingOpen(false);
@@ -3325,12 +3374,68 @@ function NomNomGoApp() {
     setPlanSettingsOpen(false);
     setPreferencesOpen(false);
     setAdvancedPreferencesOpen(false);
-    scrollToPlan();
-    addLog('Home action: now current location draft');
+    setNowMode('home');
+    setNowFoodCategory(NOW_FOOD_CATEGORIES[0]);
+    setNowActivityCategory(NOW_ACTIVITY_CATEGORIES[0]);
+    setNowSelectedPeople([]);
+    setNowSelectedDestination(null);
+    setNowPeoplePickerOpen(false);
+    scrollToTop();
+    addLog('Home action: now discovery');
+  };
+
+  const startNowDiscovery = async (slot: PlanSlot, category?: string) => {
+    const nextCategory = category || (slot === 'food' ? nowFoodCategory : nowActivityCategory);
+    const foodSelections = slot === 'food' ? nowFoodSelectionsForCategory(nextCategory) : selectedFoods;
+    const activitySelections = slot === 'activity' ? nowActivitySelectionsForCategory(nextCategory) : selectedActivities;
+
+    closeTransientSurfaces();
+    setNowPeoplePickerOpen(false);
+    setNowMode(slot);
+    setNowSelectedDestination(null);
+    setResultMode(slot);
+    setResultFilter('all');
+    setSelectedTime('Now');
+    selectedDateWindowRef.current = 'today';
+    customDateRangeRef.current = null;
+    setSelectedDateWindow('today');
+    setCustomDateRange(null);
+    setPreferencesOpen(false);
+    setAdvancedPreferencesOpen(false);
+
+    if (slot === 'food') {
+      setNowFoodCategory(nextCategory);
+      setSelectedFoods(foodSelections);
+      setSelectedDietary([...DEFAULT_DIETARY_SELECTIONS]);
+    } else {
+      setNowActivityCategory(nextCategory);
+      setSelectedActivities(activitySelections);
+    }
+
+    await searchForSlot(slot, true, false, undefined, {
+      foodSelections,
+      activitySelections,
+      dietarySelections: [...DEFAULT_DIETARY_SELECTIONS],
+    });
+  };
+
+  const toggleNowPerson = (user: string) => {
+    setNowSelectedPeople((prev) => prev.includes(user) ? prev.filter((item) => item !== user) : unique([...prev, user]));
+  };
+
+  const toggleNowGroup = (group: PeoplePickerGroup) => {
+    setNowSelectedPeople((prev) => {
+      const allSelected = group.members.every((member) => prev.includes(member));
+      return allSelected
+        ? prev.filter((item) => !group.members.includes(item))
+        : unique([...prev, ...group.members]);
+    });
   };
 
   const openPlanSetup = (timing: 'now' | 'later') => {
     closeTransientSurfaces();
+    setNowMode('closed');
+    setNowSelectedDestination(null);
     const nextDateWindow: DateWindowId = timing === 'now' ? 'today' : 'tomorrow';
     const nextTime = timing === 'now' ? 'Now' : 'Dinner';
     const defaultCustomStart = formatDateInput(new Date());
@@ -3501,6 +3606,8 @@ function NomNomGoApp() {
 
   const openSavedPlansHomeAction = () => {
     closeTransientSurfaces();
+    setNowMode('closed');
+    setNowSelectedDestination(null);
     setPlanSetupOpen(false);
     setHomeOpen(false);
     setSavedPlansLandingOpen(true);
@@ -3514,6 +3621,8 @@ function NomNomGoApp() {
 
   const openPeopleGroupsHomeAction = () => {
     closeTransientSurfaces();
+    setNowMode('closed');
+    setNowSelectedDestination(null);
     if (GROUP_SESSION_ENABLED) {
       setPlanSetupOpen(false);
       setHomeOpen(false);
@@ -5636,6 +5745,15 @@ function NomNomGoApp() {
     return nextStop;
   };
 
+  const selectNowDestination = (slot: PlanSlot, item: PlaceCard | string) => {
+    const category = slot === 'food' ? nowFoodCategory : nowActivityCategory;
+    setNowSelectedDestination({ slot, item, category });
+    setManualSearch('');
+    setManualSearchSubmitted(false);
+    addLog(`NOW destination selected: ${cardToName(item) || slot}`);
+    showToast(`${cardToName(item) || 'Destination'} selected`);
+  };
+
   const selectCard = async (card: PlaceCard) => {
     if (isPlanLocked && !planningSuggestionMode) {
       showToast('Unlock the plan to edit it');
@@ -5652,6 +5770,11 @@ function NomNomGoApp() {
       await addPlanningSuggestion(resultMode, card, planningSourceForCard(resultMode, card));
       setManualSearch('');
       setManualSearchSubmitted(false);
+      return;
+    }
+
+    if (nowDiscovering) {
+      selectNowDestination(resultMode, card);
       return;
     }
 
@@ -5901,6 +6024,110 @@ function NomNomGoApp() {
       setPlan((prev) => ({ ...prev, sharedPlanId: nextRecord.id, owner: nextRecord.owner }));
     }
     return nextRecord;
+  };
+
+  const createNowPlanFromSelection = async () => {
+    if (!nowSelectedDestination || nowPlanCreating) return;
+
+    setNowPlanCreating(true);
+    try {
+      const { slot, item, category } = nowSelectedDestination;
+      const effectiveDateWindow: DateWindowId = 'today';
+      const nextDateRange = dateRangeKeysForWindow(effectiveDateWindow, null, new Date());
+      const nextTitle = contextualNowPlanTitle(slot, item, category);
+      const selectedSearchLocation = lastSearchLocationCenter || activeSearchLocation || searchLocation || location || undefined;
+      const selectedLocationLabel = selectedSearchLocation?.label || searchLocationLabel || 'Current location';
+      const nextStop: ItineraryStop = {
+        key: makeStopKey(slot, item),
+        slot,
+        item,
+        featureOptions: [],
+        selectedFeatures: [],
+        featuresExpanded: false,
+      };
+      const nextPlanType = inferPlanType({
+        planDateStart: nextDateRange.start,
+        planDateEnd: nextDateRange.end,
+        destinationLabel: selectedLocationLabel,
+        title: nextTitle,
+      });
+      const betaRecord = await createBetaPlanRecord({
+        source: 'now',
+        title: nextTitle,
+        dateWindow: effectiveDateWindow,
+        customDateRange: null,
+        planDateStart: nextDateRange.start,
+        planDateEnd: nextDateRange.end,
+        timeWindow: undefined,
+        timePreference: 'Now',
+        intent: slot,
+        locationLabel: selectedLocationLabel,
+        searchLocation: selectedSearchLocation,
+        routeOriginLabel: startingLocationLabel,
+        routeStartLocation,
+        participants: nowSelectedPeople,
+        stops: [cloneStopForSavedPlan(nextStop)],
+      });
+
+      selectedDateWindowRef.current = effectiveDateWindow;
+      customDateRangeRef.current = null;
+      setSelectedDateWindow(effectiveDateWindow);
+      setCustomDateRange(null);
+      setSelectedTime('Now');
+      setResultMode(slot);
+      setPlan({
+        ...EMPTY_PLAN,
+        title: nextTitle,
+        sharedPlanId: betaRecord.id,
+        owner: betaRecord.owner,
+        intent: slot,
+        status: 'draft',
+        stops: [nextStop],
+        dateWindow: effectiveDateWindow,
+        customDateRange: null,
+        planDateStart: nextDateRange.start,
+        planDateEnd: nextDateRange.end,
+        planType: nextPlanType,
+        timeWindow: undefined,
+        routeOriginLabel: startingLocationLabel,
+        routeStartLocation,
+        searchLocation: selectedSearchLocation,
+        searchLocationLabel: selectedLocationLabel,
+        roadTripMode: false,
+        vehicleProfile: undefined,
+        invitees: nowSelectedPeople,
+        chargingStops: [],
+        nearbyPlacesDuringCharging: [],
+        rsvps: betaRecord.rsvps,
+        participantSuggestions: [],
+        finalizedSuggestionIds: [],
+      });
+      setPlanTimes({});
+      setArrivalTimes({});
+      setPendingInsertIndex(null);
+      setSelectedStopKey(nextStop.key);
+      setTimeEditorKey(null);
+      setNowMode('closed');
+      setNowSelectedDestination(null);
+      setPlanSetupOpen(false);
+      setHomeOpen(false);
+      setSavedPlansLandingOpen(false);
+      setSavedPlansOpen(false);
+      setPlanSettingsOpen(false);
+      setPreferencesOpen(false);
+      setAdvancedPreferencesOpen(false);
+      setCards([]);
+      setHasInitiatedSearch(false);
+      void refreshStopFeatures(nextStop.key, slot, item);
+      scrollToPlan();
+      addLog(`NOW plan created: ${nextTitle}`);
+      showToast('Plan created');
+    } catch (err) {
+      addLog(`NOW plan creation failed: ${compactError(err)}`);
+      Alert.alert('Could not create plan', compactError(err));
+    } finally {
+      setNowPlanCreating(false);
+    }
   };
 
   const renamePlan = (title: string) => {
@@ -6267,6 +6494,9 @@ function NomNomGoApp() {
     setTimeEditorKey(null);
     setHasInitiatedSearch(false);
     setCards([]);
+    setNowMode('closed');
+    setNowSelectedDestination(null);
+    setNowPeoplePickerOpen(false);
     setHomeOpen(false);
     setSavedPlansLandingOpen(false);
     setPlanSetupOpen(false);
@@ -6375,6 +6605,17 @@ function NomNomGoApp() {
       return;
     }
 
+    if (nowDiscovering) {
+      selectNowDestination(slot, card);
+      setResultMode(slot);
+      setCards((prev) => {
+        const existing = prev.some((item) => item.id === card.id);
+        return existing ? prev : [card, ...prev];
+      });
+      setVisibleCount(PAGE_SIZE);
+      return;
+    }
+
     const alreadySelected = plan.stops.some((stop) => stop.slot === slot && cardToId(stop.item) === card.id);
     const insertedStop = !alreadySelected ? insertStopIntoPlan(slot, card) : undefined;
     setResultMode(slot);
@@ -6415,6 +6656,12 @@ function NomNomGoApp() {
         addLog(`Manual ${slot} suggested without Places lookup: ${value}`);
         return;
       }
+      if (nowDiscovering) {
+        selectNowDestination(slot, value);
+        addLog(`Manual NOW ${slot} selected without Places lookup: ${value}`);
+        notifyGooglePlacesMissing('Manual lookup skipped: Google Places key missing', 'Use Create Plan when you are ready.');
+        return;
+      }
       const insertedStop = insertStopIntoPlan(slot, value);
       if (insertedStop) scrollToPlanStop(insertedStop.key);
       setManualSearch('');
@@ -6437,6 +6684,12 @@ function NomNomGoApp() {
           await addPlanningSuggestion(slot, value, 'manual');
           setManualSearch('');
           addLog(`Manual ${slot} suggestion added without match: ${value}`);
+          return;
+        }
+        if (nowDiscovering) {
+          selectNowDestination(slot, value);
+          addLog(`Manual NOW ${slot} selected without match: ${value}`);
+          Alert.alert('Place not found', `I could not load details for "${value}", but you can still create a plan with it.`);
           return;
         }
         const insertedStop = insertStopIntoPlan(slot, value);
@@ -6468,6 +6721,12 @@ function NomNomGoApp() {
         await addPlanningSuggestion(slot, value, 'manual');
         setManualSearch('');
         addLog(`Manual ${slot} suggestion added after lookup failure: ${compactError(err)}`);
+        return;
+      }
+      if (nowDiscovering) {
+        selectNowDestination(slot, value);
+        addLog(`Manual NOW ${slot} selected after lookup failure: ${compactError(err)}`);
+        Alert.alert('Manual lookup failed', `I could not load details for "${value}", but you can still create a plan with it.`);
         return;
       }
       const insertedStop = insertStopIntoPlan(slot, value);
@@ -6973,11 +7232,16 @@ function NomNomGoApp() {
   const canFinalizeActiveBetaPlan = activeBetaPlanOwner === currentTesterName;
   const activeBetaPlanFinalLabel = activeBetaPlan ? betaPlanFinalLabel(activeBetaPlan) : plan.stops.map((stop) => cardToName(stop.item)).filter(Boolean).join(' + ');
   const selectedDraftFinalLabel = plan.stops.map((stop) => cardToName(stop.item)).filter(Boolean).join(' + ');
-  const showBetaPlanDetail = Boolean(activeBetaPlan || plan.sharedPlanId || !homeOpen);
+  const activePlanRecord = activeBetaPlan || betaPlans.find((record) => record.id === plan.sharedPlanId) || null;
+  const showNowLightweightPlan = Boolean(activePlanRecord?.source === 'now' && hasAnyActiveStop && !isPlanLocked && !nowExperienceActive);
+  const showBetaPlanDetail = Boolean((activeBetaPlan || plan.sharedPlanId || !homeOpen) && !nowExperienceActive && !showNowLightweightPlan);
+  const showDiscoveryTools = !savedPlansLandingOpen && !isPlanLocked && (!nowExperienceActive || nowDiscovering) && !showNowLightweightPlan;
+  const showPlanningTools = !savedPlansLandingOpen && !isPlanLocked && !nowExperienceActive && !showNowLightweightPlan;
 
   const quickShareUsers = unique(TEST_USERS.filter((user) => user !== currentTesterName));
   const planPeopleSummary = planInvitees.length ? unique([currentTesterName, ...planInvitees]).join(', ') : 'Just Me';
   const planSetupPeopleSummary = planSetupInvitees.length ? unique([currentTesterName, ...planSetupInvitees]).join(', ') : 'Just me';
+  const nowPeopleSummary = nowSelectedPeople.length ? unique([currentTesterName, ...nowSelectedPeople]).join(', ') : 'Just me';
   const activePlanIntentLabel = planningIntentLabel(plan.intent || activeBetaPlan?.intent || 'both');
   const activePlanGoingCount = rsvpCountsFor(betaPlanRsvps).going;
   const activePlanSummaryLine = [
@@ -7618,6 +7882,88 @@ function NomNomGoApp() {
       {!savedPlansLandingOpen ? (
       <>
 
+      {nowExperienceActive ? (
+        <View style={[styles.nowBox, isLightMode && styles.lightPanel, isDarkMode && styles.darkPanel]}>
+          <View style={styles.nowHeaderRow}>
+            <View style={styles.nowHeaderTextBlock}>
+              <Text style={[styles.nowTitle, isDarkMode && styles.darkText]}>
+                {nowMode === 'home' ? 'What do you want to do?' : resultMode === 'food' ? 'Food nearby' : 'Activities nearby'}
+              </Text>
+              <Text style={[styles.nowSubtitle, isDarkMode && styles.darkMutedText]} numberOfLines={1}>
+                {nowMode === 'home' ? nowPeopleSummary : `${nowCategoryLabel} | ${nowPeopleSummary}`}
+              </Text>
+            </View>
+            <Button label="Back" onPress={openHome} compact />
+          </View>
+
+          {nowMode === 'home' ? (
+            <View style={styles.nowActionGrid}>
+              <TouchableOpacity
+                style={[styles.nowActionCard, styles.nowFoodAction]}
+                onPress={() => { void startNowDiscovery('food', nowFoodCategory); }}
+                accessibilityRole="button"
+                accessibilityLabel="Food"
+              >
+                <Ionicons name="restaurant-outline" size={28} color="#fffaf3" />
+                <Text style={[styles.nowActionTitle, styles.nowActionTitleLight]}>Food</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.nowActionCard, styles.nowActivityAction]}
+                onPress={() => { void startNowDiscovery('activity', nowActivityCategory); }}
+                accessibilityRole="button"
+                accessibilityLabel="Activity"
+              >
+                <Ionicons name="sparkles-outline" size={28} color="#071827" />
+                <Text style={styles.nowActionTitle}>Activity</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.nowActionCard, styles.nowPeopleAction]}
+                onPress={() => setNowPeoplePickerOpen(true)}
+                accessibilityRole="button"
+                accessibilityLabel="Include Someone"
+              >
+                <Ionicons name="people-outline" size={28} color="#071827" />
+                <Text style={styles.nowActionTitle}>Include Someone</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <View style={styles.nowDiscoveryPanel}>
+              <View style={styles.nowModeSwitcher}>
+                <FilterTab label="Food" active={nowMode === 'food'} onPress={() => { void startNowDiscovery('food', nowFoodCategory); }} />
+                <FilterTab label="Activity" active={nowMode === 'activity'} onPress={() => { void startNowDiscovery('activity', nowActivityCategory); }} />
+                <TouchableOpacity
+                  style={[styles.nowPeopleMiniButton, isDarkMode && styles.darkChip]}
+                  onPress={() => setNowPeoplePickerOpen(true)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Include Someone"
+                >
+                  <Ionicons name="people-outline" size={17} color={isDarkMode ? '#fffaf3' : '#071827'} />
+                  <Text style={[styles.nowPeopleMiniText, isDarkMode && styles.darkMutedText]} numberOfLines={1}>
+                    {nowSelectedPeople.length ? `${nowSelectedPeople.length + 1}` : 'Add'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+              <View style={styles.nowCategoryWrap}>
+                {(nowMode === 'food' ? NOW_FOOD_CATEGORIES : NOW_ACTIVITY_CATEGORIES).map((category) => {
+                  const active = nowMode === 'food' ? nowFoodCategory === category : nowActivityCategory === category;
+                  return (
+                    <TouchableOpacity
+                      key={`now-category-${category}`}
+                      style={[styles.nowCategoryChip, isDarkMode && styles.darkChip, active && styles.nowCategoryChipActive]}
+                      onPress={() => { void startNowDiscovery(nowMode === 'food' ? 'food' : 'activity', category); }}
+                    >
+                      <Text style={[styles.nowCategoryText, isDarkMode && styles.darkMutedText, active && styles.nowCategoryTextActive]}>
+                        {category}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </View>
+          )}
+        </View>
+      ) : null}
+
       {GROUP_SESSION_ENABLED && !activePlanningSession && sessionBuilderOpen ? (
         <View style={[styles.sessionBox, isDarkMode && styles.darkPanel]}>
           <View style={styles.sessionHeaderRow}>
@@ -7881,10 +8227,45 @@ function NomNomGoApp() {
         </View>
       ) : null}
 
+      {!nowExperienceActive ? (
       <View
         style={[styles.planBox, isDarkMode && styles.darkPanel]}
         onLayout={(event) => { planBoxYRef.current = event.nativeEvent.layout.y; }}
       >
+        {showNowLightweightPlan ? (
+          <View style={[styles.nowCreatedPlanCard, isDarkMode && styles.darkCard]}>
+            <View style={styles.nowCreatedHeader}>
+              <View style={styles.nowHeaderTextBlock}>
+                <Text style={[styles.nowCreatedEyebrow, isDarkMode && styles.darkMutedText]}>Now</Text>
+                <Text style={[styles.nowCreatedTitle, isDarkMode && styles.darkText]} numberOfLines={2}>
+                  {planTitle}
+                </Text>
+                <Text style={[styles.nowCreatedMeta, isDarkMode && styles.darkMutedText]} numberOfLines={2}>
+                  {[searchLocationLabel, planPeopleSummary].filter(Boolean).join(' | ')}
+                </Text>
+              </View>
+              <View style={styles.nowCreatedIcon}>
+                <Ionicons name={plan.stops[0]?.slot === 'food' ? 'restaurant-outline' : 'sparkles-outline'} size={24} color="#071827" />
+              </View>
+            </View>
+            {plan.stops[0] ? (
+              <TouchableOpacity style={styles.nowDestinationRow} onPress={() => openStopMaps(plan.stops[0])}>
+                <Text style={styles.nowDestinationName} numberOfLines={1}>
+                  {cardToName(plan.stops[0].item) || 'Destination'}
+                </Text>
+                <Ionicons name="map-outline" size={18} color="#178f79" />
+              </TouchableOpacity>
+            ) : null}
+            <View style={styles.nowCreatedActions}>
+              {plan.stops.length ? (
+                <Button label={isImportedGoogleMapsPlan && plan.sourceUrl ? 'Open route' : 'Route'} onPress={openRouteOptions} primary compact />
+              ) : null}
+              {!isCurrentPlanSaved ? <Button label="Save" onPress={saveCurrentPlan} compact /> : null}
+              <Button label="Home" onPress={openHome} compact />
+            </View>
+          </View>
+        ) : null}
+
         {showBetaPlanDetail ? (
           <View style={[styles.betaPlanDetailCard, isDarkMode && styles.darkCard]}>
             <View style={styles.betaPlanHeader}>
@@ -8061,7 +8442,7 @@ function NomNomGoApp() {
           </View>
         ) : null}
 
-        {!isPlanLocked ? (
+        {!isPlanLocked && !showNowLightweightPlan ? (
           <View style={[styles.planPeopleBox, isDarkMode && styles.darkChip]}>
             <View style={styles.planPeopleHeader}>
               <View style={styles.planPeopleTextBlock}>
@@ -8104,7 +8485,7 @@ function NomNomGoApp() {
           </View>
         ) : null}
 
-        {hasAnyActiveStop && !isPlanLocked && !showBetaPlanDetail ? (
+        {hasAnyActiveStop && !isPlanLocked && !showBetaPlanDetail && !showNowLightweightPlan ? (
           <View style={styles.planHeader}>
             <View style={styles.planTitleBlock}>
               <TextInput
@@ -8127,7 +8508,7 @@ function NomNomGoApp() {
           </View>
         ) : null}
 
-        {!hasAnyActiveStop && !showBetaPlanDetail ? (
+        {!hasAnyActiveStop && !showBetaPlanDetail && !showNowLightweightPlan ? (
           <View>
             <Text style={[styles.startWithLabel, isDarkMode && styles.darkMutedText]}>Plan</Text>
             <View style={styles.startChooser}>
@@ -8221,7 +8602,7 @@ function NomNomGoApp() {
           </>
         ) : null}
 
-        {hasAnyActiveStop && !isPlanLocked ? (
+        {hasAnyActiveStop && !isPlanLocked && !showNowLightweightPlan ? (
         <View
           style={styles.timeline}
           onLayout={(event) => { timelineYRef.current = event.nativeEvent.layout.y; }}
@@ -8307,7 +8688,7 @@ function NomNomGoApp() {
         </View>
         ) : null}
 
-        {(hasFood || hasActivity) && !isPlanLocked ? (
+        {(hasFood || hasActivity) && !isPlanLocked && !showNowLightweightPlan ? (
           <View style={styles.planActions}>
             <Button
               label="Clear plan"
@@ -8325,7 +8706,7 @@ function NomNomGoApp() {
           </View>
         ) : null}
 
-        {!isPlanLocked ? (
+        {!isPlanLocked && !showNowLightweightPlan ? (
         <View style={styles.routeOriginBox}>
           <TouchableOpacity style={styles.planSettingsHeader} onPress={() => setPlanSettingsOpen((prev) => !prev)}>
             <View style={styles.locationSummaryText}>
@@ -8555,6 +8936,7 @@ function NomNomGoApp() {
         ) : null}
 
       </View>
+      ) : null}
 
       </>
       ) : null}
@@ -8603,7 +8985,7 @@ function NomNomGoApp() {
         </View>
       ) : null}
 
-      {!savedPlansLandingOpen && !isPlanLocked ? (
+      {showPlanningTools ? (
       <>
       <View style={[styles.pairingBox, isLightMode && styles.lightPairingBox, isDarkMode && styles.darkAccentPanel]}>
           <TouchableOpacity style={styles.pairingHeader} onPress={toggleSuggestedPairingsOpen}>
@@ -8753,6 +9135,11 @@ function NomNomGoApp() {
         ) : null}
       </View>
 
+      </>
+      ) : null}
+
+      {showDiscoveryTools ? (
+      <>
       <View style={[styles.bridgeBox, isLightMode && styles.lightPanel, Platform.OS === 'web' && styles.webBridgeBox, isDarkMode && styles.darkPanel]}>
         <Text style={[styles.bridgeTitle, styles.bridgeTitleDarkPanel, isLightMode && styles.lightSectionTitle, isDarkMode && styles.darkText]}>Find a specific place</Text>
         <View style={styles.inputRow}>
@@ -8793,6 +9180,25 @@ function NomNomGoApp() {
             <FilterTab label="All" active={resultFilter === 'all'} onPress={() => setResultFilter('all')} />
             <FilterTab label="Favorites" active={resultFilter === 'favorites'} onPress={() => setResultFilter('favorites')} />
           </View>
+          {nowDiscovering && nowSelectedDestination ? (
+            <View style={[styles.nowDecisionBar, isDarkMode && styles.darkCard]}>
+              <View style={styles.nowDecisionTextBlock}>
+                <Text style={[styles.nowDecisionLabel, isDarkMode && styles.darkMutedText]}>
+                  Selected
+                </Text>
+                <Text style={[styles.nowDecisionTitle, isDarkMode && styles.darkText]} numberOfLines={1}>
+                  {cardToName(nowSelectedDestination.item) || 'Destination'}
+                </Text>
+              </View>
+              <Button
+                label={nowPlanCreating ? 'Creating' : 'Create Plan'}
+                onPress={createNowPlanFromSelection}
+                primary
+                compact
+                disabled={nowPlanCreating}
+              />
+            </View>
+          ) : null}
           {loading ? (
             <View style={[styles.loadingResults, isDarkMode && styles.darkPanel]}>
               <ActivityIndicator color="#f23b35" />
@@ -8813,7 +9219,8 @@ function NomNomGoApp() {
             </View>
           ) : null}
           {!loading && shownCards.map((card, index) => {
-            const isSelected = selectedCards.some((item) => cardToId(item) === card.id);
+            const isNowSelected = Boolean(nowDiscovering && nowSelectedDestination?.slot === resultMode && cardToId(nowSelectedDestination.item) === card.id);
+            const isSelected = isNowSelected || (!nowDiscovering && selectedCards.some((item) => cardToId(item) === card.id));
             const isSuggested = planningSuggestionMode && Boolean(activePlanningSession?.suggestions.some((suggestion) => samePlanningSuggestion(suggestion, resultMode, card)));
             const isFavorite = memory.favorites.includes(card.id);
             const distanceText = resultDistanceAnchor && resultDistanceContext
@@ -8828,20 +9235,28 @@ function NomNomGoApp() {
               distanceText ? `${distanceText} ${resultDistanceContext}` : undefined,
               startDistanceText ? `${startDistanceText} from start` : undefined,
             ].filter(Boolean).join(' | ') || undefined;
-            const resultActionLabel = planningSuggestionMode
-              ? isSuggested
-                ? 'Suggested'
-                : 'Suggest'
-              : isSelected
-                ? 'Deselect'
-                : 'Add';
-            const resultActionIcon: React.ComponentProps<typeof Ionicons>['name'] = planningSuggestionMode
-              ? isSuggested
-                ? 'checkmark-done-outline'
-                : 'chatbubble-ellipses-outline'
-              : isSelected
-                ? 'remove-circle-outline'
-                : 'add-outline';
+            const resultActionLabel = nowDiscovering
+              ? isNowSelected
+                ? 'Selected'
+                : 'Choose'
+              : planningSuggestionMode
+                ? isSuggested
+                  ? 'Suggested'
+                  : 'Suggest'
+                : isSelected
+                  ? 'Deselect'
+                  : 'Add';
+            const resultActionIcon: React.ComponentProps<typeof Ionicons>['name'] = nowDiscovering
+              ? isNowSelected
+                ? 'checkmark-circle-outline'
+                : 'navigate-outline'
+              : planningSuggestionMode
+                ? isSuggested
+                  ? 'checkmark-done-outline'
+                  : 'chatbubble-ellipses-outline'
+                : isSelected
+                  ? 'remove-circle-outline'
+                  : 'add-outline';
             return (
             <View key={`${card.id}-${index}`} style={[styles.card, isDarkMode && styles.darkCard, (isSelected || isSuggested) && styles.cardSelected]}>
               <View style={styles.cardHeaderGrid}>
@@ -8875,7 +9290,13 @@ function NomNomGoApp() {
               {card.address ? <Text style={[styles.address, isDarkMode && !(isSelected || isSuggested) && styles.darkMutedText]}>{card.address}</Text> : null}
               {card.todayHours ? <Text style={[styles.hoursDetail, isDarkMode && !(isSelected || isSuggested) && styles.darkMutedText]}>{card.todayHours}</Text> : null}
               <View style={styles.buttonRow}>
-                <CardIconButton label={resultActionLabel} icon={resultActionIcon} onPress={() => selectCard(card)} success={!isSelected && !isSuggested} />
+                <CardIconButton
+                  label={resultActionLabel}
+                  icon={resultActionIcon}
+                  onPress={() => selectCard(card)}
+                  success={nowDiscovering ? !isNowSelected : !isSelected && !isSuggested}
+                  disabled={nowDiscovering && isNowSelected}
+                />
                 {card.kind === 'event' && card.eventUrl ? (
                   <CardIconButton label="Open event" icon="ticket-outline" onPress={() => openCardEvent(card)} />
                 ) : null}
@@ -8891,7 +9312,9 @@ function NomNomGoApp() {
                   onPress={() => toggleFavorite(card)}
                   active={isFavorite}
                 />
-                <CardIconButton label="Share" icon="share-outline" onPress={() => openQuickShare({ kind: 'card', slot: resultMode, card })} />
+                {!nowDiscovering ? (
+                  <CardIconButton label="Share" icon="share-outline" onPress={() => openQuickShare({ kind: 'card', slot: resultMode, card })} />
+                ) : null}
                 <CardIconButton label="Don't recommend again" icon="ban-outline" onPress={() => neverRecommendCard(card)} />
               </View>
             </View>
@@ -8907,6 +9330,100 @@ function NomNomGoApp() {
       ) : null}
       </>
       )}
+
+      <Modal
+        visible={nowPeoplePickerOpen}
+        animationType="slide"
+        presentationStyle="fullScreen"
+        onRequestClose={() => setNowPeoplePickerOpen(false)}
+      >
+        <SafeAreaView style={[styles.safeArea, isLightMode && styles.lightScreen, isDarkMode && styles.darkScreen]} edges={['top', 'left', 'right']}>
+          <View style={[styles.nowPeopleScreen, isDarkMode && styles.darkScreen]}>
+            <View style={styles.nowPeopleHeader}>
+              <View style={styles.nowHeaderTextBlock}>
+                <Text style={[styles.nowTitle, isDarkMode && styles.darkText]}>Include someone</Text>
+                <Text style={[styles.nowSubtitle, isDarkMode && styles.darkMutedText]} numberOfLines={1}>
+                  {nowPeopleSummary}
+                </Text>
+              </View>
+              <Button label="Done" onPress={() => setNowPeoplePickerOpen(false)} primary compact />
+            </View>
+
+            <ScrollView contentContainerStyle={styles.nowPeopleContent} keyboardShouldPersistTaps="handled">
+              <View style={styles.nowPeopleSection}>
+                <Text style={[styles.nowPeopleSectionTitle, isDarkMode && styles.darkText]}>Recent</Text>
+                <View style={styles.nowPeopleList}>
+                  {quickShareUsers.slice(0, 3).map((user) => {
+                    const selected = nowSelectedPeople.includes(user);
+                    return (
+                      <TouchableOpacity
+                        key={`now-recent-${user}`}
+                        style={[styles.nowPersonRow, isDarkMode && styles.darkCard, selected && styles.nowPersonRowSelected]}
+                        onPress={() => toggleNowPerson(user)}
+                      >
+                        <View style={styles.nowPersonAvatar}>
+                          <Text style={styles.nowPersonAvatarText}>{user.slice(0, 1)}</Text>
+                        </View>
+                        <Text style={[styles.nowPersonName, isDarkMode && styles.darkText]}>{user}</Text>
+                        <Ionicons name={selected ? 'checkmark-circle' : 'add-circle-outline'} size={22} color={selected ? '#178f79' : '#526170'} />
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </View>
+
+              <View style={styles.nowPeopleSection}>
+                <Text style={[styles.nowPeopleSectionTitle, isDarkMode && styles.darkText]}>Favorites</Text>
+                <View style={styles.nowPeopleList}>
+                  {quickShareUsers.slice().reverse().slice(0, 3).map((user) => {
+                    const selected = nowSelectedPeople.includes(user);
+                    return (
+                      <TouchableOpacity
+                        key={`now-favorite-${user}`}
+                        style={[styles.nowPersonRow, isDarkMode && styles.darkCard, selected && styles.nowPersonRowSelected]}
+                        onPress={() => toggleNowPerson(user)}
+                      >
+                        <View style={styles.nowPersonAvatar}>
+                          <Text style={styles.nowPersonAvatarText}>{user.slice(0, 1)}</Text>
+                        </View>
+                        <Text style={[styles.nowPersonName, isDarkMode && styles.darkText]}>{user}</Text>
+                        <Ionicons name={selected ? 'checkmark-circle' : 'add-circle-outline'} size={22} color={selected ? '#178f79' : '#526170'} />
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </View>
+
+              <View style={styles.nowPeopleSection}>
+                <Text style={[styles.nowPeopleSectionTitle, isDarkMode && styles.darkText]}>Groups</Text>
+                <View style={styles.nowPeopleList}>
+                  {PEOPLE_PICKER_GROUPS.map((group) => {
+                    const selected = group.members.every((member) => nowSelectedPeople.includes(member));
+                    return (
+                      <TouchableOpacity
+                        key={`now-group-${group.name}`}
+                        style={[styles.nowPersonRow, isDarkMode && styles.darkCard, selected && styles.nowPersonRowSelected]}
+                        onPress={() => toggleNowGroup(group)}
+                      >
+                        <View style={styles.nowGroupAvatar}>
+                          <Ionicons name="people-outline" size={18} color="#071827" />
+                        </View>
+                        <View style={styles.nowGroupTextBlock}>
+                          <Text style={[styles.nowPersonName, isDarkMode && styles.darkText]}>{group.name}</Text>
+                          <Text style={[styles.nowGroupMembers, isDarkMode && styles.darkMutedText]} numberOfLines={1}>
+                            {group.members.join(', ')}
+                          </Text>
+                        </View>
+                        <Ionicons name={selected ? 'checkmark-circle' : 'add-circle-outline'} size={22} color={selected ? '#178f79' : '#526170'} />
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </View>
+            </ScrollView>
+          </View>
+        </SafeAreaView>
+      </Modal>
 
       <Modal
         visible={peopleGroupsOpen}
@@ -9916,6 +10433,309 @@ const styles = StyleSheet.create({
     color: '#526170',
     fontSize: 13,
     lineHeight: 18,
+    fontWeight: '800',
+  },
+  nowBox: {
+    borderWidth: 1,
+    borderColor: '#66c5a8',
+    borderRadius: 8,
+    backgroundColor: '#fffdf8',
+    padding: 14,
+    marginBottom: 16,
+    gap: 14,
+  },
+  nowHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  nowHeaderTextBlock: {
+    flex: 1,
+    minWidth: 0,
+    gap: 3,
+  },
+  nowTitle: {
+    color: '#071827',
+    fontSize: 24,
+    lineHeight: 30,
+    fontWeight: '900',
+  },
+  nowSubtitle: {
+    color: '#526170',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '800',
+  },
+  nowActionGrid: {
+    gap: 10,
+  },
+  nowActionCard: {
+    minHeight: 92,
+    borderRadius: 8,
+    borderWidth: 1,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    justifyContent: 'center',
+    gap: 8,
+  },
+  nowFoodAction: {
+    backgroundColor: '#f23b35',
+    borderColor: '#ff8a7f',
+  },
+  nowActivityAction: {
+    backgroundColor: '#dff7ef',
+    borderColor: '#66c5a8',
+  },
+  nowPeopleAction: {
+    backgroundColor: '#fff7ed',
+    borderColor: '#eadccb',
+  },
+  nowActionTitle: {
+    color: '#071827',
+    fontSize: 20,
+    lineHeight: 25,
+    fontWeight: '900',
+  },
+  nowActionTitleLight: {
+    color: '#fffaf3',
+  },
+  nowDiscoveryPanel: {
+    gap: 12,
+  },
+  nowModeSwitcher: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flexWrap: 'wrap',
+  },
+  nowPeopleMiniButton: {
+    minHeight: 38,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#eadccb',
+    backgroundColor: '#fff7ed',
+    paddingHorizontal: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  nowPeopleMiniText: {
+    color: '#071827',
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '900',
+  },
+  nowCategoryWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  nowCategoryChip: {
+    minHeight: 38,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#eadccb',
+    backgroundColor: '#fffdf8',
+    paddingHorizontal: 12,
+    justifyContent: 'center',
+  },
+  nowCategoryChipActive: {
+    backgroundColor: '#071827',
+    borderColor: '#071827',
+  },
+  nowCategoryText: {
+    color: '#526170',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '900',
+  },
+  nowCategoryTextActive: {
+    color: '#fffaf3',
+  },
+  nowDecisionBar: {
+    borderWidth: 1,
+    borderColor: '#66c5a8',
+    borderRadius: 8,
+    backgroundColor: '#eefaf5',
+    padding: 10,
+    marginBottom: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  nowDecisionTextBlock: {
+    flex: 1,
+    minWidth: 0,
+  },
+  nowDecisionLabel: {
+    color: '#526170',
+    fontSize: 11,
+    lineHeight: 15,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+  },
+  nowDecisionTitle: {
+    color: '#071827',
+    fontSize: 15,
+    lineHeight: 20,
+    fontWeight: '900',
+  },
+  nowCreatedPlanCard: {
+    borderWidth: 1,
+    borderColor: '#66c5a8',
+    borderRadius: 8,
+    backgroundColor: '#eefaf5',
+    padding: 12,
+    gap: 12,
+  },
+  nowCreatedHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+  nowCreatedEyebrow: {
+    color: '#178f79',
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+  },
+  nowCreatedTitle: {
+    color: '#071827',
+    fontSize: 20,
+    lineHeight: 25,
+    fontWeight: '900',
+  },
+  nowCreatedMeta: {
+    color: '#526170',
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: '800',
+  },
+  nowCreatedIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 8,
+    backgroundColor: '#fffdf8',
+    borderWidth: 1,
+    borderColor: '#c7eadf',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  nowDestinationRow: {
+    minHeight: 42,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#c7eadf',
+    backgroundColor: '#fffdf8',
+    paddingHorizontal: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  nowDestinationName: {
+    flex: 1,
+    minWidth: 0,
+    color: '#071827',
+    fontSize: 15,
+    lineHeight: 20,
+    fontWeight: '900',
+  },
+  nowCreatedActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  nowPeopleScreen: {
+    flex: 1,
+    backgroundColor: '#fffaf3',
+  },
+  nowPeopleHeader: {
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: '#eadccb',
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  nowPeopleContent: {
+    padding: 16,
+    gap: 18,
+  },
+  nowPeopleSection: {
+    gap: 10,
+  },
+  nowPeopleSectionTitle: {
+    color: '#071827',
+    fontSize: 17,
+    lineHeight: 22,
+    fontWeight: '900',
+  },
+  nowPeopleList: {
+    gap: 8,
+  },
+  nowPersonRow: {
+    minHeight: 60,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#eadccb',
+    backgroundColor: '#fffdf8',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  nowPersonRowSelected: {
+    borderColor: '#66c5a8',
+    backgroundColor: '#eefaf5',
+  },
+  nowPersonAvatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#071827',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  nowPersonAvatarText: {
+    color: '#fffaf3',
+    fontSize: 14,
+    lineHeight: 18,
+    fontWeight: '900',
+  },
+  nowPersonName: {
+    flex: 1,
+    minWidth: 0,
+    color: '#071827',
+    fontSize: 15,
+    lineHeight: 20,
+    fontWeight: '900',
+  },
+  nowGroupAvatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 8,
+    backgroundColor: '#dff7ef',
+    borderWidth: 1,
+    borderColor: '#66c5a8',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  nowGroupTextBlock: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  nowGroupMembers: {
+    color: '#526170',
+    fontSize: 12,
+    lineHeight: 16,
     fontWeight: '800',
   },
   setupHeaderRow: {
