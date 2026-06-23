@@ -27,6 +27,7 @@ Primary documents:
 - `docs/VISION.md`
 - `docs/PRINCIPLES.md`
 - `docs/ROADMAP.md`
+- `docs/UNIFIED_PLAN_MODEL.md`
 - `docs/EPICS/`
 - `docs/BACKLOG/`
 - `docs/AGENTS.md`
