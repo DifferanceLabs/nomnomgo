@@ -7452,14 +7452,14 @@ function NomNomGoApp() {
               <Text style={[styles.sectionTitle, styles.pairingTitle, isLightMode && styles.lightSectionTitle, isDarkMode && styles.darkText]}>
                 Suggested pairings
               </Text>
-              <Text
-                style={[styles.pairingHint, isLightMode && styles.lightMutedText, isDarkMode && styles.darkMutedText]}
-                numberOfLines={suggestedPairingsOpen ? 2 : 1}
-              >
-                {suggestedPairingsOpen
-                  ? 'Starred combos fill your plan. Other suggestions update filters.'
-                  : `${suggestedPairings.length} suggestions available`}
-              </Text>
+              {!suggestedPairingsOpen ? (
+                <Text
+                  style={[styles.pairingHint, isLightMode && styles.lightMutedText, isDarkMode && styles.darkMutedText]}
+                  numberOfLines={1}
+                >
+                  {`${suggestedPairings.length} suggestions available`}
+                </Text>
+              ) : null}
             </View>
             <HeaderAction label={suggestedPairingsOpen ? 'Hide' : 'Show'} />
           </TouchableOpacity>
