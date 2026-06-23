@@ -10395,6 +10395,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   cardRank: {
+    flex: 1,
     color: '#f23b35',
     fontSize: 12,
     fontWeight: '900',
@@ -10404,13 +10405,15 @@ const styles = StyleSheet.create({
     color: '#178f79',
   },
   cardHours: {
+    width: 86,
     color: '#526170',
     fontSize: 12,
     fontWeight: '900',
+    textAlign: 'center',
   },
   cardTitleRow: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
+    alignItems: 'center',
     gap: 10,
   },
   cardFavoriteButton: {
