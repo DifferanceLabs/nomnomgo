@@ -7821,8 +7821,8 @@ function NomNomGoApp() {
           <View style={styles.shareModalShell}>
           <View style={[styles.shareCard, isDarkMode && styles.darkModalCard]}>
             <View style={styles.shareHeader}>
-              <Text style={styles.shareBrand}>NomNomGo</Text>
-              <Text style={styles.shareTagline}>Come together</Text>
+              <Text style={[styles.shareBrand, isDarkMode && styles.darkText]}>NomNomGo</Text>
+              <Text style={[styles.shareTagline, isDarkMode && styles.darkMutedText]}>Come together</Text>
             </View>
             <Text style={[styles.shareTitle, isDarkMode && styles.darkText]} numberOfLines={2}>
               {planTitle}
@@ -7855,10 +7855,10 @@ function NomNomGoApp() {
                   </View>
                   <View style={styles.shareStopBody}>
                     <Text style={styles.shareStopType}>{stop.slot === 'food' ? 'Food' : 'Activity'}</Text>
-                    <Text style={styles.shareStopName}>{cardToName(stop.item) || 'Stop'}</Text>
-                    <Text style={styles.shareStopTime}>{stepDetail(stop, index)}</Text>
+                    <Text style={[styles.shareStopName, isDarkMode && styles.darkText]}>{cardToName(stop.item) || 'Stop'}</Text>
+                    <Text style={[styles.shareStopTime, isDarkMode && styles.darkMutedText]}>{stepDetail(stop, index)}</Text>
                     {stop.selectedFeatures?.length ? (
-                      <Text style={styles.shareStopTime}>Includes: {stop.selectedFeatures.join(', ')}</Text>
+                      <Text style={[styles.shareStopTime, isDarkMode && styles.darkMutedText]}>Includes: {stop.selectedFeatures.join(', ')}</Text>
                     ) : null}
                   </View>
                 </View>
