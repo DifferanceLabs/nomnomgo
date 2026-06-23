@@ -8231,7 +8231,7 @@ function PlanStep({
         accessibilityRole="button"
         accessibilityLabel={label}
       >
-        <Ionicons name={stepActionIconForLabel(label)} size={18} color={highlighted ? '#071827' : '#526170'} />
+        <Ionicons name={stepActionIconForLabel(label)} size={17} color={highlighted ? '#071827' : '#526170'} />
       </TouchableOpacity>
     );
   };
@@ -9805,13 +9805,14 @@ const styles = StyleSheet.create({
   },
   stepActionRow: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
+    flexWrap: 'nowrap',
+    justifyContent: 'space-between',
+    gap: 4,
     marginTop: 9,
   },
   stepActionButton: {
-    width: 42,
-    height: 42,
+    width: 34,
+    height: 40,
     borderRadius: 8,
     borderWidth: 1,
     borderColor: '#eadccb',
