@@ -5823,14 +5823,6 @@ function NomNomGoApp() {
     addLog(`Favorite toggled: ${card.title}`);
   };
 
-  const dismissCard = async (card: PlaceCard) => {
-    const dismissedSession = unique([card.id, ...memory.dismissedSession]);
-    const nextMemory = { ...memory, dismissedSession };
-    setMemory(nextMemory);
-    setCards((prev) => prev.filter((item) => item.id !== card.id));
-    addLog(`Dismissed for session: ${card.title}`);
-  };
-
   const neverRecommendCard = async (card: PlaceCard) => {
     const neverRecommend = unique([card.id, ...memory.neverRecommend]);
     await saveMemory({ ...memory, neverRecommend });
@@ -7712,14 +7704,6 @@ function NomNomGoApp() {
                   ]}>
                     {card.kind === 'event' ? card.eventDateText || 'Date TBA' : card.hoursText || 'Hours unknown'}
                   </Text>
-                  <TouchableOpacity
-                    style={[styles.cardFavoriteButton, isFavorite && styles.cardFavoriteButtonActive]}
-                    onPress={() => toggleFavorite(card)}
-                    accessibilityRole="button"
-                    accessibilityLabel={isFavorite ? `Unstar ${card.title}` : `Star ${card.title}`}
-                  >
-                    <Ionicons name={isFavorite ? 'star' : 'star-outline'} size={20} color={isFavorite ? '#ffc84a' : '#94a3b8'} />
-                  </TouchableOpacity>
                 </View>
               </View>
               <Text style={styles.cardSubtitle}>{card.subtitle}</Text>
@@ -7742,10 +7726,13 @@ function NomNomGoApp() {
                 {canOpenPlaceWebsite(card) ? (
                   <CardIconButton label="Website" icon="globe-outline" onPress={() => openCardWebsite(card)} />
                 ) : null}
+                <CardIconButton
+                  label={isFavorite ? 'Unstar' : 'Star'}
+                  icon={isFavorite ? 'star' : 'star-outline'}
+                  onPress={() => toggleFavorite(card)}
+                  active={isFavorite}
+                />
                 <CardIconButton label="Share" icon="share-outline" onPress={() => openQuickShare({ kind: 'card', slot: resultMode, card })} />
-              </View>
-              <View style={styles.buttonRow}>
-                <CardIconButton label="Dismiss" icon="close-outline" onPress={() => dismissCard(card)} />
                 <CardIconButton label="Don't recommend again" icon="ban-outline" onPress={() => neverRecommendCard(card)} />
               </View>
             </View>
@@ -8448,6 +8435,7 @@ function CardIconButton({
   onPress,
   primary,
   success,
+  active,
   disabled,
 }: {
   label: string;
@@ -8455,6 +8443,7 @@ function CardIconButton({
   onPress: () => void;
   primary?: boolean;
   success?: boolean;
+  active?: boolean;
   disabled?: boolean;
 }) {
   return (
@@ -8463,6 +8452,7 @@ function CardIconButton({
         styles.cardIconButton,
         primary && styles.primaryButton,
         success && styles.successButton,
+        active && styles.cardIconButtonActive,
         disabled && styles.disabledButton,
       ]}
       onPress={() => {
@@ -8473,7 +8463,7 @@ function CardIconButton({
       accessibilityRole="button"
       accessibilityLabel={label}
     >
-      <Ionicons name={icon} size={20} color="#fffaf3" />
+      <Ionicons name={icon} size={20} color={active ? '#ffc84a' : '#fffaf3'} />
     </TouchableOpacity>
   );
 }
@@ -10178,6 +10168,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  cardIconButtonActive: {
+    borderWidth: 1,
+    borderColor: '#ffc84a',
+  },
   compactButton: {
     minWidth: 76,
     minHeight: 38,
@@ -10400,9 +10394,8 @@ const styles = StyleSheet.create({
     minWidth: 0,
   },
   cardHeaderActions: {
-    width: 34,
+    width: 82,
     alignItems: 'center',
-    gap: 8,
   },
   cardRank: {
     color: '#f23b35',
@@ -10420,19 +10413,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '900',
     textAlign: 'center',
-  },
-  cardFavoriteButton: {
-    width: 34,
-    height: 34,
-    borderRadius: 8,
-    backgroundColor: '#071827',
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexShrink: 0,
-  },
-  cardFavoriteButtonActive: {
-    borderWidth: 1,
-    borderColor: '#ffc84a',
   },
   shareOverlay: {
     flex: 1,
