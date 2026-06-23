@@ -319,6 +319,7 @@ const PAIRING_RADIUS_METERS = 11265;
 const FAVORITE_SUGGESTION_RADIUS_METERS = DEFAULT_RADIUS_METERS;
 const VENUE_FEATURE_RADIUS_METERS = 805;
 const WALKING_DISTANCE_METERS = 805;
+const DEFAULT_WALK_MAX_MINUTES = 5;
 const WALKING_SEARCH_RADIUS_METERS = 2414;
 const PAGE_SIZE = 8;
 const SUGGESTED_PAIRING_PREVIEW_COUNT = 3;
@@ -1040,10 +1041,19 @@ function featureLabelForCard(card: PlaceCard) {
   return `${category}: ${card.title}`;
 }
 
+function isDefaultWalkBetweenStops(previous?: ItineraryStop, current?: ItineraryStop) {
+  if (!previous || !current) return false;
+  const previousCoords = stopCoords(previous.item);
+  const currentCoords = stopCoords(current.item);
+  if (!previousCoords || !currentCoords) return false;
+  return estimateTravelMinutes(previousCoords, current.item, 'walk') <= DEFAULT_WALK_MAX_MINUTES;
+}
+
 function effectivePlanStopTravelMode(stops: ItineraryStop[], index: number): StopTravelMode {
   const stop = stops[index];
   if (stop?.travelMode) return stop.travelMode;
-  return isWalkableAfterTeslaStop(stops[index - 1], stop) ? 'walk' : 'car';
+  const previousStop = stops[index - 1];
+  return isWalkableAfterTeslaStop(previousStop, stop) || isDefaultWalkBetweenStops(previousStop, stop) ? 'walk' : 'car';
 }
 
 function cardToRouteHandoffStop(card: PlaceCard | string, travelMode?: StopTravelMode): RouteHandoffStop | undefined {
