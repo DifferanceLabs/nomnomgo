@@ -7697,12 +7697,20 @@ function NomNomGoApp() {
                 <Text style={[styles.cardRank, isSelected && styles.cardRankSelected]}>
                   {resultBadgeForCard(card, isSelected, index)}
                 </Text>
-                <Text style={[styles.cardHours, isDarkMode && styles.darkMutedText, card.isOpen ? styles.open : card.isOpen === false ? styles.closed : undefined]}>
+                <Text style={[
+                  styles.cardHours,
+                  isDarkMode && !(isSelected || isSuggested) && styles.darkMutedText,
+                  card.isOpen ? styles.open : card.isOpen === false ? styles.closed : undefined,
+                ]}>
                   {card.kind === 'event' ? card.eventDateText || 'Date TBA' : card.hoursText || 'Hours unknown'}
                 </Text>
               </View>
               <View style={styles.cardTitleRow}>
-                <Text style={[styles.cardTitle, isDarkMode && styles.darkText]}>{card.title}</Text>
+                <Text style={[
+                  styles.cardTitle,
+                  isDarkMode && !(isSelected || isSuggested) && styles.darkText,
+                  (isSelected || isSuggested) && styles.cardTitleSelected,
+                ]}>{card.title}</Text>
                 <TouchableOpacity
                   style={[styles.cardFavoriteButton, isFavorite && styles.cardFavoriteButtonActive]}
                   onPress={() => toggleFavorite(card)}
@@ -7714,13 +7722,13 @@ function NomNomGoApp() {
               </View>
               <Text style={styles.cardSubtitle}>{card.subtitle}</Text>
               {distanceLabel ? (
-                <Text style={[styles.cardDistance, isDarkMode && styles.darkMutedText]}>{distanceLabel}</Text>
+                <Text style={[styles.cardDistance, isDarkMode && !(isSelected || isSuggested) && styles.darkMutedText]}>{distanceLabel}</Text>
               ) : null}
               {card.kind === 'event' && card.source ? (
-                <Text style={[styles.hoursDetail, isDarkMode && styles.darkMutedText]}>Source: {card.source}</Text>
+                <Text style={[styles.hoursDetail, isDarkMode && !(isSelected || isSuggested) && styles.darkMutedText]}>Source: {card.source}</Text>
               ) : null}
-              {card.address ? <Text style={[styles.address, isDarkMode && styles.darkMutedText]}>{card.address}</Text> : null}
-              {card.todayHours ? <Text style={[styles.hoursDetail, isDarkMode && styles.darkMutedText]}>{card.todayHours}</Text> : null}
+              {card.address ? <Text style={[styles.address, isDarkMode && !(isSelected || isSuggested) && styles.darkMutedText]}>{card.address}</Text> : null}
+              {card.todayHours ? <Text style={[styles.hoursDetail, isDarkMode && !(isSelected || isSuggested) && styles.darkMutedText]}>{card.todayHours}</Text> : null}
               <View style={styles.buttonRow}>
                 <CardIconButton label={resultActionLabel} icon={resultActionIcon} onPress={() => selectCard(card)} success={!isSelected && !isSuggested} />
                 {card.kind === 'event' && card.eventUrl ? (
@@ -10375,8 +10383,9 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   cardSelected: {
-    borderColor: '#66c5a8',
-    backgroundColor: '#eefaf5',
+    borderWidth: 2,
+    borderColor: '#178f79',
+    backgroundColor: '#e3f7f0',
   },
   cardTopRow: {
     flexDirection: 'row',
@@ -10760,6 +10769,9 @@ const styles = StyleSheet.create({
     color: '#071827',
     fontSize: 19,
     fontWeight: '900',
+  },
+  cardTitleSelected: {
+    color: '#071827',
   },
   cardSubtitle: {
     color: '#178f79',
