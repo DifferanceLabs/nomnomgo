@@ -9811,8 +9811,8 @@ const styles = StyleSheet.create({
     marginTop: 9,
   },
   stepActionButton: {
-    width: 34,
-    height: 40,
+    width: 38,
+    height: 38,
     borderRadius: 8,
     borderWidth: 1,
     borderColor: '#eadccb',
