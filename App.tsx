@@ -6006,8 +6006,6 @@ function NomNomGoApp() {
 
   const setStopTravelMode = (key: string, travelMode: StopTravelMode) => {
     if (isPlanLocked) return;
-    const stopIndex = plan.stops.findIndex((stop) => stop.key === key);
-    const changedStop = stopIndex >= 0 ? plan.stops[stopIndex] : undefined;
     setPlan((prev) => ({
       ...prev,
       stops: prev.stops.map((stop) => stop.key === key ? { ...stop, travelMode } : stop),
@@ -6015,24 +6013,6 @@ function NomNomGoApp() {
       savedPlanId: undefined,
     }));
     addLog(`Stop travel mode set: ${travelModeLabel(travelMode)}`);
-    const center = changedStop ? stopSearchCenter(changedStop) : undefined;
-    const shouldRefreshAnchoredResults = Boolean(
-      center &&
-      hasInitiatedSearch &&
-      ((resultMode === 'activity' && changedStop?.slot === 'food') || (resultMode === 'food' && changedStop?.slot === 'activity')),
-    );
-    if (shouldRefreshAnchoredResults && center) {
-      const routeBias = travelMode === 'walk'
-        ? { mode: 'walk' as const, anchor: center, start: routeStartLocation }
-        : undefined;
-      setResultFilter('all');
-      setCards([]);
-      setVisibleCount(PAGE_SIZE);
-      setLoading(true);
-      setTimeout(() => {
-        void searchForSlot(resultMode, false, true, center, undefined, routeBias);
-      }, 25);
-    }
   };
 
   const openDirections = async () => {
@@ -8215,7 +8195,21 @@ function PlanStep({
   onRemovePress?: () => void;
 }) {
   const isDarkMode = useColorScheme() === 'dark';
+  const ignoreNextCardPressRef = useRef(false);
   const nextTravelMode = travelMeta?.mode === 'walk' ? 'car' : 'walk';
+  const blockNextCardPress = () => {
+    ignoreNextCardPressRef.current = true;
+    setTimeout(() => {
+      ignoreNextCardPressRef.current = false;
+    }, 0);
+  };
+  const handleCardPress = () => {
+    if (ignoreNextCardPressRef.current) {
+      ignoreNextCardPressRef.current = false;
+      return;
+    }
+    onPress?.();
+  };
   const renderStepAction = (label?: string, onStepAction?: () => void, highlighted = false) => {
     if (!label || !onStepAction) return null;
     return (
@@ -8241,7 +8235,7 @@ function PlanStep({
         </View>
         {!last ? <View style={styles.stepLine} /> : null}
       </View>
-      <TouchableOpacity style={[styles.stepCard, isDarkMode && styles.darkCard, active && styles.stepCardActive]} onPress={onPress}>
+      <TouchableOpacity style={[styles.stepCard, isDarkMode && styles.darkCard, active && styles.stepCardActive]} onPress={handleCardPress}>
         <View style={styles.stepTopLine}>
           <View style={styles.stepTextBlock}>
             <Text style={styles.stepTitle}>{title}</Text>
@@ -8253,8 +8247,13 @@ function PlanStep({
           {travelMeta ? (
             <TouchableOpacity
               style={styles.stepTravelBadge}
+              onPressIn={(event: GestureResponderEvent) => {
+                event.stopPropagation();
+                blockNextCardPress();
+              }}
               onPress={(event: GestureResponderEvent) => {
                 event.stopPropagation();
+                blockNextCardPress();
                 Keyboard.dismiss();
                 onTravelModePress?.(nextTravelMode);
               }}
