@@ -9806,8 +9806,7 @@ const styles = StyleSheet.create({
   stepActionRow: {
     flexDirection: 'row',
     flexWrap: 'nowrap',
-    justifyContent: 'space-between',
-    gap: 4,
+    gap: 6,
     marginTop: 9,
   },
   stepActionButton: {
