@@ -7670,14 +7670,10 @@ function NomNomGoApp() {
             const resultActionLabel = planningSuggestionMode
               ? isSuggested
                 ? 'Suggested'
-                : resultMode === 'food'
-                  ? 'Suggest food'
-                  : 'Suggest activity'
+                : 'Suggest'
               : isSelected
                 ? 'Deselect'
-                : resultMode === 'food'
-                  ? 'Add food'
-                  : 'Add activity';
+                : 'Add';
             return (
             <View key={`${card.id}-${index}`} style={[styles.card, isDarkMode && styles.darkCard, (isSelected || isSuggested) && styles.cardSelected]}>
               <View style={styles.cardTopRow}>
@@ -7709,12 +7705,12 @@ function NomNomGoApp() {
               {card.address ? <Text style={[styles.address, isDarkMode && styles.darkMutedText]}>{card.address}</Text> : null}
               {card.todayHours ? <Text style={[styles.hoursDetail, isDarkMode && styles.darkMutedText]}>{card.todayHours}</Text> : null}
               <View style={styles.buttonRow}>
-                <Button label={resultActionLabel} onPress={() => selectCard(card)} primary={!isSelected && !isSuggested} compact />
+                <Button label={resultActionLabel} onPress={() => selectCard(card)} success={!isSelected && !isSuggested} compact />
                 {card.kind === 'event' && card.eventUrl ? (
                   <Button label="Open event" onPress={() => openCardEvent(card)} compact />
                 ) : null}
                 {card.kind !== 'event' || card.mapsUri || (typeof card.lat === 'number' && typeof card.lng === 'number') ? (
-                  <Button label={card.kind === 'event' ? 'Map' : 'Open Maps'} onPress={() => openCardMaps(card)} compact />
+                  <Button label="Map" onPress={() => openCardMaps(card)} compact />
                 ) : null}
                 {canOpenPlaceWebsite(card) ? (
                   <Button label="Website" onPress={() => openCardWebsite(card)} compact />
@@ -8463,12 +8459,14 @@ function Button({
   label,
   onPress,
   primary,
+  success,
   disabled,
   compact,
 }: {
   label: string;
   onPress: () => void;
   primary?: boolean;
+  success?: boolean;
   disabled?: boolean;
   compact?: boolean;
 }) {
@@ -8477,6 +8475,7 @@ function Button({
       style={[
         styles.button,
         primary && styles.primaryButton,
+        success && styles.successButton,
         compact && styles.compactButton,
         disabled && styles.disabledButton,
       ]}
@@ -8486,7 +8485,7 @@ function Button({
       }}
       disabled={disabled}
     >
-      <Text style={[styles.buttonText, primary && styles.primaryButtonText]}>{label}</Text>
+      <Text style={[styles.buttonText, (primary || success) && styles.primaryButtonText]}>{label}</Text>
     </TouchableOpacity>
   );
 }
@@ -10175,6 +10174,9 @@ const styles = StyleSheet.create({
   },
   primaryButton: {
     backgroundColor: '#f23b35',
+  },
+  successButton: {
+    backgroundColor: '#178f79',
   },
   disabledButton: {
     opacity: 0.55,
