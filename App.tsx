@@ -120,6 +120,7 @@ type PlaceCard = {
   todayHours?: string;
   weeklyHours?: string[];
   mapsUri?: string;
+  websiteUri?: string;
   lat?: number;
   lng?: number;
   types?: string[];
@@ -292,8 +293,8 @@ const TICKETMASTER_API_KEY = process.env.EXPO_PUBLIC_TICKETMASTER_API_KEY;
 const STORAGE_MEMORY = 'thingsNearbyGooglePlacesMemoryV1';
 const STORAGE_LOCATION = 'thingsNearbyGooglePlacesLocationV1';
 const STORAGE_SEARCH_LOCATION = 'thingsNearbyGooglePlacesSearchLocationV1';
-const STORAGE_SEARCH_CACHE = 'thingsNearbyGooglePlacesSearchCacheV2';
-const STORAGE_TEXT_SEARCH_CACHE = 'thingsNearbyGooglePlacesTextSearchCacheV1';
+const STORAGE_SEARCH_CACHE = 'thingsNearbyGooglePlacesSearchCacheV3';
+const STORAGE_TEXT_SEARCH_CACHE = 'thingsNearbyGooglePlacesTextSearchCacheV2';
 const STORAGE_ZIP_CACHE = 'thingsNearbyZipCacheV1';
 const STORAGE_WEBSITE_FEATURE_CACHE = 'thingsNearbyWebsiteFeatureCacheV1';
 const STORAGE_TESTER_USER = 'nomNomGoSelectedTesterV1';
@@ -533,8 +534,15 @@ const FIELD_MASK = [
   'places.primaryTypeDisplayName',
   'places.regularOpeningHours',
   'places.googleMapsUri',
+  'places.websiteUri',
   'places.priceLevel',
 ].join(',');
+
+const LOCATION_FIELD_MASK = [
+  'places.location',
+].join(',');
+
+const PLACE_WEBSITE_FIELD_MASK = 'websiteUri';
 
 const EMPTY_PLAN: ConfirmedPlan = {
   stops: [],
@@ -776,6 +784,7 @@ function toCard(place: any): PlaceCard {
     todayHours,
     weeklyHours,
     mapsUri: place?.googleMapsUri,
+    websiteUri: typeof place?.websiteUri === 'string' ? place.websiteUri : undefined,
     lat: place?.location?.latitude,
     lng: place?.location?.longitude,
     types: place?.types || [],
@@ -1121,6 +1130,22 @@ function routeImportStopToCard(stop: GoogleMapsRouteStop, index: number): PlaceC
     lng: stop.longitude,
     types: ['google_maps_route_import'],
   };
+}
+
+function placeDetailsLookupId(card: PlaceCard) {
+  return card.id.startsWith('places/') ? card.id.slice('places/'.length) : card.id;
+}
+
+function canResolvePlaceWebsite(card: PlaceCard) {
+  if (!GOOGLE_API_KEY) return false;
+  if (card.kind === 'event') return false;
+  if (card.source === 'Google Maps route') return false;
+  if (!card.id || card.id.startsWith('ticketmaster-') || card.id.startsWith('google-route-')) return false;
+  return true;
+}
+
+function canOpenPlaceWebsite(item: PlaceCard | string) {
+  return typeof item !== 'string' && Boolean(item.websiteUri || canResolvePlaceWebsite(item));
 }
 
 function routeImportToPlanStops(routeImport: GoogleMapsRouteImport): ItineraryStop[] {
@@ -3309,7 +3334,7 @@ function NomNomGoApp() {
           headers: {
             'Content-Type': 'application/json',
             'X-Goog-Api-Key': GOOGLE_API_KEY,
-            'X-Goog-FieldMask': FIELD_MASK,
+            'X-Goog-FieldMask': LOCATION_FIELD_MASK,
           },
           body: JSON.stringify({
             textQuery: query,
@@ -4891,9 +4916,72 @@ function NomNomGoApp() {
     await Linking.openURL(suggestion.item.mapsUri || mapsSearchUrl(suggestion.item.title, suggestion.item));
   };
 
+  const hydrateCardWebsite = (cardId: string, websiteUri: string) => {
+    setCards((prev) => prev.map((card) => card.id === cardId ? { ...card, websiteUri } : card));
+    setPlan((prev) => ({
+      ...prev,
+      stops: prev.stops.map((stop) => {
+        if (typeof stop.item === 'string' || stop.item.id !== cardId) return stop;
+        return { ...stop, item: { ...stop.item, websiteUri } };
+      }),
+    }));
+  };
+
+  const resolveCardWebsite = async (card: PlaceCard) => {
+    if (card.websiteUri) return card.websiteUri;
+    if (!canResolvePlaceWebsite(card) || !GOOGLE_API_KEY) return undefined;
+
+    try {
+      addLog(`Google Places website lookup: ${card.title}`);
+      await recordPlacesUsage('text');
+      const response = await withTimeout(
+        fetch(`https://places.googleapis.com/v1/places/${encodeURIComponent(placeDetailsLookupId(card))}`, {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Goog-Api-Key': GOOGLE_API_KEY,
+            'X-Goog-FieldMask': PLACE_WEBSITE_FIELD_MASK,
+          },
+        }),
+        12000,
+        `Google Places website lookup ${card.title}`,
+      );
+
+      const text = await response.text();
+      addLog(`Google Places website status: ${response.status}`);
+      if (!response.ok) {
+        addLog(`Google Places website lookup failed: ${response.status} ${text.slice(0, 140)}`);
+        return undefined;
+      }
+
+      const json = JSON.parse(text);
+      const websiteUri = typeof json?.websiteUri === 'string' ? json.websiteUri : undefined;
+      if (websiteUri) hydrateCardWebsite(card.id, websiteUri);
+      return websiteUri;
+    } catch (err) {
+      addLog(`Google Places website lookup failed: ${compactError(err)}`);
+      return undefined;
+    }
+  };
+
+  const openPlaceWebsite = async (card: PlaceCard, logLabel: string) => {
+    const websiteUri = await resolveCardWebsite(card);
+    if (!websiteUri) {
+      showToast('Website not found');
+      return;
+    }
+    addLog(`${logLabel}: ${card.title}`);
+    await Linking.openURL(websiteUri);
+  };
+
   const openPlanningSuggestionEvent = async (suggestion: PlanningSuggestion) => {
     if (typeof suggestion.item === 'string' || !suggestion.item.eventUrl) return;
     await Linking.openURL(suggestion.item.eventUrl);
+  };
+
+  const openPlanningSuggestionWebsite = async (suggestion: PlanningSuggestion) => {
+    if (typeof suggestion.item === 'string') return;
+    await openPlaceWebsite(suggestion.item, 'Planning suggestion Website action');
   };
 
   const runSuggestion = async (suggestion: PairingSuggestion) => {
@@ -5122,6 +5210,10 @@ function NomNomGoApp() {
     await Linking.openURL(card.eventUrl);
   };
 
+  const openCardWebsite = async (card: PlaceCard) => {
+    await openPlaceWebsite(card, 'Card Website action');
+  };
+
   const openStopMaps = async (stop: ItineraryStop) => {
     const name = cardToName(stop.item);
     addLog(`Plan Map action: ${name || stop.slot}`);
@@ -5130,6 +5222,11 @@ function NomNomGoApp() {
       return;
     }
     await Linking.openURL(mapsSearchUrl(stop.item, activeSearchLocation || location));
+  };
+
+  const openStopWebsite = async (stop: ItineraryStop) => {
+    if (typeof stop.item === 'string') return;
+    await openPlaceWebsite(stop.item, 'Plan Website action');
   };
 
   const quickShareTitle = (target: QuickShareTarget) => {
@@ -6757,6 +6854,7 @@ function NomNomGoApp() {
                   onRemove={() => removePlanningSuggestion(suggestion)}
                   onOpenMap={() => openPlanningSuggestionMap(suggestion)}
                   onOpenEvent={typeof suggestion.item !== 'string' && suggestion.item.eventUrl ? () => openPlanningSuggestionEvent(suggestion) : undefined}
+                  onOpenWebsite={canOpenPlaceWebsite(suggestion.item) ? () => openPlanningSuggestionWebsite(suggestion) : undefined}
                 />
               )) : (
               <Text style={[styles.empty, isDarkMode && styles.darkMutedText]}>No food suggestions yet.</Text>
@@ -6778,6 +6876,7 @@ function NomNomGoApp() {
                   onRemove={() => removePlanningSuggestion(suggestion)}
                   onOpenMap={() => openPlanningSuggestionMap(suggestion)}
                   onOpenEvent={typeof suggestion.item !== 'string' && suggestion.item.eventUrl ? () => openPlanningSuggestionEvent(suggestion) : undefined}
+                  onOpenWebsite={canOpenPlaceWebsite(suggestion.item) ? () => openPlanningSuggestionWebsite(suggestion) : undefined}
                 />
               )) : (
               <Text style={[styles.empty, isDarkMode && styles.darkMutedText]}>No activity suggestions yet.</Text>
@@ -6998,6 +7097,8 @@ function NomNomGoApp() {
                 }}
                 mapLabel="Map"
                 onMapPress={() => openStopMaps(stop)}
+                websiteLabel={canOpenPlaceWebsite(stop.item) ? 'Website' : undefined}
+                onWebsitePress={canOpenPlaceWebsite(stop.item) ? () => openStopWebsite(stop) : undefined}
                 shareLabel="Share"
                 onSharePress={() => openQuickShare({ kind: 'stop', stop, index })}
                 moveUpLabel={index > 0 ? 'Up' : undefined}
@@ -7615,6 +7716,9 @@ function NomNomGoApp() {
                 {card.kind !== 'event' || card.mapsUri || (typeof card.lat === 'number' && typeof card.lng === 'number') ? (
                   <Button label={card.kind === 'event' ? 'Map' : 'Open Maps'} onPress={() => openCardMaps(card)} compact />
                 ) : null}
+                {canOpenPlaceWebsite(card) ? (
+                  <Button label="Website" onPress={() => openCardWebsite(card)} compact />
+                ) : null}
                 <Button label="Share" onPress={() => openQuickShare({ kind: 'card', slot: resultMode, card })} compact />
               </View>
               <View style={styles.buttonRow}>
@@ -7973,6 +8077,7 @@ function PlanningSuggestionCard({
   onRemove,
   onOpenMap,
   onOpenEvent,
+  onOpenWebsite,
 }: {
   suggestion: PlanningSuggestion;
   currentUser: string;
@@ -7981,6 +8086,7 @@ function PlanningSuggestionCard({
   onRemove: () => void;
   onOpenMap?: () => void;
   onOpenEvent?: () => void;
+  onOpenWebsite?: () => void;
 }) {
   const isDarkMode = useColorScheme() === 'dark';
   const voted = suggestion.votes.includes(currentUser);
@@ -8008,6 +8114,7 @@ function PlanningSuggestionCard({
         <Button label={voted ? 'Unvote' : 'Vote'} onPress={onVote} primary={!voted} compact />
         {onOpenEvent ? <Button label="Open event" onPress={onOpenEvent} compact /> : null}
         {onOpenMap ? <Button label="Map" onPress={onOpenMap} compact /> : null}
+        {onOpenWebsite ? <Button label="Website" onPress={onOpenWebsite} compact /> : null}
         {canRemove ? <Button label="Remove" onPress={onRemove} compact /> : null}
       </View>
     </View>
@@ -8036,6 +8143,8 @@ function PlanStep({
   onActionPress,
   mapLabel,
   onMapPress,
+  websiteLabel,
+  onWebsitePress,
   shareLabel,
   onSharePress,
   moveUpLabel,
@@ -8066,6 +8175,8 @@ function PlanStep({
   onActionPress?: () => void;
   mapLabel?: string;
   onMapPress?: () => void;
+  websiteLabel?: string;
+  onWebsitePress?: () => void;
   shareLabel?: string;
   onSharePress?: () => void;
   moveUpLabel?: string;
@@ -8192,7 +8303,7 @@ function PlanStep({
             ) : null}
           </View>
         ) : null}
-        {actionLabel && onActionPress || mapLabel && onMapPress || shareLabel && onSharePress || moveUpLabel && onMoveUpPress || moveDownLabel && onMoveDownPress || removeLabel && onRemovePress ? (
+        {actionLabel && onActionPress || mapLabel && onMapPress || websiteLabel && onWebsitePress || shareLabel && onSharePress || moveUpLabel && onMoveUpPress || moveDownLabel && onMoveDownPress || removeLabel && onRemovePress ? (
           <View style={styles.stepActionRow}>
             {actionLabel && onActionPress ? (
               <TouchableOpacity
@@ -8216,6 +8327,18 @@ function PlanStep({
                 }}
               >
                 <Text style={styles.stepActionText}>{mapLabel}</Text>
+              </TouchableOpacity>
+            ) : null}
+            {websiteLabel && onWebsitePress ? (
+              <TouchableOpacity
+                style={styles.stepActionButton}
+                onPress={(event: GestureResponderEvent) => {
+                  event.stopPropagation();
+                  Keyboard.dismiss();
+                  onWebsitePress();
+                }}
+              >
+                <Text style={styles.stepActionText}>{websiteLabel}</Text>
               </TouchableOpacity>
             ) : null}
             {shareLabel && onSharePress ? (
