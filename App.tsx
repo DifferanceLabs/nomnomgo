@@ -962,7 +962,7 @@ function inferPlanType(input: {
 function planTypeLabel(planType?: PlanType) {
   if (planType === 'trip_plan') return 'Trip plan';
   if (planType === 'day_plan') return 'Day plan';
-  return 'Local plan';
+  return 'Plan';
 }
 
 function hasChargingStop(stops: ItineraryStop[]) {
@@ -990,9 +990,9 @@ function vehicleProfileForPlan(roadTripMode: boolean, current: VehicleProfile | 
   if (!roadTripMode) return undefined;
   const profileText = [label, ...stops.map((stop) => cardToName(stop.item))].filter(Boolean).join(' ').toLowerCase();
   if (profileText.includes('tesla') || stops.some((stop) => isTeslaSupercharger(stop.item))) {
-    return { kind: 'tesla', label: 'Tesla placeholder', notes: 'Confirm vehicle and charging route in Tesla before departure.' };
+    return { kind: 'tesla', label: 'Tesla', notes: 'Confirm vehicle and charging route in Tesla before departure.' };
   }
-  return { kind: 'unknown', label: 'Vehicle placeholder', notes: 'Future vehicle profile for road trip planning.' };
+  return { kind: 'unknown', label: 'Vehicle', notes: 'Confirm vehicle and charging route before departure.' };
 }
 
 function chargingStopIdeasFromStops(stops: ItineraryStop[], existing: ChargingStopIdea[] = []) {
@@ -2288,6 +2288,19 @@ function conciseDateTitle(windowId: DateWindowId, dateStart?: string, customRang
   return shortDateToken(dateStart) || 'Soon';
 }
 
+function weekdayTitle(dateKey?: string) {
+  const date = dateKey ? parseDateInput(dateKey) : null;
+  return date ? date.toLocaleDateString([], { weekday: 'long' }) : '';
+}
+
+function titleDatePhrase(windowId: DateWindowId, dateStart?: string, customRange?: CustomDateRange | null) {
+  if (windowId === 'today') return 'Today';
+  if (windowId === 'tomorrow') return 'Tomorrow';
+  if (windowId === 'weekend' || windowId === 'nextWeekend') return 'Weekend';
+  if (windowId === 'custom' && customRange) return weekdayTitle(customRange.start) || shortDateToken(customRange.start) || 'Soon';
+  return weekdayTitle(dateStart) || shortDateToken(dateStart) || 'Soon';
+}
+
 function defaultBetaPlanTitle({
   intent,
   dateWindow,
@@ -2302,10 +2315,17 @@ function defaultBetaPlanTitle({
   timePreference?: string;
 }) {
   const dateTitle = conciseDateTitle(dateWindow, planDateStart, customDateRange);
+  const titleDate = titleDatePhrase(dateWindow, planDateStart, customDateRange);
+  const weekday = weekdayTitle(planDateStart);
+  const isWeekend = dateWindow === 'weekend' || dateWindow === 'nextWeekend';
+  if ((timePreference === 'Dinner' || timePreference === 'Late night') && weekday === 'Friday') return 'Friday Night Out';
+  if (isWeekend && intent === 'activity') return 'Weekend Activity';
+  if (isWeekend && intent === 'both') return timePreference === 'Dinner' ? 'Weekend Dinner' : 'Weekend Outing';
   if (timePreference === 'Dinner') return `Dinner ${dateTitle}`;
   if (timePreference === 'Lunch') return `Lunch ${dateTitle}`;
-  if (intent === 'activity') return `Activity ${dateTitle}`;
-  if (intent === 'food') return `Food ${dateTitle}`;
+  if (timePreference === 'Late night') return `${titleDate} Night Out`;
+  if (intent === 'activity') return `${titleDate} Activity`;
+  if (intent === 'food') return `${titleDate} Food`;
   return `Local Plan ${shortDateToken(planDateStart) || dateTitle}`;
 }
 
@@ -2697,13 +2717,13 @@ function NomNomGoApp() {
   const [planSetupOpen, setPlanSetupOpen] = useState(false);
   const [planSetupTiming, setPlanSetupTiming] = useState<'now' | 'later'>('now');
   const [planSetupIntent, setPlanSetupIntent] = useState<PlanningIntent>('both');
-  const [planSetupName, setPlanSetupName] = useState('');
   const [planSetupDateWindow, setPlanSetupDateWindow] = useState<DateWindowId>('today');
   const [planSetupCustomDateStartInput, setPlanSetupCustomDateStartInput] = useState(formatDateInput(new Date()));
   const [planSetupCustomDateEndInput, setPlanSetupCustomDateEndInput] = useState(formatDateInput(addLocalDays(new Date(), 6)));
   const [planSetupTime, setPlanSetupTime] = useState('Now');
   const [planSetupWhere, setPlanSetupWhere] = useState('Current location');
   const [planSetupStartingLocation, setPlanSetupStartingLocation] = useState('Current location');
+  const [planSetupInvitees, setPlanSetupInvitees] = useState<string[]>([]);
   const [planSetupSubmitting, setPlanSetupSubmitting] = useState(false);
   const [suggestedPairingsOpen, setSuggestedPairingsOpen] = useState(true);
   const [suggestedPairingsExpanded, setSuggestedPairingsExpanded] = useState(false);
@@ -2768,20 +2788,6 @@ function NomNomGoApp() {
     id,
     label: id === 'custom' ? 'Choose dates' : dateWindowLabel(id, new Date(), null),
   })), []);
-  const planSetupCustomRangeForInference = (() => {
-    if (planSetupDateWindow !== 'custom') return null;
-    const start = parseDateInput(planSetupCustomDateStartInput);
-    const end = parseDateInput(planSetupCustomDateEndInput);
-    if (!start || !end) return null;
-    return { start: formatDateInput(start), end: formatDateInput(end) };
-  })();
-  const planSetupDateRangeForInference = dateRangeKeysForWindow(planSetupDateWindow, planSetupCustomRangeForInference);
-  const planSetupInferredPlanType = inferPlanType({
-    planDateStart: planSetupDateRangeForInference.start,
-    planDateEnd: planSetupDateRangeForInference.end,
-    destinationLabel: planSetupWhere,
-    title: planSetupName,
-  });
   const selectedDateWindowText = dateWindowLabel(selectedDateWindow, new Date(), customDateRange);
   const currentTesterName = testerUser?.name || 'Tester';
   const activeBetaPlan = betaPlans.find((betaPlan) => betaPlan.id === activeBetaPlanId) || null;
@@ -2820,7 +2826,6 @@ function NomNomGoApp() {
     destinationLabel: searchLocationLabel,
     title: plan.title,
   });
-  const activePlanTypeLabel = planTypeLabel(activePlanType);
   const activeRoadTripMode = inferRoadTripMode({
     planType: activePlanType,
     destinationLabel: searchLocationLabel,
@@ -2840,15 +2845,15 @@ function NomNomGoApp() {
     return localDateClockMs(activePlanDateRange.start, now.getHours() * 60 + now.getMinutes());
   })();
   const planHeaderMeta = [
-    plan.routeProvider === 'google_maps' ? 'Google Maps draft route' : activePlanTypeLabel,
-    activeRoadTripMode ? 'Road trip mode' : undefined,
+    plan.routeProvider === 'google_maps' ? 'Google Maps draft route' : undefined,
+    activeRoadTripMode ? 'Road trip' : undefined,
     activePlanDateLabel,
     plan.stops.length ? `${plan.stops.length} stop${plan.stops.length === 1 ? '' : 's'}` : undefined,
   ].filter(Boolean).join(' | ');
   const showChargingStopIdeas = activePlanType === 'trip_plan' || activeRoadTripMode || activeChargingStops.length > 0;
   const planSettingsSummary = startingLocationLabel === searchLocationLabel
-    ? `${activePlanTypeLabel} | ${activePlanDateLabel} | ${startingLocationLabel}`
-    : `${activePlanTypeLabel} | ${activePlanDateLabel} | Start ${startingLocationLabel} | Search ${searchLocationLabel}`;
+    ? `${activePlanDateLabel} | ${startingLocationLabel}`
+    : `${activePlanDateLabel} | Start ${startingLocationLabel} | Search ${searchLocationLabel}`;
   const userPlanningSessions = planningSessions.filter((session) => session.participants.includes(currentTesterName));
   const foodSuggestions = activePlanningSession?.suggestions.filter((suggestion) => suggestion.slot === 'food') || [];
   const activitySuggestions = activePlanningSession?.suggestions.filter((suggestion) => suggestion.slot === 'activity') || [];
@@ -3186,6 +3191,7 @@ function NomNomGoApp() {
     searchLocation: nextSearchLocation,
     routeOriginLabel,
     routeStartLocation: nextRouteStartLocation,
+    participants,
   }: {
     source: BetaPlanRecord['source'];
     title?: string;
@@ -3200,6 +3206,7 @@ function NomNomGoApp() {
     searchLocation?: LatLon;
     routeOriginLabel?: string;
     routeStartLocation?: LatLon;
+    participants?: string[];
   }) => {
     const stamp = Date.now();
     const resolvedTitle = title?.trim() || defaultBetaPlanTitle({
@@ -3212,7 +3219,7 @@ function NomNomGoApp() {
     const record: BetaPlanRecord = {
       id: `beta-plan-${stamp}`,
       owner: currentTesterName,
-      participants: [currentTesterName],
+      participants: unique([currentTesterName, ...(participants || [])]),
       title: resolvedTitle,
       source,
       locationLabel: locationLabel || 'Current location',
@@ -3330,13 +3337,13 @@ function NomNomGoApp() {
     const defaultCustomEnd = formatDateInput(addLocalDays(new Date(), 6));
     setPlanSetupTiming(timing);
     setPlanSetupIntent('both');
-    setPlanSetupName('');
     setPlanSetupDateWindow(nextDateWindow);
     setPlanSetupCustomDateStartInput(defaultCustomStart);
     setPlanSetupCustomDateEndInput(defaultCustomEnd);
     setPlanSetupTime(nextTime);
     setPlanSetupWhere('Current location');
     setPlanSetupStartingLocation('Current location');
+    setPlanSetupInvitees([]);
     setPlanSetupOpen(true);
     setHomeOpen(true);
     setSavedPlansLandingOpen(false);
@@ -3348,7 +3355,6 @@ function NomNomGoApp() {
   const submitPlanSetup = async () => {
     if (planSetupSubmitting) return;
 
-    const nextName = planSetupName.trim();
     const whereInput = normalizeCurrentLocationInput(planSetupWhere);
     const startingInput = normalizeCurrentLocationInput(planSetupStartingLocation);
     const isNowSetup = planSetupTiming === 'now';
@@ -3380,7 +3386,6 @@ function NomNomGoApp() {
       planDateStart: nextDateRange.start,
       planDateEnd: nextDateRange.end,
       destinationLabel: whereInput,
-      title: nextName,
     });
     const nextRoadTripMode = inferRoadTripMode({
       planType: nextPlanType,
@@ -3389,13 +3394,6 @@ function NomNomGoApp() {
       stops: [],
     });
     const nextVehicleProfile = vehicleProfileForPlan(nextRoadTripMode, undefined, [], whereInput);
-    const nextTitle = nextName || defaultBetaPlanTitle({
-      intent: planSetupIntent,
-      dateWindow: effectiveDateWindow,
-      customDateRange: nextCustomDateRange,
-      planDateStart: nextDateRange.start,
-      timePreference: effectiveTime,
-    });
     setPlanSetupSubmitting(true);
 
     try {
@@ -3432,7 +3430,6 @@ function NomNomGoApp() {
       setResultMode(initialSearchSlot);
       const betaRecord = await createBetaPlanRecord({
         source: isNowSetup ? 'now' : 'later',
-        title: nextTitle,
         dateWindow: effectiveDateWindow,
         customDateRange: nextCustomDateRange,
         planDateStart: nextDateRange.start,
@@ -3443,6 +3440,7 @@ function NomNomGoApp() {
         locationLabel: whereInput || startingInput || 'Current location',
         routeOriginLabel: startingInput || 'Current location',
         routeStartLocation: startingInput ? undefined : location || undefined,
+        participants: planSetupInvitees,
       });
       setPlan({
         ...EMPTY_PLAN,
@@ -3463,6 +3461,7 @@ function NomNomGoApp() {
         searchLocationLabel: whereInput || startingInput || 'Current location',
         roadTripMode: nextRoadTripMode,
         vehicleProfile: nextVehicleProfile,
+        invitees: planSetupInvitees,
         chargingStops: [],
         nearbyPlacesDuringCharging: [],
         rsvps: betaRecord.rsvps,
@@ -6763,6 +6762,18 @@ function NomNomGoApp() {
     showToast('Suggestion added');
   };
 
+  const shareVisitorBetaPlan = async () => {
+    if (!visitorBetaPlan) return;
+    try {
+      const shareUrl = betaPlanShareUrl(visitorBetaPlan);
+      await Share.share({ message: betaPlanShareMessage(visitorBetaPlan, shareUrl) });
+      addLog('Visitor beta plan shared');
+    } catch (err) {
+      addLog(`Visitor beta plan share failed: ${compactError(err)}`);
+      Alert.alert('Could not share plan', compactError(err));
+    }
+  };
+
   const addVisitorPlanToCalendar = async () => {
     if (!visitorBetaPlan) return;
     const ics = betaPlanIcs(visitorBetaPlan, betaPlanShareUrl(visitorBetaPlan));
@@ -6966,6 +6977,18 @@ function NomNomGoApp() {
 
   const quickShareUsers = unique(TEST_USERS.filter((user) => user !== currentTesterName));
   const planPeopleSummary = planInvitees.length ? unique([currentTesterName, ...planInvitees]).join(', ') : 'Just Me';
+  const planSetupPeopleSummary = planSetupInvitees.length ? unique([currentTesterName, ...planSetupInvitees]).join(', ') : 'Just me';
+  const activePlanIntentLabel = planningIntentLabel(plan.intent || activeBetaPlan?.intent || 'both');
+  const activePlanGoingCount = rsvpCountsFor(betaPlanRsvps).going;
+  const activePlanSummaryLine = [
+    activePlanDateLabel,
+    searchLocationLabel,
+    activePlanIntentLabel,
+    `${activePlanGoingCount} Going`,
+  ].filter(Boolean).join(' | ');
+  const togglePlanSetupInvitee = (user: string) => {
+    setPlanSetupInvitees((prev) => prev.includes(user) ? prev.filter((item) => item !== user) : unique([...prev, user]));
+  };
 
   if (!authLoaded) {
     return (
@@ -6983,6 +7006,12 @@ function NomNomGoApp() {
     const visitorNameValue = visitorDisplayName();
     const visitorRsvp = visitorRsvps[visitorNameValue];
     const visitorFinal = betaPlanFinalLabel(visitorBetaPlan);
+    const visitorSummaryLine = [
+      betaPlanDateLabel(visitorBetaPlan),
+      betaPlanLocationLabel(visitorBetaPlan),
+      planningIntentLabel(visitorBetaPlan.intent),
+      `${rsvpCountsFor(visitorRsvps).going} Going`,
+    ].filter(Boolean).join(' | ');
     return (
       <SafeAreaView style={[styles.safeArea, isLightMode && styles.lightScreen, isDarkMode && styles.darkScreen]} edges={['top', 'left', 'right']}>
         <KeyboardAvoidingView
@@ -7024,14 +7053,19 @@ function NomNomGoApp() {
             ) : null}
 
             <View style={[styles.visitorPlanBox, isDarkMode && styles.darkPanel]}>
-              <Text style={[styles.betaPlanEyebrow, isDarkMode && styles.darkMutedText]}>Shared Plan</Text>
-              <Text style={[styles.betaPlanTitle, isDarkMode && styles.darkText]}>{visitorBetaPlan.title}</Text>
-              <View style={styles.betaDetailGrid}>
-                <PlanLine label="When" value={`${betaPlanDateLabel(visitorBetaPlan)} | ${visitorBetaPlan.timeWindow || 'Time TBD'}`} />
-                <PlanLine label="Where" value={betaPlanLocationLabel(visitorBetaPlan)} />
-                <PlanLine label="Looking for" value={planningIntentLabel(visitorBetaPlan.intent)} />
-                <PlanLine label="RSVP" value={rsvpSummaryText(visitorRsvps)} />
+              <View style={styles.betaPlanHeader}>
+                <View style={styles.betaPlanTitleBlock}>
+                  <Text style={[styles.betaPlanEyebrow, isDarkMode && styles.darkMutedText]}>Shared Plan</Text>
+                  <Text style={[styles.betaPlanTitle, isDarkMode && styles.darkText]}>{visitorBetaPlan.title}</Text>
+                  <Text style={[styles.betaSummaryLine, isDarkMode && styles.darkMutedText]} numberOfLines={2}>
+                    {visitorSummaryLine}
+                  </Text>
+                </View>
+                <View style={[styles.betaStatusPill, visitorBetaPlan.status === 'finalized' && styles.betaStatusPillLocked]}>
+                  <Text style={styles.betaStatusText}>{visitorBetaPlan.status === 'finalized' ? 'Finalized' : 'Planning'}</Text>
+                </View>
               </View>
+
               {visitorBetaPlan.status === 'finalized' && visitorFinal ? (
                 <View style={styles.betaFinalBox}>
                   <Text style={styles.betaFinalLabel}>Final plan</Text>
@@ -7051,8 +7085,61 @@ function NomNomGoApp() {
                 />
               </View>
 
+              {visitorBetaPlan.status !== 'finalized' ? (
+                <View style={[styles.betaPrimaryActionBox, isDarkMode && styles.darkChip]}>
+                  <Text style={[styles.betaPrimaryPrompt, isDarkMode && styles.darkText]}>Have an idea?</Text>
+                  <View style={styles.inputRow}>
+                    <TextInput
+                      style={[styles.input, isDarkMode && styles.darkPanelInput, Platform.OS === 'web' && styles.webInput]}
+                      value={betaSuggestionInput}
+                      onChangeText={setBetaSuggestionInput}
+                      placeholder="Place or idea"
+                      placeholderTextColor={isLightMode ? '#64748b' : '#94a3b8'}
+                      returnKeyType="done"
+                      onSubmitEditing={addVisitorSuggestion}
+                    />
+                    <Button label="Suggest" onPress={addVisitorSuggestion} compact />
+                  </View>
+                </View>
+              ) : null}
+
               <View style={styles.betaSection}>
-                <Text style={[styles.sessionSubhead, isDarkMode && styles.darkText]}>RSVP</Text>
+                <View style={styles.betaSectionHeader}>
+                  <Text style={[styles.sessionSubhead, isDarkMode && styles.darkText]}>Suggestions</Text>
+                  <Text style={[styles.betaSuggestionMeta, isDarkMode && styles.darkMutedText]}>
+                    {visitorBetaPlan.suggestions.length ? `${visitorBetaPlan.suggestions.length} option${visitorBetaPlan.suggestions.length === 1 ? '' : 's'}` : 'Add an idea'}
+                  </Text>
+                </View>
+                {visitorBetaPlan.suggestions.length ? visitorBetaPlan.suggestions.map((suggestion) => (
+                  <View key={suggestion.id} style={[styles.betaSuggestionRow, isDarkMode && styles.darkCard]}>
+                    <View style={styles.betaSuggestionTextBlock}>
+                      <Text style={[styles.betaSuggestionTitle, isDarkMode && styles.darkText]}>{cardToName(suggestion.item) || 'Suggestion'}</Text>
+                      <Text style={[styles.betaSuggestionMeta, isDarkMode && styles.darkMutedText]}>
+                        {suggestion.slot === 'food' ? 'Food' : 'Activity'} by {suggestion.addedBy}
+                      </Text>
+                    </View>
+                  </View>
+                )) : (
+                  <Text style={[styles.empty, isDarkMode && styles.darkMutedText]}>No suggestions yet.</Text>
+                )}
+              </View>
+
+              <View style={styles.betaSection}>
+                <Text style={[styles.sessionSubhead, isDarkMode && styles.darkText]}>Share</Text>
+                <View style={styles.betaActions}>
+                  <Button label="Share Plan" onPress={shareVisitorBetaPlan} primary compact />
+                  <Button label="Add to Calendar" onPress={addVisitorPlanToCalendar} compact />
+                  <Button label="Open App" onPress={() => setVisitorBetaPlan(null)} compact />
+                </View>
+              </View>
+
+              <View style={styles.betaSection}>
+                <View style={styles.betaSectionHeader}>
+                  <Text style={[styles.sessionSubhead, isDarkMode && styles.darkText]}>Your RSVP</Text>
+                  {visitorRsvp ? (
+                    <Text style={[styles.betaSuggestionMeta, isDarkMode && styles.darkMutedText]}>{rsvpStatusLabel(visitorRsvp)}</Text>
+                  ) : null}
+                </View>
                 <View style={styles.rsvpButtonRow}>
                   {RSVP_OPTIONS.map((option) => {
                     const active = visitorRsvp === option.status;
@@ -7071,47 +7158,25 @@ function NomNomGoApp() {
                 </View>
               </View>
 
-              {visitorBetaPlan.status !== 'finalized' ? (
-                <View style={styles.betaSection}>
-                  <Text style={[styles.sessionSubhead, isDarkMode && styles.darkText]}>Suggest an option</Text>
-                  <View style={styles.inputRow}>
-                    <TextInput
-                      style={[styles.input, isDarkMode && styles.darkPanelInput, Platform.OS === 'web' && styles.webInput]}
-                      value={betaSuggestionInput}
-                      onChangeText={setBetaSuggestionInput}
-                      placeholder="Place or idea"
-                      placeholderTextColor={isLightMode ? '#64748b' : '#94a3b8'}
-                      returnKeyType="done"
-                      onSubmitEditing={addVisitorSuggestion}
-                    />
-                    <Button label="Suggest" onPress={addVisitorSuggestion} compact />
+              <View style={[styles.betaDetailsBox, isDarkMode && styles.darkChip]}>
+                <TouchableOpacity style={styles.betaDetailsHeader} onPress={() => setPlanSettingsOpen((prev) => !prev)}>
+                  <View style={styles.betaSuggestionTextBlock}>
+                    <Text style={[styles.sessionSubhead, isDarkMode && styles.darkText]}>Details</Text>
+                    <Text style={[styles.betaSuggestionMeta, isDarkMode && styles.darkMutedText]} numberOfLines={1}>
+                      Date, place, and RSVP count
+                    </Text>
                   </View>
-                </View>
-              ) : null}
-
-              <View style={styles.betaSection}>
-                <Text style={[styles.sessionSubhead, isDarkMode && styles.darkText]}>Suggestions</Text>
-                {visitorBetaPlan.suggestions.length ? visitorBetaPlan.suggestions.map((suggestion) => (
-                  <View key={suggestion.id} style={[styles.betaSuggestionRow, isDarkMode && styles.darkCard]}>
-                    <View style={styles.betaSuggestionTextBlock}>
-                      <Text style={[styles.betaSuggestionTitle, isDarkMode && styles.darkText]}>{cardToName(suggestion.item) || 'Suggestion'}</Text>
-                      <Text style={[styles.betaSuggestionMeta, isDarkMode && styles.darkMutedText]}>
-                        {suggestion.slot === 'food' ? 'Food' : 'Activity'} by {suggestion.addedBy}
-                      </Text>
-                    </View>
+                  <HeaderAction label={planSettingsOpen ? 'Hide' : 'Show'} />
+                </TouchableOpacity>
+                {planSettingsOpen ? (
+                  <View style={styles.betaDetailGrid}>
+                    <PlanLine label="When" value={`${betaPlanDateLabel(visitorBetaPlan)} | ${visitorBetaPlan.timeWindow || 'Time TBD'}`} />
+                    <PlanLine label="Where" value={betaPlanLocationLabel(visitorBetaPlan)} />
+                    <PlanLine label="Looking for" value={planningIntentLabel(visitorBetaPlan.intent)} />
+                    <PlanLine label="RSVP" value={rsvpSummaryText(visitorRsvps)} />
                   </View>
-                )) : (
-                  <Text style={[styles.empty, isDarkMode && styles.darkMutedText]}>No suggestions yet.</Text>
-                )}
+                ) : null}
               </View>
-
-              <View style={styles.betaActions}>
-                <Button label="Add to Calendar" onPress={addVisitorPlanToCalendar} primary compact />
-                <Button label="Open App" onPress={() => setVisitorBetaPlan(null)} compact />
-              </View>
-              <Text style={[styles.betaLocalOnlyText, isDarkMode && styles.darkMutedText]}>
-                Local beta placeholder: RSVP and suggestions are stored on this device until shared backend sync is added.
-              </Text>
             </View>
           </ScrollView>
         </KeyboardAvoidingView>
@@ -7374,7 +7439,7 @@ function NomNomGoApp() {
                   <Text style={[styles.homeTitle, isDarkMode && styles.darkText]}>
                     {planSetupTiming === 'now' ? 'Now' : 'Later'}
                   </Text>
-                  <Text style={[styles.homeSubtitle, isDarkMode && styles.darkMutedText]}>New plan</Text>
+                  <Text style={[styles.homeSubtitle, isDarkMode && styles.darkMutedText]}>Set it up</Text>
                 </View>
                 <Button label="Back" onPress={() => setPlanSetupOpen(false)} compact />
               </View>
@@ -7441,19 +7506,7 @@ function NomNomGoApp() {
               ) : (
                 <>
                   <View style={styles.setupField}>
-                    <Text style={[styles.setupLabel, isDarkMode && styles.darkMutedText]}>Name optional</Text>
-                    <TextInput
-                      style={[styles.input, isDarkMode && styles.darkPanelInput, Platform.OS === 'web' && styles.webInput]}
-                      value={planSetupName}
-                      onChangeText={setPlanSetupName}
-                      placeholder="Dinner Tomorrow"
-                      placeholderTextColor={isLightMode ? '#64748b' : '#94a3b8'}
-                      returnKeyType="next"
-                    />
-                  </View>
-
-                  <View style={styles.setupField}>
-                    <Text style={[styles.setupLabel, isDarkMode && styles.darkMutedText]}>When</Text>
+                    <Text style={[styles.setupLabel, isDarkMode && styles.darkMutedText]}>When?</Text>
                     <View style={styles.dateChipWrap}>
                       {setupDateWindowOptions.map((option) => {
                         const active = planSetupDateWindow === option.id;
@@ -7490,6 +7543,10 @@ function NomNomGoApp() {
                         </View>
                       </View>
                     ) : null}
+                  </View>
+
+                  <View style={styles.setupField}>
+                    <Text style={[styles.setupLabel, isDarkMode && styles.darkMutedText]}>Time?</Text>
                     <View style={styles.chipWrap}>
                       {TIMES.map((time) => {
                         const active = planSetupTime === time;
@@ -7509,38 +7566,40 @@ function NomNomGoApp() {
               )}
 
               <View style={styles.setupField}>
-                <Text style={[styles.setupLabel, isDarkMode && styles.darkMutedText]}>Where</Text>
+                <Text style={[styles.setupLabel, isDarkMode && styles.darkMutedText]}>Where?</Text>
                 <TextInput
                   style={[styles.input, isDarkMode && styles.darkPanelInput, Platform.OS === 'web' && styles.webInput]}
                   value={planSetupWhere}
                   onChangeText={setPlanSetupWhere}
-                  placeholder="Current location"
-                  placeholderTextColor={isLightMode ? '#64748b' : '#94a3b8'}
-                  returnKeyType="next"
-                />
-              </View>
-
-              <View style={styles.setupField}>
-                <Text style={[styles.setupLabel, isDarkMode && styles.darkMutedText]}>Starting location</Text>
-                <TextInput
-                  style={[styles.input, isDarkMode && styles.darkPanelInput, Platform.OS === 'web' && styles.webInput]}
-                  value={planSetupStartingLocation}
-                  onChangeText={setPlanSetupStartingLocation}
-                  placeholder="Current location"
+                  placeholder="Current location, neighborhood, or city"
                   placeholderTextColor={isLightMode ? '#64748b' : '#94a3b8'}
                   returnKeyType="done"
                   onSubmitEditing={submitPlanSetup}
                 />
               </View>
 
-              {planSetupTiming === 'later' ? (
-                <View style={[styles.inferredPlanTypeBox, isDarkMode && styles.darkChip]}>
-                  <Text style={[styles.setupLabel, isDarkMode && styles.darkMutedText]}>Plan type</Text>
-                  <Text style={[styles.inferredPlanTypeText, isDarkMode && styles.darkText]}>
-                    {planTypeLabel(planSetupInferredPlanType)}
+              <View style={styles.setupField}>
+                <View style={styles.setupFieldHeader}>
+                  <Text style={[styles.setupLabel, isDarkMode && styles.darkMutedText]}>Who's going?</Text>
+                  <Text style={[styles.setupPeopleSummary, isDarkMode && styles.darkMutedText]} numberOfLines={1}>
+                    {planSetupPeopleSummary}
                   </Text>
                 </View>
-              ) : null}
+                <View style={styles.quickShareUserList}>
+                  {quickShareUsers.map((user) => {
+                    const selected = planSetupInvitees.includes(user);
+                    return (
+                      <TouchableOpacity
+                        key={`setup-person-${user}`}
+                        style={[styles.quickShareUserButton, selected && styles.quickShareUserButtonSelected]}
+                        onPress={() => togglePlanSetupInvitee(user)}
+                      >
+                        <Text style={styles.quickShareUserText}>{user}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </View>
 
               <View style={styles.setupActions}>
                 <Button
@@ -7830,43 +7889,114 @@ function NomNomGoApp() {
           <View style={[styles.betaPlanDetailCard, isDarkMode && styles.darkCard]}>
             <View style={styles.betaPlanHeader}>
               <View style={styles.betaPlanTitleBlock}>
-                <Text style={[styles.betaPlanEyebrow, isDarkMode && styles.darkMutedText]}>
-                  {isPlanLocked ? 'Finalized Plan' : 'Plan Detail'}
+                <Text style={[styles.betaPlanTitle, isDarkMode && styles.darkText]} numberOfLines={2}>
+                  {planTitle}
                 </Text>
-                {isPlanLocked ? (
-                  <Text style={[styles.betaPlanTitle, isDarkMode && styles.darkText]} numberOfLines={2}>
-                    {planTitle}
-                  </Text>
-                ) : (
-                  <TextInput
-                    style={[styles.betaPlanTitleInput, isDarkMode && styles.darkPanelInput]}
-                    value={plan.title ?? planTitle}
-                    onChangeText={renamePlan}
-                    placeholder={activeBetaPlan?.title || 'Plan title'}
-                    placeholderTextColor={isLightMode ? '#64748b' : '#94a3b8'}
-                  />
-                )}
+                <Text style={[styles.betaSummaryLine, isDarkMode && styles.darkMutedText]} numberOfLines={2}>
+                  {activePlanSummaryLine}
+                </Text>
               </View>
               <View style={[styles.betaStatusPill, isPlanLocked && styles.betaStatusPillLocked]}>
-                <Text style={styles.betaStatusText}>{isPlanLocked ? 'Final' : 'Planning'}</Text>
+                <Text style={styles.betaStatusText}>{isPlanLocked ? 'Finalized' : 'Planning'}</Text>
               </View>
             </View>
 
-            <View style={styles.betaDetailGrid}>
-              <PlanLine label="When" value={`${activePlanDateLabel} | ${activePlanTimeWindow || 'Time TBD'}`} />
-              <PlanLine label="Search area" value={searchLocationLabel} />
-              <PlanLine label="Start" value={startingLocationLabel} />
-              <PlanLine label="Looking for" value={planningIntentLabel(plan.intent || activeBetaPlan?.intent || 'both')} />
-              <PlanLine label="RSVP" value={betaPlanRsvpSummary} />
+            {isPlanLocked || activeBetaPlanFinalLabel || selectedDraftFinalLabel ? (
+              <View style={styles.betaFinalBox}>
+                <Text style={styles.betaFinalLabel}>{isPlanLocked ? 'Final plan' : 'Selected option'}</Text>
+                <Text style={styles.betaFinalValue}>
+                  {isPlanLocked
+                    ? activeBetaPlanFinalLabel || selectedDraftFinalLabel || 'Final option selected'
+                    : selectedDraftFinalLabel || 'Ready when everyone is.'}
+                </Text>
+              </View>
+            ) : (
+              <View style={[styles.betaPrimaryActionBox, isDarkMode && styles.darkChip]}>
+                <Text style={[styles.betaPrimaryPrompt, isDarkMode && styles.darkText]}>What should we do?</Text>
+                <View style={styles.betaSearchActions}>
+                  <TouchableOpacity
+                    style={[styles.betaSearchButton, styles.betaSearchButtonFood]}
+                    onPress={() => searchFromPlan('food')}
+                    accessibilityRole="button"
+                    accessibilityLabel="Search Food"
+                  >
+                    <Ionicons name="restaurant-outline" size={20} color="#fffaf3" />
+                    <Text style={[styles.betaSearchButtonText, styles.betaSearchButtonTextLight]}>Search Food</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.betaSearchButton, styles.betaSearchButtonActivity]}
+                    onPress={() => searchFromPlan('activity')}
+                    accessibilityRole="button"
+                    accessibilityLabel="Search Activities"
+                  >
+                    <Ionicons name="sparkles-outline" size={20} color="#071827" />
+                    <Text style={styles.betaSearchButtonText}>Search Activities</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
+
+            <View style={styles.betaSection}>
+              <View style={styles.betaSectionHeader}>
+                <Text style={[styles.sessionSubhead, isDarkMode && styles.darkText]}>Suggestions</Text>
+                <Text style={[styles.betaSuggestionMeta, isDarkMode && styles.darkMutedText]}>
+                  {betaPlanSuggestions.length ? `${betaPlanSuggestions.length} option${betaPlanSuggestions.length === 1 ? '' : 's'}` : 'Add an idea'}
+                </Text>
+              </View>
+              {betaPlanSuggestions.length ? betaPlanSuggestions.map((suggestion) => (
+                <View key={suggestion.id} style={[styles.betaSuggestionRow, isDarkMode && styles.darkCard]}>
+                  <View style={styles.betaSuggestionTextBlock}>
+                    <Text style={[styles.betaSuggestionTitle, isDarkMode && styles.darkText]}>{cardToName(suggestion.item) || 'Suggestion'}</Text>
+                    <Text style={[styles.betaSuggestionMeta, isDarkMode && styles.darkMutedText]}>
+                      {suggestion.slot === 'food' ? 'Food' : 'Activity'} by {suggestion.addedBy}
+                    </Text>
+                  </View>
+                  {!isPlanLocked && canFinalizeActiveBetaPlan ? (
+                    <Button label="Finalize" onPress={() => finalizeBetaSuggestion(suggestion)} primary compact />
+                  ) : null}
+                </View>
+              )) : (
+                <Text style={[styles.empty, isDarkMode && styles.darkMutedText]}>Suggestions will appear here.</Text>
+              )}
+              {!isPlanLocked ? (
+                <View style={styles.betaSuggestionComposer}>
+                  <TextInput
+                    style={[styles.input, isDarkMode && styles.darkPanelInput, Platform.OS === 'web' && styles.webInput]}
+                    value={betaSuggestionInput}
+                    onChangeText={setBetaSuggestionInput}
+                    placeholder="Place or idea"
+                    placeholderTextColor={isLightMode ? '#64748b' : '#94a3b8'}
+                    returnKeyType="done"
+                    onSubmitEditing={() => addActiveBetaSuggestion(resultMode)}
+                  />
+                  <View style={styles.betaSuggestionComposerActions}>
+                    <Button label="Food" onPress={() => addActiveBetaSuggestion('food')} compact />
+                    <Button label="Activity" onPress={() => addActiveBetaSuggestion('activity')} compact />
+                  </View>
+                </View>
+              ) : null}
             </View>
 
-            <View style={styles.betaFinalBox}>
-              <Text style={styles.betaFinalLabel}>{isPlanLocked ? 'Final place/activity' : 'Selected final option'}</Text>
-              <Text style={styles.betaFinalValue}>
-                {isPlanLocked
-                  ? activeBetaPlanFinalLabel || selectedDraftFinalLabel || 'Final option selected'
-                  : selectedDraftFinalLabel || 'Pick a food place, activity, or suggestion when ready.'}
-              </Text>
+            <View style={styles.betaSection}>
+              <Text style={[styles.sessionSubhead, isDarkMode && styles.darkText]}>Share</Text>
+              <View style={styles.betaActions}>
+                <Button label="Share Plan" onPress={shareActiveBetaPlan} primary compact />
+                <Button
+                  label={isPlanLocked ? 'Finalized' : 'Finalize Plan'}
+                  onPress={lockPlan}
+                  compact
+                  disabled={isPlanLocked || !canFinalizeActiveBetaPlan || !plan.stops.length}
+                />
+                {!isPlanLocked && hasAnyActiveStop && !isCurrentPlanSaved ? (
+                  <Button label="Save" onPress={saveCurrentPlan} compact />
+                ) : null}
+                {hasAnyActiveStop ? (
+                  <Button label={isImportedGoogleMapsPlan && plan.sourceUrl ? 'Open route' : 'Route'} onPress={openRouteOptions} compact />
+                ) : null}
+                {isPlanLocked ? (
+                  <Button label="Add to Calendar" onPress={addActiveBetaPlanToCalendar} success compact />
+                ) : null}
+              </View>
             </View>
 
             <View style={styles.betaSection}>
@@ -7894,59 +8024,40 @@ function NomNomGoApp() {
               </View>
             </View>
 
-            {!isPlanLocked ? (
-              <View style={styles.betaSection}>
-                <Text style={[styles.sessionSubhead, isDarkMode && styles.darkText]}>Participant suggestion</Text>
-                <View style={styles.inputRow}>
-                  <TextInput
-                    style={[styles.input, isDarkMode && styles.darkPanelInput, Platform.OS === 'web' && styles.webInput]}
-                    value={betaSuggestionInput}
-                    onChangeText={setBetaSuggestionInput}
-                    placeholder="Place or idea"
-                    placeholderTextColor={isLightMode ? '#64748b' : '#94a3b8'}
-                    returnKeyType="done"
-                    onSubmitEditing={() => addActiveBetaSuggestion(resultMode)}
-                  />
-                  <Button label="Food" onPress={() => addActiveBetaSuggestion('food')} compact />
-                  <Button label="Activity" onPress={() => addActiveBetaSuggestion('activity')} compact />
+            <View style={[styles.betaDetailsBox, isDarkMode && styles.darkChip]}>
+              <TouchableOpacity style={styles.betaDetailsHeader} onPress={() => setPlanSettingsOpen((prev) => !prev)}>
+                <View style={styles.betaSuggestionTextBlock}>
+                  <Text style={[styles.sessionSubhead, isDarkMode && styles.darkText]}>Details</Text>
+                  <Text style={[styles.betaSuggestionMeta, isDarkMode && styles.darkMutedText]} numberOfLines={1}>
+                    Date, location, people, and title
+                  </Text>
                 </View>
-              </View>
-            ) : null}
-
-            <View style={styles.betaSection}>
-              <Text style={[styles.sessionSubhead, isDarkMode && styles.darkText]}>Suggestions</Text>
-              {betaPlanSuggestions.length ? betaPlanSuggestions.map((suggestion) => (
-                <View key={suggestion.id} style={[styles.betaSuggestionRow, isDarkMode && styles.darkCard]}>
-                  <View style={styles.betaSuggestionTextBlock}>
-                    <Text style={[styles.betaSuggestionTitle, isDarkMode && styles.darkText]}>{cardToName(suggestion.item) || 'Suggestion'}</Text>
-                    <Text style={[styles.betaSuggestionMeta, isDarkMode && styles.darkMutedText]}>
-                      {suggestion.slot === 'food' ? 'Food' : 'Activity'} by {suggestion.addedBy}
-                    </Text>
-                  </View>
-                  {!isPlanLocked && canFinalizeActiveBetaPlan ? (
-                    <Button label="Finalize" onPress={() => finalizeBetaSuggestion(suggestion)} primary compact />
+                <HeaderAction label={planSettingsOpen ? 'Hide' : 'Show'} />
+              </TouchableOpacity>
+              {planSettingsOpen ? (
+                <View style={styles.betaDetailsBody}>
+                  {!isPlanLocked ? (
+                    <View style={styles.setupField}>
+                      <Text style={[styles.setupLabel, isDarkMode && styles.darkMutedText]}>Plan name</Text>
+                      <TextInput
+                        style={[styles.betaPlanTitleInput, isDarkMode && styles.darkPanelInput]}
+                        value={plan.title ?? planTitle}
+                        onChangeText={renamePlan}
+                        placeholder={activeBetaPlan?.title || 'Plan title'}
+                        placeholderTextColor={isLightMode ? '#64748b' : '#94a3b8'}
+                      />
+                    </View>
                   ) : null}
+                  <View style={styles.betaDetailGrid}>
+                    <PlanLine label="When" value={`${activePlanDateLabel} | ${activePlanTimeWindow || 'Time TBD'}`} />
+                    <PlanLine label="Where" value={searchLocationLabel} />
+                    <PlanLine label="Start" value={startingLocationLabel} />
+                    <PlanLine label="Looking for" value={activePlanIntentLabel} />
+                    <PlanLine label="RSVP" value={betaPlanRsvpSummary} />
+                  </View>
                 </View>
-              )) : (
-                <Text style={[styles.empty, isDarkMode && styles.darkMutedText]}>Suggestions will appear here.</Text>
-              )}
-            </View>
-
-            <View style={styles.betaActions}>
-              <Button label="Share Plan" onPress={shareActiveBetaPlan} primary compact />
-              <Button
-                label={isPlanLocked ? 'Finalized' : 'Finalize Plan'}
-                onPress={lockPlan}
-                compact
-                disabled={isPlanLocked || !canFinalizeActiveBetaPlan || !plan.stops.length}
-              />
-              {isPlanLocked ? (
-                <Button label="Add to Calendar" onPress={addActiveBetaPlanToCalendar} success compact />
               ) : null}
             </View>
-            <Text style={[styles.betaLocalOnlyText, isDarkMode && styles.darkMutedText]}>
-              Local beta placeholder: shared RSVP and suggestions use this device's local storage until backend sync is added.
-            </Text>
           </View>
         ) : null}
 
@@ -7993,7 +8104,7 @@ function NomNomGoApp() {
           </View>
         ) : null}
 
-        {hasAnyActiveStop && !isPlanLocked ? (
+        {hasAnyActiveStop && !isPlanLocked && !showBetaPlanDetail ? (
           <View style={styles.planHeader}>
             <View style={styles.planTitleBlock}>
               <TextInput
@@ -8016,7 +8127,7 @@ function NomNomGoApp() {
           </View>
         ) : null}
 
-        {!hasAnyActiveStop ? (
+        {!hasAnyActiveStop && !showBetaPlanDetail ? (
           <View>
             <Text style={[styles.startWithLabel, isDarkMode && styles.darkMutedText]}>Plan</Text>
             <View style={styles.startChooser}>
@@ -8047,7 +8158,7 @@ function NomNomGoApp() {
                   {planTitle}
                 </Text>
                 <Text style={[styles.lockedPlanMeta, isDarkMode && styles.darkMutedText]} numberOfLines={1}>
-                  {activePlanTypeLabel} | {activePlanDateTimeLabel}
+                  {activePlanDateTimeLabel}
                 </Text>
               </View>
               <View style={styles.lockedPlanCardTools}>
@@ -8356,7 +8467,7 @@ function NomNomGoApp() {
               </View>
               {activeVehicleProfile ? (
                 <Text style={[styles.chargingIdeaMeta, isDarkMode && styles.darkMutedText]}>
-                  Vehicle profile: {activeVehicleProfile.label || planTypeLabel(activePlanType)}
+                  Vehicle profile: {activeVehicleProfile.label || 'Travel profile'}
                 </Text>
               ) : null}
               {activeChargingStops.length ? (
@@ -8371,7 +8482,7 @@ function NomNomGoApp() {
                             idea.locationLabel,
                             idea.estimatedDwellMinutes ? `${idea.estimatedDwellMinutes} min dwell idea` : undefined,
                             idea.source === 'itinerary' ? 'Manual itinerary stop' : undefined,
-                          ].filter(Boolean).join(' | ') || 'Manual placeholder'}
+                          ].filter(Boolean).join(' | ') || 'Suggested stop'}
                         </Text>
                       </View>
                     </View>
@@ -8379,7 +8490,7 @@ function NomNomGoApp() {
                 </View>
               ) : (
                 <Text style={[styles.chargingIdeaMeta, isDarkMode && styles.darkMutedText]}>
-                  Manual placeholders only for now. Add Tesla Supercharger or EV Charger as activity stops when useful.
+                  Add Tesla Supercharger or EV Charger as activity stops when useful.
                 </Text>
               )}
               {activeNearbyPlacesDuringCharging.length ? (
@@ -8473,7 +8584,7 @@ function NomNomGoApp() {
                     <Text style={styles.savedPlanMeta}>
                       {saved.source === 'shared'
                         ? `Shared by ${saved.sharedBy || 'Tester'} to ${saved.sharedTo || 'tester'}`
-                        : 'Saved plan'} | {planTypeLabel(savedPlanType(saved))} | {savedPlanDateLabel(saved)}
+                        : 'Saved plan'} | {savedPlanDateLabel(saved)}
                     </Text>
                     <Text style={styles.savedPlanStops} numberOfLines={2}>
                       {savedPlanStopsLabel(saved)}
@@ -9830,6 +9941,20 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     textTransform: 'uppercase',
   },
+  setupFieldHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  setupPeopleSummary: {
+    flex: 1,
+    color: '#526170',
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '800',
+    textAlign: 'right',
+  },
   inferredPlanTypeBox: {
     borderWidth: 1,
     borderColor: '#eadccb',
@@ -10459,6 +10584,12 @@ const styles = StyleSheet.create({
     lineHeight: 27,
     fontWeight: '900',
   },
+  betaSummaryLine: {
+    color: '#526170',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '800',
+  },
   betaPlanTitleInput: {
     minHeight: 42,
     borderRadius: 8,
@@ -10493,6 +10624,23 @@ const styles = StyleSheet.create({
   betaDetailGrid: {
     gap: 2,
   },
+  betaDetailsBox: {
+    borderWidth: 1,
+    borderColor: '#d6f2e9',
+    borderRadius: 8,
+    backgroundColor: '#f3fbf7',
+    padding: 10,
+    gap: 10,
+  },
+  betaDetailsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  betaDetailsBody: {
+    gap: 10,
+  },
   betaFinalBox: {
     borderWidth: 1,
     borderColor: '#eadccb',
@@ -10513,6 +10661,52 @@ const styles = StyleSheet.create({
     fontSize: 15,
     lineHeight: 20,
     fontWeight: '900',
+  },
+  betaPrimaryActionBox: {
+    borderWidth: 1,
+    borderColor: '#c7eadf',
+    borderRadius: 8,
+    backgroundColor: '#f3fbf7',
+    padding: 12,
+    gap: 10,
+  },
+  betaPrimaryPrompt: {
+    color: '#071827',
+    fontSize: 18,
+    lineHeight: 23,
+    fontWeight: '900',
+  },
+  betaSearchActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  betaSearchButton: {
+    flexGrow: 1,
+    minWidth: 145,
+    minHeight: 50,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  betaSearchButtonFood: {
+    backgroundColor: '#178f79',
+  },
+  betaSearchButtonActivity: {
+    backgroundColor: '#ffc84a',
+  },
+  betaSearchButtonText: {
+    color: '#071827',
+    fontSize: 14,
+    lineHeight: 18,
+    fontWeight: '900',
+  },
+  betaSearchButtonTextLight: {
+    color: '#fffaf3',
   },
   betaSection: {
     gap: 8,
@@ -10578,6 +10772,17 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 16,
     fontWeight: '800',
+  },
+  betaSuggestionComposer: {
+    borderTopWidth: 1,
+    borderTopColor: '#e6d7c5',
+    paddingTop: 10,
+    gap: 8,
+  },
+  betaSuggestionComposerActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
   },
   betaActions: {
     flexDirection: 'row',
