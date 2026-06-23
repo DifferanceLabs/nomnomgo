@@ -2457,6 +2457,8 @@ function NomNomGoApp() {
   const [toastMessage, setToastMessage] = useState('');
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
+  const [peopleGroupsOpen, setPeopleGroupsOpen] = useState(false);
+  const [planPeopleOpen, setPlanPeopleOpen] = useState(false);
   const [authLoaded, setAuthLoaded] = useState(false);
   const [testerUser, setTesterUser] = useState<TesterUser | null>(null);
   const [testerAuthenticated, setTesterAuthenticated] = useState(false);
@@ -2838,6 +2840,8 @@ function NomNomGoApp() {
   const closeTransientSurfaces = () => {
     setAccountMenuOpen(false);
     setAccountSettingsOpen(false);
+    setPeopleGroupsOpen(false);
+    setPlanPeopleOpen(false);
     setSharePreviewOpen(false);
     setPlanPreviewOpen(false);
     setQuickShareTarget(null);
@@ -2857,6 +2861,7 @@ function NomNomGoApp() {
     setPlanSettingsOpen(false);
     setPreferencesOpen(false);
     setAdvancedPreferencesOpen(false);
+    setPlanPeopleOpen(false);
     scrollToTop();
     addLog('Home opened');
   };
@@ -3088,6 +3093,22 @@ function NomNomGoApp() {
     setPlanSettingsOpen(false);
     scrollToSavedPlans();
     addLog('Home action: saved plans');
+  };
+
+  const openPeopleGroupsHomeAction = () => {
+    closeTransientSurfaces();
+    if (GROUP_SESSION_ENABLED) {
+      setPlanSetupOpen(false);
+      setHomeOpen(false);
+      setSavedPlansLandingOpen(false);
+      setSavedPlansOpen(false);
+      setSessionBuilderOpen(true);
+      scrollToTop();
+      addLog('Home action: people and groups session builder');
+      return;
+    }
+    setPeopleGroupsOpen(true);
+    addLog('Home action: people and groups');
   };
 
   const markStopSelected = (key?: string) => {
@@ -6231,6 +6252,7 @@ function NomNomGoApp() {
   ].filter(Boolean);
 
   const quickShareUsers = unique(TEST_USERS.filter((user) => user !== currentTesterName));
+  const planPeopleSummary = planInvitees.length ? unique([currentTesterName, ...planInvitees]).join(', ') : 'Just Me';
 
   if (!authLoaded) {
     return (
@@ -6437,33 +6459,59 @@ function NomNomGoApp() {
               </View>
               <View style={styles.homeActionGrid}>
                 <TouchableOpacity
-                  style={[styles.homeMainButton, styles.homeNowButton]}
+                  style={[styles.homeMainButton, styles.homePrimaryAction, styles.homeNowButton]}
                   onPress={() => { void startNowPlan(); }}
                   accessibilityRole="button"
-                  accessibilityLabel="Now"
+                  accessibilityLabel="Now. Find food and activities nearby."
                 >
-                  <Ionicons name="time-outline" size={24} color="#fffaf3" />
-                  <Text style={styles.homeMainButtonText}>Now</Text>
+                  <View style={styles.homeActionLabelRow}>
+                    <Ionicons name="time-outline" size={26} color="#fffaf3" />
+                    <Text style={styles.homeMainButtonText}>Now</Text>
+                  </View>
+                  <Text style={styles.homeMainButtonSubtext}>Find food and activities nearby</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
-                  style={[styles.homeMainButton, styles.homeLaterButton]}
+                  style={[styles.homeMainButton, styles.homeSecondaryAction, styles.homeLaterButton]}
                   onPress={() => openPlanSetup('later')}
                   accessibilityRole="button"
-                  accessibilityLabel="Later"
+                  accessibilityLabel="Later. Plan something for another day."
                 >
-                  <Ionicons name="calendar-outline" size={24} color="#fffaf3" />
-                  <Text style={styles.homeMainButtonText}>Later</Text>
+                  <View style={styles.homeActionLabelRow}>
+                    <Ionicons name="calendar-outline" size={22} color="#fffaf3" />
+                    <Text style={styles.homeMainButtonText}>Later</Text>
+                  </View>
+                  <Text style={styles.homeMainButtonSubtext}>Plan something for another day</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
-                  style={[styles.homeMainButton, styles.homeSavedButton]}
+                  style={[styles.homeMainButton, styles.homeSecondaryAction, styles.homeSavedButton]}
                   onPress={openSavedPlansHomeAction}
                   accessibilityRole="button"
-                  accessibilityLabel="Saved or shared plans"
+                  accessibilityLabel="Saved or shared. Your plans and invitations."
                 >
-                  <Ionicons name="albums-outline" size={24} color="#fffaf3" />
-                  <Text style={styles.homeMainButtonText}>Saved/Shared</Text>
+                  <View style={styles.homeActionLabelRow}>
+                    <Ionicons name="albums-outline" size={22} color="#071827" />
+                    <Text style={[styles.homeMainButtonText, styles.homeSavedButtonText]}>Saved/Shared</Text>
+                  </View>
+                  <Text style={[styles.homeMainButtonSubtext, styles.homeSavedButtonSubtext]}>Your plans and invitations</Text>
                 </TouchableOpacity>
               </View>
+              <TouchableOpacity
+                style={[styles.peopleGroupsEntry, isDarkMode && styles.darkChip]}
+                onPress={openPeopleGroupsHomeAction}
+                accessibilityRole="button"
+                accessibilityLabel="People and groups. Plan with friends, family, and groups."
+              >
+                <View style={styles.peopleGroupsIcon}>
+                  <Ionicons name="people-outline" size={21} color="#071827" />
+                </View>
+                <View style={styles.peopleGroupsTextBlock}>
+                  <Text style={[styles.peopleGroupsTitle, isDarkMode && styles.darkText]}>People & Groups</Text>
+                  <Text style={[styles.peopleGroupsSubtitle, isDarkMode && styles.darkMutedText]}>
+                    Plan with friends, family, and groups
+                  </Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={isDarkMode ? '#fffaf3' : '#526170'} />
+              </TouchableOpacity>
             </>
           ) : (
             <>
@@ -6924,6 +6972,49 @@ function NomNomGoApp() {
         style={[styles.planBox, isDarkMode && styles.darkPanel]}
         onLayout={(event) => { planBoxYRef.current = event.nativeEvent.layout.y; }}
       >
+        {!isPlanLocked ? (
+          <View style={[styles.planPeopleBox, isDarkMode && styles.darkChip]}>
+            <View style={styles.planPeopleHeader}>
+              <View style={styles.planPeopleTextBlock}>
+                <Text style={[styles.planPeopleTitle, isDarkMode && styles.darkText]}>Who's going?</Text>
+                <Text style={[styles.planPeopleSummary, isDarkMode && styles.darkMutedText]} numberOfLines={1}>
+                  {planPeopleSummary}
+                </Text>
+              </View>
+              <TouchableOpacity
+                style={styles.planPeopleAddButton}
+                onPress={() => setPlanPeopleOpen((prev) => !prev)}
+                accessibilityRole="button"
+                accessibilityLabel={planPeopleOpen ? 'Done adding people' : 'Add people to this plan'}
+              >
+                <Ionicons name={planPeopleOpen ? 'checkmark-outline' : 'add-outline'} size={17} color="#071827" />
+                <Text style={styles.planPeopleAddText}>{planPeopleOpen ? 'Done' : '+ Add People'}</Text>
+              </TouchableOpacity>
+            </View>
+            {planPeopleOpen ? (
+              <View style={styles.planPeoplePicker}>
+                <View style={styles.quickShareUserList}>
+                  {quickShareUsers.map((user) => {
+                    const selected = planInvitees.includes(user);
+                    return (
+                      <TouchableOpacity
+                        key={`now-person-${user}`}
+                        style={[styles.quickShareUserButton, selected && styles.quickShareUserButtonSelected]}
+                        onPress={() => togglePlanInvitee(user)}
+                      >
+                        <Text style={styles.quickShareUserText}>{user}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+                <Text style={[styles.planPeopleHint, isDarkMode && styles.darkMutedText]}>
+                  Full people and group planning is coming soon.
+                </Text>
+              </View>
+            ) : null}
+          </View>
+        ) : null}
+
         {hasAnyActiveStop && !isPlanLocked ? (
           <View style={styles.planHeader}>
             <View style={styles.planTitleBlock}>
@@ -7727,6 +7818,34 @@ function NomNomGoApp() {
       ) : null}
       </>
       )}
+
+      <Modal
+        visible={peopleGroupsOpen}
+        animationType="fade"
+        transparent
+        onRequestClose={() => setPeopleGroupsOpen(false)}
+      >
+        <View style={styles.shareOverlay}>
+          <View style={[styles.quickShareCard, isDarkMode && styles.darkModalCard]}>
+            <Text style={[styles.quickShareTitle, isDarkMode && styles.darkText]}>People & Groups</Text>
+            <Text style={[styles.peopleGroupsModalSubtitle, isDarkMode && styles.darkMutedText]}>
+              Plan with friends, family, and groups
+            </Text>
+            <View style={[styles.peopleGroupsComingSoonBox, isDarkMode && styles.darkChip]}>
+              <Ionicons name="people-outline" size={24} color={isDarkMode ? '#fffaf3' : '#178f79'} />
+              <View style={styles.peopleGroupsTextBlock}>
+                <Text style={[styles.peopleGroupsComingSoonTitle, isDarkMode && styles.darkText]}>Coming soon</Text>
+                <Text style={[styles.peopleGroupsComingSoonText, isDarkMode && styles.darkMutedText]}>
+                  Profiles, reusable groups, and invite management will live here.
+                </Text>
+              </View>
+            </View>
+            <View style={styles.shareActions}>
+              <Button label="Close" onPress={() => setPeopleGroupsOpen(false)} primary />
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       <Modal
         visible={routeOptionsOpen}
@@ -8617,11 +8736,29 @@ const styles = StyleSheet.create({
     minWidth: 142,
     minHeight: 82,
     borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'transparent',
     paddingHorizontal: 14,
     paddingVertical: 12,
-    alignItems: 'center',
+    alignItems: 'flex-start',
     justifyContent: 'center',
     gap: 8,
+  },
+  homePrimaryAction: {
+    flexBasis: '100%',
+    minHeight: 110,
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+  },
+  homeSecondaryAction: {
+    flexBasis: '48%',
+    minHeight: 96,
+  },
+  homeActionLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    maxWidth: '100%',
   },
   homeNowButton: {
     backgroundColor: '#178f79',
@@ -8630,14 +8767,66 @@ const styles = StyleSheet.create({
     backgroundColor: '#071827',
   },
   homeSavedButton: {
-    backgroundColor: '#f23b35',
+    backgroundColor: '#fffdf8',
+    borderColor: '#eadccb',
   },
   homeMainButtonText: {
     color: '#fffaf3',
     fontSize: 16,
     lineHeight: 20,
     fontWeight: '900',
-    textAlign: 'center',
+    textAlign: 'left',
+  },
+  homeMainButtonSubtext: {
+    color: '#f5d7c2',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '800',
+  },
+  homeSavedButtonText: {
+    color: '#071827',
+  },
+  homeSavedButtonSubtext: {
+    color: '#526170',
+  },
+  peopleGroupsEntry: {
+    minHeight: 70,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#eadccb',
+    backgroundColor: '#fffdf8',
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  peopleGroupsIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: '#dff7ef',
+    borderWidth: 1,
+    borderColor: '#66c5a8',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  peopleGroupsTextBlock: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  peopleGroupsTitle: {
+    color: '#071827',
+    fontSize: 15,
+    lineHeight: 19,
+    fontWeight: '900',
+  },
+  peopleGroupsSubtitle: {
+    color: '#526170',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '800',
   },
   setupHeaderRow: {
     flexDirection: 'row',
@@ -9249,6 +9438,70 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     padding: 14,
     marginBottom: 16,
+  },
+  planPeopleBox: {
+    borderWidth: 1,
+    borderColor: '#c7eadf',
+    borderRadius: 8,
+    backgroundColor: '#f3fbf7',
+    padding: 12,
+    marginBottom: 14,
+    gap: 10,
+  },
+  planPeopleHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  planPeopleTextBlock: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  planPeopleTitle: {
+    color: '#071827',
+    fontSize: 16,
+    lineHeight: 20,
+    fontWeight: '900',
+  },
+  planPeopleSummary: {
+    color: '#526170',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '900',
+  },
+  planPeopleAddButton: {
+    minHeight: 38,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#66c5a8',
+    backgroundColor: '#dff7ef',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    flexShrink: 0,
+  },
+  planPeopleAddText: {
+    color: '#071827',
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '900',
+  },
+  planPeoplePicker: {
+    borderTopWidth: 1,
+    borderTopColor: '#c7eadf',
+    paddingTop: 10,
+    gap: 8,
+  },
+  planPeopleHint: {
+    color: '#526170',
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: '800',
   },
   lightPanel: {
     backgroundColor: '#fffdf8',
@@ -10490,6 +10743,37 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     marginTop: 6,
     marginBottom: 14,
+  },
+  peopleGroupsModalSubtitle: {
+    color: '#526170',
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: '800',
+    marginTop: 6,
+    marginBottom: 14,
+  },
+  peopleGroupsComingSoonBox: {
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#c7eadf',
+    backgroundColor: '#f3fbf7',
+    padding: 12,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    marginBottom: 14,
+  },
+  peopleGroupsComingSoonTitle: {
+    color: '#071827',
+    fontSize: 15,
+    lineHeight: 19,
+    fontWeight: '900',
+  },
+  peopleGroupsComingSoonText: {
+    color: '#526170',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '800',
   },
   quickShareHint: {
     color: '#526170',
