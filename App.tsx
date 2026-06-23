@@ -7693,32 +7693,34 @@ function NomNomGoApp() {
                 : 'add-outline';
             return (
             <View key={`${card.id}-${index}`} style={[styles.card, isDarkMode && styles.darkCard, (isSelected || isSuggested) && styles.cardSelected]}>
-              <View style={styles.cardTopRow}>
-                <Text style={[styles.cardRank, isSelected && styles.cardRankSelected]}>
-                  {resultBadgeForCard(card, isSelected, index)}
-                </Text>
-                <Text style={[
-                  styles.cardHours,
-                  isDarkMode && !(isSelected || isSuggested) && styles.darkMutedText,
-                  card.isOpen ? styles.open : card.isOpen === false ? styles.closed : undefined,
-                ]}>
-                  {card.kind === 'event' ? card.eventDateText || 'Date TBA' : card.hoursText || 'Hours unknown'}
-                </Text>
-              </View>
-              <View style={styles.cardTitleRow}>
-                <Text style={[
-                  styles.cardTitle,
-                  isDarkMode && !(isSelected || isSuggested) && styles.darkText,
-                  (isSelected || isSuggested) && styles.cardTitleSelected,
-                ]}>{card.title}</Text>
-                <TouchableOpacity
-                  style={[styles.cardFavoriteButton, isFavorite && styles.cardFavoriteButtonActive]}
-                  onPress={() => toggleFavorite(card)}
-                  accessibilityRole="button"
-                  accessibilityLabel={isFavorite ? `Unstar ${card.title}` : `Star ${card.title}`}
-                >
-                  <Ionicons name={isFavorite ? 'star' : 'star-outline'} size={20} color={isFavorite ? '#ffc84a' : '#94a3b8'} />
-                </TouchableOpacity>
+              <View style={styles.cardHeaderGrid}>
+                <View style={styles.cardHeaderMain}>
+                  <Text style={[styles.cardRank, isSelected && styles.cardRankSelected]}>
+                    {resultBadgeForCard(card, isSelected, index)}
+                  </Text>
+                  <Text style={[
+                    styles.cardTitle,
+                    isDarkMode && !(isSelected || isSuggested) && styles.darkText,
+                    (isSelected || isSuggested) && styles.cardTitleSelected,
+                  ]}>{card.title}</Text>
+                </View>
+                <View style={styles.cardHeaderActions}>
+                  <Text style={[
+                    styles.cardHours,
+                    isDarkMode && !(isSelected || isSuggested) && styles.darkMutedText,
+                    card.isOpen ? styles.open : card.isOpen === false ? styles.closed : undefined,
+                  ]}>
+                    {card.kind === 'event' ? card.eventDateText || 'Date TBA' : card.hoursText || 'Hours unknown'}
+                  </Text>
+                  <TouchableOpacity
+                    style={[styles.cardFavoriteButton, isFavorite && styles.cardFavoriteButtonActive]}
+                    onPress={() => toggleFavorite(card)}
+                    accessibilityRole="button"
+                    accessibilityLabel={isFavorite ? `Unstar ${card.title}` : `Star ${card.title}`}
+                  >
+                    <Ionicons name={isFavorite ? 'star' : 'star-outline'} size={20} color={isFavorite ? '#ffc84a' : '#94a3b8'} />
+                  </TouchableOpacity>
+                </View>
               </View>
               <Text style={styles.cardSubtitle}>{card.subtitle}</Text>
               {distanceLabel ? (
@@ -10387,34 +10389,37 @@ const styles = StyleSheet.create({
     borderColor: '#178f79',
     backgroundColor: '#e3f7f0',
   },
-  cardTopRow: {
+  cardHeaderGrid: {
     flexDirection: 'row',
     justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+  cardHeaderMain: {
+    flex: 1,
+    minWidth: 0,
+  },
+  cardHeaderActions: {
+    width: 78,
     alignItems: 'center',
-    gap: 10,
-    marginBottom: 8,
+    gap: 8,
   },
   cardRank: {
-    flex: 1,
     color: '#f23b35',
     fontSize: 12,
     fontWeight: '900',
     textTransform: 'uppercase',
+    marginBottom: 8,
   },
   cardRankSelected: {
     color: '#178f79',
   },
   cardHours: {
-    width: 86,
+    width: 78,
     color: '#526170',
     fontSize: 12,
     fontWeight: '900',
     textAlign: 'center',
-  },
-  cardTitleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
   },
   cardFavoriteButton: {
     width: 34,
