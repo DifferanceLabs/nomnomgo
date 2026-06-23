@@ -6030,7 +6030,7 @@ function NomNomGoApp() {
       setVisibleCount(PAGE_SIZE);
       setLoading(true);
       setTimeout(() => {
-        void searchForSlot(resultMode, true, true, center, undefined, routeBias);
+        void searchForSlot(resultMode, false, true, center, undefined, routeBias);
       }, 25);
     }
   };
