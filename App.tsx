@@ -35,6 +35,11 @@ import {
   type RouteHandoffPlan,
   type RouteHandoffStop,
 } from './routeHandoff';
+import {
+  DIFFERANCE_NOMNOMGO_LAUNCH_URL,
+  LAUNCH_TOKEN_PARAM,
+  responseGrantsAlphaAccess,
+} from './alphaAccess';
 
 type PlanSlot = 'food' | 'activity';
 type NowExperienceMode = 'closed' | 'home' | 'food' | 'activity';
@@ -2573,8 +2578,6 @@ function safeCalendarFileName(title: string) {
   return `${safe || 'nomnomgo-plan'}.ics`;
 }
 
-const DIFFERANCE_LOGIN_URL = 'https://differancelabs.com/login';
-const LAUNCH_TOKEN_PARAM = 'dl_launch_token';
 const LIGHT_WEB_BACKGROUND = '#fff7ed';
 const DARK_WEB_BACKGROUND = '#071827';
 
@@ -2628,12 +2631,12 @@ function useWebDocumentSurface(backgroundColor: string) {
   }, [backgroundColor]);
 }
 
-function openDifferanceLogin() {
+function openDifferanceLaunch() {
   if (Platform.OS === 'web' && typeof window !== 'undefined') {
-    window.location.assign(DIFFERANCE_LOGIN_URL);
+    window.location.assign(DIFFERANCE_NOMNOMGO_LAUNCH_URL);
     return;
   }
-  void Linking.openURL(DIFFERANCE_LOGIN_URL);
+  void Linking.openURL(DIFFERANCE_NOMNOMGO_LAUNCH_URL);
 }
 
 async function validateLaunchToken(token: string) {
@@ -2673,7 +2676,8 @@ function AlphaAccessGate({ children }: { children: React.ReactNode }) {
 
       try {
         const response = launchToken ? await validateLaunchToken(launchToken) : await validateAlphaSession();
-        if (active) setGateState(response.ok ? 'allowed' : 'locked');
+        const hasAccess = await responseGrantsAlphaAccess(response);
+        if (active) setGateState(hasAccess ? 'allowed' : 'locked');
       } catch {
         if (active) setGateState('locked');
       }
@@ -2703,7 +2707,7 @@ function AlphaAccessGate({ children }: { children: React.ReactNode }) {
               <Text style={[styles.authCopy, isDarkMode && styles.darkMutedText]}>
                 Launch NomNomGo from Differance Labs to continue.
               </Text>
-              <Button label="Sign in with Differance Labs" onPress={openDifferanceLogin} primary />
+              <Button label="Open with Differance Labs" onPress={openDifferanceLaunch} primary />
             </>
           )}
         </View>
