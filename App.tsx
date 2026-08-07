@@ -9694,27 +9694,42 @@ function NomNomGoApp() {
               (isSelected || isSuggested) && styles.cardSelected,
             ]}>
               <View style={styles.placeCardBody}>
-                <TouchableOpacity
-                  style={styles.placeCardMedia}
-                  onPress={() => setPlaceDetailCard(card)}
-                  accessibilityRole="button"
-                  accessibilityLabel={`Open details for ${card.title}`}
-                >
-                  {imageUri ? (
-                    <Image source={{ uri: imageUri }} style={styles.placeCardImage} resizeMode="cover" />
-                  ) : (
-                    <View style={[styles.placeCardImage, styles.placeCardImageFallback]}>
-                      <Ionicons
-                        name={card.kind === 'event' ? 'ticket-outline' : resultMode === 'food' ? 'restaurant-outline' : 'sparkles-outline'}
-                        size={30}
-                        color={resultMode === 'food' ? colors.coral : colors.amber}
-                      />
-                    </View>
-                  )}
-                  {card.photoAttribution ? (
-                    <Text style={styles.placeCardAttribution} numberOfLines={1}>Photo: {card.photoAttribution}</Text>
-                  ) : null}
-                </TouchableOpacity>
+                <View style={styles.placeCardMedia}>
+                  <TouchableOpacity
+                    style={styles.placeCardMediaTap}
+                    onPress={() => setPlaceDetailCard(card)}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Open details for ${card.title}`}
+                  >
+                    {imageUri ? (
+                      <Image source={{ uri: imageUri }} style={styles.placeCardImage} resizeMode="cover" />
+                    ) : (
+                      <View style={[styles.placeCardImage, styles.placeCardImageFallback]}>
+                        <Ionicons
+                          name={card.kind === 'event' ? 'ticket-outline' : resultMode === 'food' ? 'restaurant-outline' : 'sparkles-outline'}
+                          size={30}
+                          color={resultMode === 'food' ? colors.coral : colors.amber}
+                        />
+                      </View>
+                    )}
+                    {card.photoAttribution ? (
+                      <Text style={styles.placeCardAttribution} numberOfLines={1}>Photo: {card.photoAttribution}</Text>
+                    ) : null}
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.placeCardFavoriteButton, isFavorite && styles.placeCardFavoriteButtonActive]}
+                    onPress={() => void toggleFavorite(card)}
+                    accessibilityRole="button"
+                    accessibilityLabel={isFavorite ? `Remove ${card.title} from saved places` : `Save ${card.title}`}
+                    accessibilityState={{ selected: isFavorite }}
+                  >
+                    <Ionicons
+                      name={isFavorite ? 'star' : 'star-outline'}
+                      size={20}
+                      color={isFavorite ? colors.amber : colors.textPrimary}
+                    />
+                  </TouchableOpacity>
+                </View>
                 <View style={styles.placeCardContent}>
                   <View style={styles.cardHeaderGrid}>
                     <View style={styles.cardHeaderMain}>
@@ -9755,7 +9770,7 @@ function NomNomGoApp() {
                   {card.address ? <Text style={[styles.address, styles.darkMutedText]} numberOfLines={2}>{card.address}</Text> : null}
                 </View>
               </View>
-              <View style={styles.buttonRow}>
+              <View style={[styles.buttonRow, styles.resultCardActionRow]}>
                 <CardIconButton
                   label={resultActionLabel}
                   icon={resultActionIcon}
@@ -9773,12 +9788,6 @@ function NomNomGoApp() {
                 {canOpenPlaceWebsite(card) ? (
                   <CardIconButton label="Website" icon="globe-outline" onPress={() => openCardWebsite(card)} />
                 ) : null}
-                <CardIconButton
-                  label={isFavorite ? 'Unstar' : 'Star'}
-                  icon={isFavorite ? 'star' : 'star-outline'}
-                  onPress={() => toggleFavorite(card)}
-                  active={isFavorite}
-                />
                 {!nowDiscovering ? (
                   <CardIconButton label="Share" icon="share-outline" onPress={() => openQuickShare({ kind: 'card', slot: resultMode, card })} />
                 ) : null}
@@ -13439,6 +13448,14 @@ const styles = StyleSheet.create({
     rowGap: 10,
     marginTop: 12,
   },
+  resultCardActionRow: {
+    width: 'auto',
+    maxWidth: 320,
+    alignSelf: 'stretch',
+    marginHorizontal: -spacing.micro,
+    justifyContent: 'space-between',
+    columnGap: 0,
+  },
   button: {
     minHeight: controls.buttonHeight,
     borderRadius: radii.md,
@@ -13711,6 +13728,11 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surfaceMuted,
     position: 'relative',
   },
+  placeCardMediaTap: {
+    flex: 1,
+    width: '100%',
+    position: 'relative',
+  },
   placeCardImage: {
     width: '100%',
     height: '100%',
@@ -13733,6 +13755,24 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     fontSize: 12,
     lineHeight: 16,
+  },
+  placeCardFavoriteButton: {
+    position: 'absolute',
+    top: spacing.xs,
+    right: spacing.xs,
+    zIndex: 2,
+    width: controls.minimumTouchTarget,
+    height: controls.minimumTouchTarget,
+    borderRadius: radii.pill,
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+    backgroundColor: colors.scrim,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  placeCardFavoriteButtonActive: {
+    borderColor: colors.amber,
+    backgroundColor: colors.amberSoft,
   },
   placeCardContent: {
     flex: 1,
