@@ -2,24 +2,26 @@
   "expo": {
     "name": "NomNomGo",
     "slug": "nomnomgo",
+    "scheme": "nomnomgo",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/nom-nom-go-icon-v19.png",
-    "userInterfaceStyle": "automatic",
+    "userInterfaceStyle": "dark",
     "splash": {
       "image": "./assets/nom-nom-go-splash-v19.png",
       "resizeMode": "contain",
-      "backgroundColor": "#111827"
+      "backgroundColor": "#080A0C"
     },
     "assetBundlePatterns": [
       "**/*"
     ],
     "web": {
+      "bundler": "metro",
       "output": "single",
       "favicon": "./assets/nom-nom-go-icon-v19.png"
     },
     "android": {
-      "package": "com.miketools.nomnomgo",
+      "package": "com.differancelabs.nomnomgo",
       "versionCode": 1,
       "permissions": [
         "ACCESS_COARSE_LOCATION",
@@ -27,8 +29,21 @@
       ],
       "adaptiveIcon": {
         "foregroundImage": "./assets/nom-nom-go-adaptive-icon-v19.png",
-        "backgroundColor": "#111827"
+        "backgroundColor": "#080A0C"
       }
+    },
+    "androidStatusBar": {
+      "backgroundColor": "#080A0C",
+      "barStyle": "light-content",
+      "translucent": false
+    },
+    "androidNavigationBar": {
+      "backgroundColor": "#080A0C",
+      "barStyle": "light-content"
+    },
+    "ios": {
+      "bundleIdentifier": "com.differancelabs.nomnomgo",
+      "supportsTablet": false
     },
     "plugins": [
       [
@@ -37,7 +52,11 @@
           "locationWhenInUsePermission": "NomNomGo uses your approximate location to make nearby food and activity suggestions."
         }
       ],
-      "expo-font"
-    ]
+      "expo-font",
+      "expo-router"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
   }
 }

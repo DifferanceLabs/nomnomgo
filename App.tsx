@@ -15,10 +15,11 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
-  useColorScheme,
   View,
 } from 'react-native';
 import * as Location from 'expo-location';
+import { useFonts } from 'expo-font';
+import { StatusBar } from 'expo-status-bar';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
@@ -35,6 +36,10 @@ import {
   type RouteHandoffPlan,
   type RouteHandoffStop,
 } from './routeHandoff';
+import { foodTimePreferenceScore, hoursLineForDate, placeOpenDuringWindow, timePreferenceForWindow } from './planningHours';
+import { BETA_FEATURES } from './src/config/features';
+import { colors, controls, elevations, iconSizes, layout, radii, semanticTones, spacing, typography } from './src/ui/theme';
+import { ActionButton, AppHeader, BottomNavigation, EmptyState, PersonRow, RsvpControl, Stat } from './src/ui/primitives';
 import {
   DIFFERANCE_NOMNOMGO_LAUNCH_URL,
   LAUNCH_TOKEN_PARAM,
@@ -43,6 +48,7 @@ import {
 
 type PlanSlot = 'food' | 'activity';
 type NowExperienceMode = 'closed' | 'home' | 'food' | 'activity';
+type MainNavigationKey = 'home' | 'plans' | 'saved' | 'profile';
 type StopTravelMode = 'car' | 'walk' | 'bike' | 'train' | 'plane';
 type PairingSuggestion = {
   label: string;
@@ -113,11 +119,15 @@ type PlaceCard = {
   id: string;
   title: string;
   subtitle: string;
+  imageUrl?: string;
+  photoName?: string;
+  photoAttribution?: string;
   kind?: 'place' | 'event';
   address?: string;
   rating?: number;
   ratingCount?: number;
   priceLevel?: string;
+  openNow?: boolean | null;
   isOpen?: boolean | null;
   hoursText?: string;
   eventDateText?: string;
@@ -318,6 +328,7 @@ type BetaPlanRecord = {
   finalizedSuggestionIds: string[];
   rsvps: Record<string, RsvpStatus>;
   status: 'planning' | 'finalized';
+  savedPlanId?: string;
   createdAt: number;
   updatedAt: number;
 };
@@ -362,10 +373,10 @@ const ZIP_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const WEBSITE_FEATURE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_RADIUS_METERS = 8047;
 const CLOSE_BY_RADIUS_METERS = 3219;
-const EXPANDED_FOOD_RADIUS_METERS = 40234;
+const EXPANDED_FOOD_RADIUS_METERS = 16093;
 const MIN_FOOD_RESULTS_BEFORE_EXPAND = 10;
 const DEFAULT_ACTIVITY_RADIUS_METERS = 16093;
-const TICKETMASTER_EVENT_RADIUS_MILES = 35;
+const TICKETMASTER_EVENT_RADIUS_MILES = 10;
 const PAIRING_RADIUS_METERS = 11265;
 const FAVORITE_SUGGESTION_RADIUS_METERS = DEFAULT_RADIUS_METERS;
 const VENUE_FEATURE_RADIUS_METERS = 805;
@@ -377,7 +388,7 @@ const SUGGESTED_PAIRING_PREVIEW_COUNT = 3;
 const FACTORY_EXPERIENCE_URL = 'https://factoryatfranklin.com/experience/';
 const DEV_SHARE_USERS = ['Alex', 'Jordan', 'Taylor', 'Morgan'];
 const TEST_USERS = ['BDM', ...DEV_SHARE_USERS];
-const GROUP_SESSION_ENABLED = false;
+const GROUP_SESSION_ENABLED = BETA_FEATURES.legacyPlanningSessions;
 const RSVP_OPTIONS: Array<{ status: RsvpStatus; label: string }> = [
   { status: 'going', label: 'Going' },
   { status: 'maybe', label: 'Maybe' },
@@ -418,7 +429,7 @@ const NOW_FOOD_CATEGORY_SELECTIONS: Record<string, string[]> = {
 };
 const NOW_ACTIVITY_CATEGORY_SELECTIONS: Record<string, string[]> = {
   Outdoor: ['Park'],
-  Family: ['Any'],
+  Family: ['Park', 'Museum', 'Arcade'],
   Arcade: ['Arcade'],
   Bowling: ['Bowling'],
   Movie: ['Movies'],
@@ -447,7 +458,19 @@ const CUISINES = [
   'Coffee',
   'Dessert',
 ];
-const ACTIVITIES = ['Any', 'Events', 'Movies', 'Bowling', 'Arcade', 'Park', 'Shopping', 'Museum', 'Dessert', 'Coffee', 'Tesla Supercharger', 'EV Charger'];
+const ACTIVITIES = [
+  'Any',
+  'Events',
+  'Movies',
+  'Bowling',
+  'Arcade',
+  'Park',
+  'Shopping',
+  'Museum',
+  'Dessert',
+  'Coffee',
+  ...(BETA_FEATURES.roadTrips ? ['Tesla Supercharger', 'EV Charger'] : []),
+];
 const DIETARY_PREFERENCES = [
   'Any',
   'Vegetarian',
@@ -483,7 +506,7 @@ const FOOD_TYPE_MAP: Record<string, string[]> = {
   Dessert: ['bakery', 'ice_cream_shop', 'dessert_shop'],
 };
 
-const DEFAULT_FOOD_TYPES = ['restaurant', 'cafe', 'bakery', 'bar', 'meal_takeaway'];
+const DEFAULT_FOOD_TYPES = ['restaurant', 'cafe', 'bakery', 'meal_takeaway'];
 const FAST_FOOD_TERMS = [
   'mcdonald',
   'burger king',
@@ -579,6 +602,19 @@ const BLOCKED_ACTIVITY_TERMS = [
   'memorial gardens',
 ];
 
+const FOOD_VENUE_TYPES = new Set([
+  'restaurant',
+  'cafe',
+  'coffee_shop',
+  'bakery',
+  'meal_takeaway',
+  'meal_delivery',
+  'food',
+  'ice_cream_shop',
+  'dessert_shop',
+  'sandwich_shop',
+]);
+
 const ACTIVITY_TYPE_MAP: Record<string, string[]> = {
   Movies: ['movie_theater'],
   Bowling: ['bowling_alley'],
@@ -601,6 +637,7 @@ const DEFAULT_ACTIVITY_TYPES = [
   'amusement_center',
   'tourist_attraction',
 ];
+const DEFAULT_ACTIVITY_TYPE_SET = new Set(DEFAULT_ACTIVITY_TYPES);
 
 const FIELD_MASK = [
   'places.id',
@@ -616,6 +653,7 @@ const FIELD_MASK = [
   'places.googleMapsUri',
   'places.websiteUri',
   'places.priceLevel',
+  'places.photos',
 ].join(',');
 
 const LOCATION_FIELD_MASK = [
@@ -819,9 +857,43 @@ function isLikelyFoodPreferenceMatch(card: PlaceCard, selectedFoods: string[]) {
   return strength > 0;
 }
 
+function isLikelyFoodVenue(card: PlaceCard) {
+  if (card.kind === 'event') return false;
+  const normalizedTypes = (card.types || []).map((type) => type.toLowerCase());
+  if (normalizedTypes.some((type) => FOOD_VENUE_TYPES.has(type) || type.endsWith('_restaurant'))) return true;
+
+  const description = [card.subtitle, card.title].filter(Boolean).join(' ').toLowerCase().replace(/_/g, ' ');
+  return /\b(restaurant|cafe|coffee shop|bakery|dessert shop|ice cream|sandwich shop|meal takeaway)\b/.test(description);
+}
+
 function isBadActivityResult(card: PlaceCard) {
   const blob = [card.title, card.subtitle, card.address, ...(card.types || [])].join(' ').toLowerCase();
   return BLOCKED_ACTIVITY_TERMS.some((term) => blob.includes(term));
+}
+
+function isRelevantActivityResult(card: PlaceCard, selectedActivities: string[]) {
+  const eventsFocused = selectedActivities.includes('Events');
+  if (card.kind === 'event') return eventsFocused;
+  if (eventsFocused) return false;
+  const primaryDescription = (card.subtitle || '').split(' - ')[0].toLowerCase().replace(/_/g, ' ');
+  if (primaryDescription.includes('store') && !primaryDescription.includes('shopping mall')) return false;
+  const selectedSpecificActivity = nonEventActivitySelections(selectedActivities).length > 0;
+  if (selectedSpecificActivity) return matchesActivitySelection(card, selectedActivities);
+  return (card.types || []).some((type) => DEFAULT_ACTIVITY_TYPE_SET.has(type));
+}
+
+async function openExternalUrl(url: string) {
+  if (Platform.OS === 'web' && typeof document !== 'undefined') {
+    const link = document.createElement('a');
+    link.href = url;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    return;
+  }
+  await Linking.openURL(url);
 }
 
 function priceText(priceLevel?: string) {
@@ -838,6 +910,7 @@ function priceText(priceLevel?: string) {
 
 function toCard(place: any): PlaceCard {
   const title = place?.displayName?.text || 'Unnamed place';
+  const primaryPhoto = Array.isArray(place?.photos) ? place.photos[0] : undefined;
   const openNow = place?.regularOpeningHours?.openNow;
   const weeklyHours = place?.regularOpeningHours?.weekdayDescriptions || [];
   const todayHours = todayHoursText(weeklyHours);
@@ -847,6 +920,10 @@ function toCard(place: any): PlaceCard {
   return {
     id: place?.id || place?.name || `${title}-${place?.formattedAddress || ''}`,
     title,
+    photoName: typeof primaryPhoto?.name === 'string' ? primaryPhoto.name : undefined,
+    photoAttribution: typeof primaryPhoto?.authorAttributions?.[0]?.displayName === 'string'
+      ? primaryPhoto.authorAttributions[0].displayName
+      : undefined,
     subtitle: [
       place?.primaryTypeDisplayName?.text || place?.primaryType || place?.types?.[0] || 'Place',
       typeof place?.rating === 'number' ? `${place.rating.toFixed(1)} star` : undefined,
@@ -859,6 +936,7 @@ function toCard(place: any): PlaceCard {
     rating: place?.rating,
     ratingCount: place?.userRatingCount,
     priceLevel: priceText(place?.priceLevel),
+    openNow: typeof openNow === 'boolean' ? openNow : null,
     isOpen: typeof openNow === 'boolean' ? openNow : null,
     hoursText,
     todayHours,
@@ -913,10 +991,15 @@ function ticketmasterEventToCard(event: any): PlaceCard | undefined {
   const lng = Number(venue?.location?.longitude);
   const eventDateText = formatEventDateText(event);
   const eventStartMs = new Date(event?.dates?.start?.dateTime || `${event?.dates?.start?.localDate || ''}T${event?.dates?.start?.localTime || '00:00:00'}`).getTime();
+  const eventImages = Array.isArray(event?.images) ? event.images : [];
+  const eventImage = eventImages.find((image: any) => image?.ratio === '16_9' && Number(image?.width) >= 640)
+    || eventImages.find((image: any) => image?.ratio === '16_9')
+    || eventImages[0];
 
   return {
     id: `ticketmaster-${event?.id || `${title}-${eventDateText}`}`,
     title,
+    imageUrl: typeof eventImage?.url === 'string' ? eventImage.url : undefined,
     kind: 'event',
     subtitle: [venueName || [city, state].filter(Boolean).join(', '), 'Ticketmaster'].filter(Boolean).join(' - '),
     address: address || undefined,
@@ -943,6 +1026,22 @@ function todayHoursText(weeklyHours: string[]) {
 function cardToName(card?: PlaceCard | string) {
   if (!card) return undefined;
   return typeof card === 'string' ? card : card.title;
+}
+
+function cardImageUri(card?: PlaceCard | string) {
+  if (!card || typeof card === 'string') return undefined;
+  if (card.imageUrl) return card.imageUrl;
+  if (!card.photoName || !GOOGLE_API_KEY) return undefined;
+  const photoResource = card.photoName.replace(/^\/+/, '').replace(/\/media$/, '');
+  return `https://places.googleapis.com/v1/${photoResource}/media?maxWidthPx=960&maxHeightPx=640&key=${encodeURIComponent(GOOGLE_API_KEY)}`;
+}
+
+function cardCategoryLabel(card: PlaceCard) {
+  if (card.kind === 'event') return 'Event';
+  const raw = card.types?.[0] || card.subtitle.split(' - ')[0] || 'Place';
+  return raw
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 function cardToId(card: PlaceCard | string) {
@@ -1649,6 +1748,7 @@ function foodCardScore(
   }
 
   if (hasDietaryFilter) score += dietaryStrength * 20;
+  if (isLikelyFastFood(card)) score -= 10;
 
   if (card.isOpen) score += 8;
   return score;
@@ -2490,16 +2590,18 @@ function betaPlanShareUrl(plan: BetaPlanRecord) {
   return `${baseUrl}#shared_plan=${encodeBetaPlanSnapshot(plan)}`;
 }
 
-function betaPlanShareMessage(plan: BetaPlanRecord, shareUrl?: string) {
-  return [
-    `${plan.title}`,
-    `${betaPlanDateLabel(plan)} | ${plan.timeWindow || 'Time TBD'} | ${planningIntentLabel(plan.intent)}`,
-    `Where: ${betaPlanLocationLabel(plan)}`,
-    plan.status === 'finalized' && betaPlanFinalLabel(plan) ? `Final plan: ${betaPlanFinalLabel(plan)}` : 'RSVP and suggestions are open.',
-    shareUrl ? `Open plan: ${shareUrl}` : 'Shared plan link is available from NomNomGo web.',
-    '',
-    'Shared from NomNomGo',
-  ].filter(Boolean).join('\n');
+function betaPlanShareMessage(plan: BetaPlanRecord) {
+  if (plan.stops.length) {
+    return plan.stops
+      .map((stop, index) => {
+        const name = cardToName(stop.item) || 'Stop';
+        const firstStopTime = index === 0 && plan.timeWindow ? parsePlanningTimeWindow(plan.timeWindow) : undefined;
+        const timeLabel = firstStopTime ? formatClockTime(clockTimeFromMinutes(firstStopTime.start)) : '';
+        return [timeLabel, name].filter(Boolean).join(' ');
+      })
+      .join('\n');
+  }
+  return betaPlanFinalLabel(plan) || plan.title || 'Plan';
 }
 
 function confirmedPlanFromBetaRecord(record: BetaPlanRecord): ConfirmedPlan {
@@ -2510,6 +2612,7 @@ function confirmedPlanFromBetaRecord(record: BetaPlanRecord): ConfirmedPlan {
     intent: record.intent,
     stops: record.stops || [],
     status: record.status === 'finalized' ? 'locked' : 'draft',
+    savedPlanId: record.savedPlanId,
     dateWindow: record.dateWindow,
     customDateRange: record.customDateRange || null,
     planDateStart: record.planDateStart,
@@ -2578,17 +2681,21 @@ function safeCalendarFileName(title: string) {
   return `${safe || 'nomnomgo-plan'}.ics`;
 }
 
-const LIGHT_WEB_BACKGROUND = '#fff7ed';
-const DARK_WEB_BACKGROUND = '#071827';
+const DARK_WEB_BACKGROUND = colors.background;
 
 type AlphaGateState = 'checking' | 'allowed' | 'locked';
 
 function isLocalWebHost(hostname: string) {
-  return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '0.0.0.0' || hostname === '::1';
+  const normalized = hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  if (normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '0.0.0.0' || normalized === '::1') return true;
+  if (normalized.endsWith('.local')) return true;
+  if (/^10\./.test(normalized) || /^192\.168\./.test(normalized)) return true;
+  return /^172\.(1[6-9]|2\d|3[01])\./.test(normalized);
 }
 
 function shouldApplyAlphaGate() {
   if (Platform.OS !== 'web' || typeof window === 'undefined') return false;
+  if (__DEV__) return false;
   const hostname = window.location.hostname.toLowerCase();
   return Boolean(hostname) && !isLocalWebHost(hostname);
 }
@@ -2613,6 +2720,23 @@ function useWebDocumentSurface(backgroundColor: string) {
     const root = document.getElementById('root');
     const viewport = document.querySelector('meta[name="viewport"]');
     const viewportContent = viewport?.getAttribute('content') || '';
+    const focusStyleId = 'nomnomgo-focus-styles';
+    let focusStyle = document.getElementById(focusStyleId) as HTMLStyleElement | null;
+
+    if (!focusStyle) {
+      focusStyle = document.createElement('style');
+      focusStyle.id = focusStyleId;
+      document.head.appendChild(focusStyle);
+    }
+    focusStyle.textContent = `
+      :where(button, input, textarea, select, a, [role="button"], [role="tab"]):focus-visible {
+        outline: 3px solid ${colors.focus} !important;
+        outline-offset: 3px !important;
+      }
+      :where(input, textarea, select):focus-visible {
+        border-color: ${colors.focus} !important;
+      }
+    `;
 
     document.documentElement.style.backgroundColor = backgroundColor;
     document.documentElement.style.minHeight = '100%';
@@ -2656,10 +2780,9 @@ async function validateAlphaSession() {
 }
 
 function AlphaAccessGate({ children }: { children: React.ReactNode }) {
-  const colorScheme = useColorScheme();
-  const isLightMode = colorScheme === 'light';
-  const isDarkMode = colorScheme === 'dark';
-  useWebDocumentSurface(isDarkMode ? DARK_WEB_BACKGROUND : LIGHT_WEB_BACKGROUND);
+  const isLightMode = false;
+  const isDarkMode = true;
+  useWebDocumentSurface(DARK_WEB_BACKGROUND);
   const [gateState, setGateState] = useState<AlphaGateState>(() => (shouldApplyAlphaGate() ? 'checking' : 'allowed'));
 
   useEffect(() => {
@@ -2693,12 +2816,12 @@ function AlphaAccessGate({ children }: { children: React.ReactNode }) {
   if (gateState === 'allowed') return <>{children}</>;
 
   return (
-    <SafeAreaView style={[styles.safeArea, isLightMode && styles.lightScreen, isDarkMode && styles.darkScreen]} edges={['top', 'left', 'right']}>
+    <SafeAreaView style={[styles.safeArea, isLightMode && styles.lightScreen, isDarkMode && styles.darkScreen]} edges={['top', 'bottom', 'left', 'right']}>
       <View style={styles.alphaGateShell}>
         <View style={[styles.authCard, Platform.OS === 'web' && styles.webAuthCard, isDarkMode && styles.darkPanel]}>
           {gateState === 'checking' ? (
             <View style={styles.authCentered}>
-              <ActivityIndicator color="#f23b35" />
+              <ActivityIndicator color={colors.coral} />
               <Text style={[styles.authHint, isDarkMode && styles.darkMutedText]}>Checking NomNomGo alpha access</Text>
             </View>
           ) : (
@@ -2717,7 +2840,6 @@ function AlphaAccessGate({ children }: { children: React.ReactNode }) {
 }
 
 function NomNomGoApp() {
-  const colorScheme = useColorScheme();
   const scrollRef = useRef<ScrollView | null>(null);
   const manualSearchRef = useRef<TextInput | null>(null);
   const resultsYRef = useRef(0);
@@ -2726,8 +2848,14 @@ function NomNomGoApp() {
   const timelineYRef = useRef(0);
   const stopLayoutYRef = useRef<Record<string, number>>({});
   const searchRequestIdRef = useRef(0);
-  const isLightMode = colorScheme === 'light';
-  const isDarkMode = colorScheme === 'dark';
+  const activePlanTimingRef = useRef<{
+    dateRange: { start: string; end: string };
+    timeWindow?: string;
+    timePreference: string;
+  }>({ dateRange: { start: '', end: '' }, timePreference: 'Now' });
+  const betaPlanRecordBuilderRef = useRef<((base?: BetaPlanRecord | null) => BetaPlanRecord) | null>(null);
+  const isLightMode = false;
+  const isDarkMode = true;
   const [selectedMoods, setSelectedMoods] = useState<string[]>(['Easy']);
   const [selectedTime, setSelectedTime] = useState('Now');
   const [selectedDateWindow, setSelectedDateWindow] = useState<DateWindowId>('today');
@@ -2777,14 +2905,23 @@ function NomNomGoApp() {
   const [sharePreviewOpen, setSharePreviewOpen] = useState(false);
   const [planPreviewOpen, setPlanPreviewOpen] = useState(false);
   const [quickShareTarget, setQuickShareTarget] = useState<QuickShareTarget | null>(null);
+  const [placeDetailCard, setPlaceDetailCard] = useState<PlaceCard | null>(null);
   const [routeOptionsOpen, setRouteOptionsOpen] = useState(false);
+  const [pendingConfirmation, setPendingConfirmation] = useState<{
+    title: string;
+    message: string;
+    confirmLabel: string;
+    action: () => void;
+  } | null>(null);
   const [savedPlans, setSavedPlans] = useState<SavedPlan[]>([]);
   const savedPlansRef = useRef<SavedPlan[]>([]);
   const [savedPlansOpen, setSavedPlansOpen] = useState(false);
   const [homeOpen, setHomeOpen] = useState(true);
   const [savedPlansLandingOpen, setSavedPlansLandingOpen] = useState(false);
+  const [savedPlansNavigationSource, setSavedPlansNavigationSource] = useState<'plans' | 'saved'>('saved');
   const [planSetupOpen, setPlanSetupOpen] = useState(false);
   const [planSetupTiming, setPlanSetupTiming] = useState<'now' | 'later'>('now');
+  const [planSetupName, setPlanSetupName] = useState('');
   const [planSetupIntent, setPlanSetupIntent] = useState<PlanningIntent>('both');
   const [planSetupDateWindow, setPlanSetupDateWindow] = useState<DateWindowId>('today');
   const [planSetupCustomDateStartInput, setPlanSetupCustomDateStartInput] = useState(formatDateInput(new Date()));
@@ -2799,7 +2936,6 @@ function NomNomGoApp() {
   const [nowActivityCategory, setNowActivityCategory] = useState(NOW_ACTIVITY_CATEGORIES[0]);
   const [nowSelectedPeople, setNowSelectedPeople] = useState<string[]>([]);
   const [nowPeoplePickerOpen, setNowPeoplePickerOpen] = useState(false);
-  const [nowSelectedDestination, setNowSelectedDestination] = useState<NowDestinationSelection | null>(null);
   const [nowPlanCreating, setNowPlanCreating] = useState(false);
   const [suggestedPairingsOpen, setSuggestedPairingsOpen] = useState(true);
   const [suggestedPairingsExpanded, setSuggestedPairingsExpanded] = useState(false);
@@ -2875,6 +3011,15 @@ function NomNomGoApp() {
     id,
     label: id === 'custom' ? 'Choose dates' : dateWindowLabel(id, new Date(), null),
   })), []);
+  const planSetupPreviewCustomRange = planSetupDateWindow === 'custom'
+    ? { start: planSetupCustomDateStartInput, end: planSetupCustomDateEndInput }
+    : null;
+  const planSetupPreviewDateRange = dateRangeKeysForWindow(planSetupDateWindow, planSetupPreviewCustomRange, new Date());
+  const planSetupPreviewType = inferPlanType({
+    planDateStart: planSetupPreviewDateRange.start,
+    planDateEnd: planSetupPreviewDateRange.end,
+    destinationLabel: planSetupWhere,
+  });
   const selectedDateWindowText = dateWindowLabel(selectedDateWindow, new Date(), customDateRange);
   const currentTesterName = testerUser?.name || 'Tester';
   const activeBetaPlan = betaPlans.find((betaPlan) => betaPlan.id === activeBetaPlanId) || null;
@@ -2907,6 +3052,38 @@ function NomNomGoApp() {
   const activePlanDateLabel = absoluteDateRangeLabel(activePlanDateRange.start, activePlanDateRange.end) ||
     dateWindowLabel(activePlanDateWindow, new Date(), activePlanCustomDateRange);
   const activePlanTimeWindow = plan.timeWindow || selectedPreferenceTimeWindow;
+  const activePlanTimePreference = timePreferenceForWindow(activePlanTimeWindow, selectedTime);
+  activePlanTimingRef.current = {
+    dateRange: activePlanDateRange,
+    timeWindow: activePlanTimeWindow,
+    timePreference: activePlanTimePreference,
+  };
+  const cardForActivePlanTiming = (card: PlaceCard): PlaceCard => {
+    if (card.kind === 'event') return card;
+    const timing = activePlanTimingRef.current;
+    if (!timing.timeWindow) {
+      const openNow = typeof card.openNow === 'boolean' ? card.openNow : card.isOpen;
+      return {
+        ...card,
+        isOpen: typeof openNow === 'boolean' ? openNow : null,
+        hoursText: typeof openNow === 'boolean' ? (openNow ? 'Open now' : 'Closed now') : card.hoursText,
+        todayHours: todayHoursText(card.weeklyHours || []),
+      };
+    }
+
+    const planAvailability = placeOpenDuringWindow(card.weeklyHours, timing.dateRange.start, timing.timeWindow);
+    const plannedDayHours = hoursLineForDate(card.weeklyHours, timing.dateRange.start);
+    return {
+      ...card,
+      isOpen: planAvailability ?? null,
+      hoursText: planAvailability === true
+        ? 'Open at planned time'
+        : planAvailability === false
+          ? 'Closed at planned time'
+          : plannedDayHours ? 'Hours available' : 'Hours unknown',
+      todayHours: plannedDayHours,
+    };
+  };
   const activePlanType = inferPlanType({
     planDateStart: activePlanDateRange.start,
     planDateEnd: activePlanDateRange.end,
@@ -2931,13 +3108,22 @@ function NomNomGoApp() {
     const now = new Date();
     return localDateClockMs(activePlanDateRange.start, now.getHours() * 60 + now.getMinutes());
   })();
+  const activePlanPeopleSummary = (plan.invitees || []).length ? unique([currentTesterName, ...(plan.invitees || [])]).join(', ') : 'Just me';
+  const activePlanTimeLabel = activePlanTimePreference || 'Time TBD';
+  const activePlanDateToken = conciseDateTitle(activePlanDateWindow, activePlanDateRange.start, activePlanCustomDateRange);
+  const activePlanTimingLabel = activePlanDateWindow === 'today'
+    ? activePlanTimeLabel
+    : [activePlanTimeLabel, activePlanDateToken].filter(Boolean).join(' ');
+  const activePlanContextLabel = [activePlanTimingLabel, activePlanPeopleSummary].filter(Boolean).join(' | ');
   const planHeaderMeta = [
     plan.routeProvider === 'google_maps' ? 'Google Maps draft route' : undefined,
     activeRoadTripMode ? 'Road trip' : undefined,
-    activePlanDateLabel,
+    activePlanContextLabel,
+    searchLocationLabel,
     plan.stops.length ? `${plan.stops.length} stop${plan.stops.length === 1 ? '' : 's'}` : undefined,
   ].filter(Boolean).join(' | ');
-  const showChargingStopIdeas = activePlanType === 'trip_plan' || activeRoadTripMode || activeChargingStops.length > 0;
+  const showChargingStopIdeas = BETA_FEATURES.roadTrips &&
+    (activePlanType === 'trip_plan' || activeRoadTripMode || activeChargingStops.length > 0);
   const planSettingsSummary = startingLocationLabel === searchLocationLabel
     ? `${activePlanDateLabel} | ${startingLocationLabel}`
     : `${activePlanDateLabel} | Start ${startingLocationLabel} | Search ${searchLocationLabel}`;
@@ -3057,21 +3243,27 @@ function NomNomGoApp() {
   const leaveForFirstStopText = firstStop && typeof firstStopArrivalMinutes === 'number' && typeof firstStopTravelMinutes === 'number'
     ? `Leave around ${formatClockAfterMinutes(Math.max(0, firstStopArrivalMinutes - firstStopTravelMinutes), activePlanTimelineBaseMs)} from ${startingLocationLabel}`
     : undefined;
+  const finalStop = plan.stops[plan.stops.length - 1];
+  const planTotalMinutes = finalStop
+    ? itineraryArrivalMinutes(plan.stops.length - 1) + durationForStop(finalStop)
+    : 0;
+  const planTotalTimeLabel = finalStop
+    ? formatStopTime(stopTimeFromMinutes(planTotalMinutes)) || 'Under 1 min'
+    : 'Not set';
+  const planFinishTimeLabel = finalStop
+    ? formatClockAfterMinutes(planTotalMinutes, activePlanTimelineBaseMs)
+    : 'Not set';
   const activePlanDateTimeLabel = firstStop
     ? `${activePlanDateLabel} | First stop ${formatClockTime(displayedArrivalTimeForStop(firstStop, 0))}`
     : activePlanDateLabel;
+  const shareStopLine = (stop: ItineraryStop, index: number) => {
+    const time = formatClockTime(displayedArrivalTimeForStop(stop, index));
+    const name = cardToName(stop.item) || 'Stop';
+    return `${time} ${name}`;
+  };
   const sharePlanText = () => {
-    const lines = [plan.title || 'NomNomGo plan'];
-    if (plan.sourceUrl) lines.push('', plan.sourceUrl);
-    plan.stops.forEach((stop) => {
-      const name = cardToName(stop.item) || 'Stop';
-      const url = typeof stop.item !== 'string'
-        ? stop.item.mapsUri || mapsSearchUrl(stop.item.title, stop.item)
-        : mapsSearchUrl(stop.item, activeSearchLocation || location);
-      lines.push('', name, url);
-    });
-    lines.push('', 'Shared from NomNomGo');
-    return lines.join('\n');
+    const lines = plan.stops.map((stop, index) => shareStopLine(stop, index));
+    return lines.length ? lines.join('\n') : plan.title || 'Plan';
   };
 
   const addLog = (line: string) => {
@@ -3244,6 +3436,7 @@ function NomNomGoApp() {
     setSharePreviewOpen(false);
     setPlanPreviewOpen(false);
     setQuickShareTarget(null);
+    setPlaceDetailCard(null);
     setRouteOptionsOpen(false);
     setLocationOverrideOpen(false);
     setSearchLocationOverrideOpen(false);
@@ -3255,7 +3448,6 @@ function NomNomGoApp() {
     closeTransientSurfaces();
     setHomeOpen(true);
     setNowMode('closed');
-    setNowSelectedDestination(null);
     setSavedPlansLandingOpen(false);
     setPlanSetupOpen(false);
     setSavedPlansOpen(false);
@@ -3382,7 +3574,6 @@ function NomNomGoApp() {
     setNowFoodCategory(NOW_FOOD_CATEGORIES[0]);
     setNowActivityCategory(NOW_ACTIVITY_CATEGORIES[0]);
     setNowSelectedPeople([]);
-    setNowSelectedDestination(null);
     setNowPeoplePickerOpen(false);
     scrollToTop();
     addLog('Home action: now discovery');
@@ -3396,7 +3587,6 @@ function NomNomGoApp() {
     closeTransientSurfaces();
     setNowPeoplePickerOpen(false);
     setNowMode(slot);
-    setNowSelectedDestination(null);
     setResultMode(slot);
     setResultFilter('all');
     setSelectedTime('Now');
@@ -3423,6 +3613,16 @@ function NomNomGoApp() {
     });
   };
 
+  const startNowDiscoveryFromHome = async (slot: PlanSlot) => {
+    await startNowPlan();
+    await startNowDiscovery(slot, slot === 'food' ? NOW_FOOD_CATEGORIES[0] : NOW_ACTIVITY_CATEGORIES[0]);
+  };
+
+  const openNowPeopleFromHome = async () => {
+    await startNowPlan();
+    setNowPeoplePickerOpen(true);
+  };
+
   const toggleNowPerson = (user: string) => {
     setNowSelectedPeople((prev) => prev.includes(user) ? prev.filter((item) => item !== user) : unique([...prev, user]));
   };
@@ -3439,12 +3639,12 @@ function NomNomGoApp() {
   const openPlanSetup = (timing: 'now' | 'later') => {
     closeTransientSurfaces();
     setNowMode('closed');
-    setNowSelectedDestination(null);
     const nextDateWindow: DateWindowId = timing === 'now' ? 'today' : 'tomorrow';
     const nextTime = timing === 'now' ? 'Now' : 'Dinner';
     const defaultCustomStart = formatDateInput(new Date());
     const defaultCustomEnd = formatDateInput(addLocalDays(new Date(), 6));
     setPlanSetupTiming(timing);
+    setPlanSetupName('');
     setPlanSetupIntent('both');
     setPlanSetupDateWindow(nextDateWindow);
     setPlanSetupCustomDateStartInput(defaultCustomStart);
@@ -3495,6 +3695,7 @@ function NomNomGoApp() {
       planDateStart: nextDateRange.start,
       planDateEnd: nextDateRange.end,
       destinationLabel: whereInput,
+      title: planSetupName,
     });
     const nextRoadTripMode = inferRoadTripMode({
       planType: nextPlanType,
@@ -3536,9 +3737,19 @@ function NomNomGoApp() {
         setCustomDateEndInput(nextCustomDateRange.end);
       }
       setSelectedTime(effectiveTime);
+      activePlanTimingRef.current = {
+        dateRange: nextDateRange,
+        timeWindow: nextTimeWindow,
+        timePreference: effectiveTime,
+      };
+      setSelectedMoods(['Easy']);
+      setSelectedFoods([...DEFAULT_FOOD_SELECTIONS]);
+      setSelectedActivities([...DEFAULT_ACTIVITY_SELECTIONS]);
+      setSelectedDietary([...DEFAULT_DIETARY_SELECTIONS]);
       setResultMode(initialSearchSlot);
       const betaRecord = await createBetaPlanRecord({
         source: isNowSetup ? 'now' : 'later',
+        title: planSetupName,
         dateWindow: effectiveDateWindow,
         customDateRange: nextCustomDateRange,
         planDateStart: nextDateRange.start,
@@ -3600,6 +3811,29 @@ function NomNomGoApp() {
       setAdvancedPreferencesOpen(false);
       scrollToPlan();
       addLog(`Plan setup complete: ${planSetupTiming}`);
+      if (whereInput) {
+        void (async () => {
+          try {
+            const center = await resolveLocationInput(whereInput);
+            if (!center) {
+              setSearchNotice(`Could not find ${whereInput}. Update the search area and try again.`);
+              return;
+            }
+            const stampedCenter = { ...center, label: whereInput, ts: Date.now() };
+            setSearchLocation(stampedCenter);
+            setLastSearchLocationCenter(stampedCenter);
+            await AsyncStorage.setItem(STORAGE_SEARCH_LOCATION, JSON.stringify(stampedCenter));
+            await searchForSlot(initialSearchSlot, true, false, stampedCenter, {
+              foodSelections: [...DEFAULT_FOOD_SELECTIONS],
+              activitySelections: [...DEFAULT_ACTIVITY_SELECTIONS],
+              dietarySelections: [...DEFAULT_DIETARY_SELECTIONS],
+            });
+          } catch (err) {
+            setSearchNotice('The plan is ready, but suggestions could not be loaded. Try Search Food or Search Activities.');
+            addLog(`Initial plan search failed: ${compactError(err)}`);
+          }
+        })();
+      }
     } catch (err) {
       addLog(`Plan setup failed: ${compactError(err)}`);
       Alert.alert('Plan setup failed', compactError(err));
@@ -3608,14 +3842,14 @@ function NomNomGoApp() {
     }
   };
 
-  const openSavedPlansHomeAction = () => {
+  const openSavedPlansHomeAction = (source: 'plans' | 'saved' = 'saved') => {
     closeTransientSurfaces();
     setNowMode('closed');
-    setNowSelectedDestination(null);
     setPlanSetupOpen(false);
     setHomeOpen(false);
     setSavedPlansLandingOpen(true);
     setSavedPlansOpen(true);
+    setSavedPlansNavigationSource(source);
     setPreferencesOpen(false);
     setAdvancedPreferencesOpen(false);
     setPlanSettingsOpen(false);
@@ -3623,10 +3857,43 @@ function NomNomGoApp() {
     addLog('Home action: saved plans');
   };
 
+  const openCurrentPlanFromNavigation = () => {
+    if (!hasAnyActiveStop && !activeBetaPlan && !plan.sharedPlanId) {
+      openSavedPlansHomeAction('plans');
+      return;
+    }
+    closeTransientSurfaces();
+    setNowMode('closed');
+    setPlanSetupOpen(false);
+    setHomeOpen(false);
+    setSavedPlansLandingOpen(false);
+    setSavedPlansOpen(false);
+    setPreferencesOpen(false);
+    setAdvancedPreferencesOpen(false);
+    scrollToPlan();
+    addLog('Navigation: current plan');
+  };
+
+  const handleMainNavigation = (key: MainNavigationKey) => {
+    if (key === 'home') {
+      openHome();
+      return;
+    }
+    if (key === 'plans') {
+      openCurrentPlanFromNavigation();
+      return;
+    }
+    if (key === 'saved') {
+      openSavedPlansHomeAction('saved');
+      return;
+    }
+    closeTransientSurfaces();
+    setAccountSettingsOpen(true);
+  };
+
   const openPeopleGroupsHomeAction = () => {
     closeTransientSurfaces();
     setNowMode('closed');
-    setNowSelectedDestination(null);
     if (GROUP_SESSION_ENABLED) {
       setPlanSetupOpen(false);
       setHomeOpen(false);
@@ -3698,8 +3965,28 @@ function NomNomGoApp() {
         if (rawUsage) setUsageMeter(normalizeUsageMeter(JSON.parse(rawUsage) as UsageMeter));
         if (rawSavedPlans) {
           const parsedSavedPlans = JSON.parse(rawSavedPlans) as SavedPlan[];
-          savedPlansRef.current = parsedSavedPlans;
-          setSavedPlans(parsedSavedPlans);
+          const seenSavedPlans = new Set<string>();
+          const dedupedSavedPlans = parsedSavedPlans.filter((saved) => {
+            const contentKey = JSON.stringify({
+              source: saved.source,
+              title: saved.title,
+              owner: saved.owner,
+              sharedBy: saved.sharedBy,
+              sharedTo: saved.sharedTo,
+              planDateStart: saved.planDateStart,
+              planDateEnd: saved.planDateEnd,
+              timeWindow: saved.timeWindow,
+              stops: saved.stops.map((stop) => ({ slot: stop.slot, item: cardToId(stop.item) })),
+            });
+            if (seenSavedPlans.has(contentKey)) return false;
+            seenSavedPlans.add(contentKey);
+            return true;
+          });
+          savedPlansRef.current = dedupedSavedPlans;
+          setSavedPlans(dedupedSavedPlans);
+          if (dedupedSavedPlans.length !== parsedSavedPlans.length) {
+            void AsyncStorage.setItem(STORAGE_SAVED_PLANS, JSON.stringify(dedupedSavedPlans.slice(0, 40)));
+          }
         }
         if (rawPlanningSessions) setPlanningSessions(JSON.parse(rawPlanningSessions) as PlanningSession[]);
         if (rawActivePlanningSession) setActivePlanningSessionId(JSON.parse(rawActivePlanningSession) as string);
@@ -4039,7 +4326,7 @@ function NomNomGoApp() {
       addLog('Getting current GPS location');
       const current = await withTimeout(
         Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
-        15000,
+        8000,
         'GPS',
       );
       const next = {
@@ -4052,7 +4339,7 @@ function NomNomGoApp() {
       return next;
     } catch (err) {
       addLog(`GPS failed: ${compactError(err)}`);
-      const lastKnown = await withTimeout(Location.getLastKnownPositionAsync(), 5000, 'Last known location');
+      const lastKnown = await withTimeout(Location.getLastKnownPositionAsync(), 3000, 'Last known location');
       if (!lastKnown) throw new Error('No current or last known location found. Try a ZIP search in Maps.');
       const next = {
         latitude: lastKnown.coords.latitude,
@@ -4524,24 +4811,40 @@ function NomNomGoApp() {
     activitySelections = selectedActivities,
     routeBias?: SearchRouteBias,
   ) => {
-    const wantsEvents = slot === 'activity';
+    const wantsEvents = slot === 'activity' && activitySelections.includes('Events');
     const eventsFocused = slot === 'activity' && activitySelections.includes('Events');
     const chargerFocused = slot === 'activity' && wantsChargerActivity(activitySelections);
     const effectiveRadiusMeters = walkingAdjustedRadius(radiusMeters, routeBias);
     const preferenceKey = slot === 'food'
       ? `${wantsNoFastFood(foodSelections) ? '|no-fast-food' : ''}${wantsCloseBy(foodSelections) ? '|close-by' : ''}${wantsOpenNow(foodSelections) ? '|open-now' : ''}${cuisineSelections(foodSelections).join(',')}|dietary:${dietarySelections(selectedDietaryPreferences).join(',')}`
       : `${nonEventActivitySelections(activitySelections).join(',')}|${wantsEvents ? `events|${EVENT_PROVIDER_CACHE_VERSION}|${selectedDateWindowRef.current}|${customDateRangeRef.current ? `${customDateRangeRef.current.start}-${customDateRangeRef.current.end}` : 'preset'}${eventsFocused ? '|focused' : ''}` : ''}`;
-    const cacheKey = `${searchCacheKey(slot, center, types, effectiveRadiusMeters)}${preferenceKey}${routeBiasCacheKey(routeBias)}`;
+    const activeTiming = activePlanTimingRef.current;
+    const timingKey = `|timing:${activeTiming.dateRange.start}:${activeTiming.timeWindow || 'now'}`;
+    const cacheKey = `${searchCacheKey(slot, center, types, effectiveRadiusMeters)}${preferenceKey}${timingKey}${routeBiasCacheKey(routeBias)}`;
     if (routeBias?.mode === 'walk') {
       addLog('Walking route bias active: favoring places near the stop and start');
     }
-    const applyResultFilters = (nextCards: PlaceCard[]) => nextCards.filter((card) => {
-      const isFavorite = memory.favorites.includes(card.id);
+    const resultRadiusMeters = slot === 'food'
+      ? EXPANDED_FOOD_RADIUS_METERS
+      : wantsEvents
+        ? TICKETMASTER_EVENT_RADIUS_MILES * 1609.344
+        : Math.max(effectiveRadiusMeters, DEFAULT_ACTIVITY_RADIUS_METERS);
+    const planStartMs = new Date(`${activeTiming.dateRange.start}T00:00:00`).getTime();
+    const planEndMs = new Date(`${activeTiming.dateRange.end}T23:59:59`).getTime();
+    const applyResultFilters = (nextCards: PlaceCard[]) => nextCards.map(cardForActivePlanTiming).filter((card) => {
       if (!hasKnownHours(card) && !(chargerFocused && isEvCharger(card))) return false;
+      const cardDistance = distanceMeters(center, card);
+      if (Number.isFinite(cardDistance) && cardDistance > resultRadiusMeters) return false;
+      if (card.kind === 'event' && card.eventStartMs) {
+        if (card.eventStartMs < planStartMs || card.eventStartMs > planEndMs) return false;
+        if (activeTiming.timePreference === 'Now' && card.eventStartMs < Date.now() - 5 * 60 * 1000) return false;
+      }
+      if (slot === 'food' && !isLikelyFoodVenue(card)) return false;
       if (slot === 'food' && wantsNoFastFood(foodSelections) && isLikelyFastFood(card)) return false;
       if (slot === 'food' && !isLikelyFoodPreferenceMatch(card, foodSelections)) return false;
-      if (slot === 'food' && card.isOpen === false && !isFavorite) return false;
+      if (slot === 'food' && card.isOpen === false) return false;
       if (slot === 'activity' && isBadActivityResult(card)) return false;
+      if (slot === 'activity' && !isRelevantActivityResult(card, activitySelections)) return false;
       if (slot === 'activity' && chargerFocused && !matchesActivitySelection(card, activitySelections)) return false;
       return true;
     });
@@ -4631,7 +4934,7 @@ function NomNomGoApp() {
         unblockedCards = mergeCards(unblockedCards, expandedCards);
         await writeCachedSearch(STORAGE_SEARCH_CACHE, expandedCacheKey, expandedCards, 32, 'Expanded food search');
       }
-      if (unblockedCards.length < MIN_FOOD_RESULTS_BEFORE_EXPAND) {
+      if (unblockedCards.length < MIN_FOOD_RESULTS_BEFORE_EXPAND && !activeTiming.timeWindow) {
         try {
           const openFoodTextCards = await searchOpenFoodByText(center);
           unblockedCards = mergeCards(unblockedCards, openFoodTextCards);
@@ -4693,8 +4996,10 @@ function NomNomGoApp() {
       }
 
       if (slot === 'food') {
-        return foodCardScore(b, center, memory, selectedMoods, foodSelections, selectedDietaryPreferences, routeBias) -
-          foodCardScore(a, center, memory, selectedMoods, foodSelections, selectedDietaryPreferences, routeBias);
+        return foodCardScore(b, center, memory, selectedMoods, foodSelections, selectedDietaryPreferences, routeBias) +
+          foodTimePreferenceScore(b, activeTiming.timePreference) -
+          (foodCardScore(a, center, memory, selectedMoods, foodSelections, selectedDietaryPreferences, routeBias) +
+            foodTimePreferenceScore(a, activeTiming.timePreference));
       }
 
       return scoreCard(b, memory, selectedMoods) + routeBiasScore(b, routeBias) -
@@ -4781,6 +5086,11 @@ function NomNomGoApp() {
       if (shouldScroll) scrollToResults();
     } catch (err) {
       addLog(`Find failed: ${compactError(err)}`);
+      const searchError = compactError(err);
+      const needsLocation = /location|gps|geolocation|secure origin|permission/i.test(searchError);
+      setSearchNotice(needsLocation
+        ? 'Location is unavailable in this browser preview. Enter a ZIP, neighborhood, or city under Search area and try again.'
+        : 'Search could not be completed. Check the search area and try again.');
       Alert.alert('Could not search nearby', compactError(err));
     } finally {
       if (requestId === searchRequestIdRef.current) setLoading(false);
@@ -4800,6 +5110,7 @@ function NomNomGoApp() {
     selectedDateWindowRef.current = next;
     setSelectedDateWindow(next);
     const nextDateRange = dateRangeKeysForWindow(next, null);
+    activePlanTimingRef.current = { ...activePlanTimingRef.current, dateRange: nextDateRange };
     setPlan((prev) => {
       if (prev.status === 'locked') return prev;
       const nextPlanType = inferPlanType({
@@ -4865,6 +5176,7 @@ function NomNomGoApp() {
       start: formatDateInput(start),
       end: formatDateInput(end),
     };
+    activePlanTimingRef.current = { ...activePlanTimingRef.current, dateRange: nextRange };
     customDateRangeRef.current = nextRange;
     setCustomDateRange(nextRange);
     setCustomDateOpen(false);
@@ -5495,10 +5807,10 @@ function NomNomGoApp() {
 
   const openPlanningSuggestionMap = async (suggestion: PlanningSuggestion) => {
     if (typeof suggestion.item === 'string') {
-      await Linking.openURL(mapsSearchUrl(suggestion.item, activePlanningSession?.searchLocation || searchLocation || location));
+      await openExternalUrl(mapsSearchUrl(suggestion.item, activePlanningSession?.searchLocation || searchLocation || location));
       return;
     }
-    await Linking.openURL(suggestion.item.mapsUri || mapsSearchUrl(suggestion.item.title, suggestion.item));
+    await openExternalUrl(suggestion.item.mapsUri || mapsSearchUrl(suggestion.item.title, suggestion.item));
   };
 
   const hydrateCardWebsite = (cardId: string, websiteUri: string) => {
@@ -5556,12 +5868,12 @@ function NomNomGoApp() {
       return;
     }
     addLog(`${logLabel}: ${card.title}`);
-    await Linking.openURL(websiteUri);
+    await openExternalUrl(websiteUri);
   };
 
   const openPlanningSuggestionEvent = async (suggestion: PlanningSuggestion) => {
     if (typeof suggestion.item === 'string' || !suggestion.item.eventUrl) return;
-    await Linking.openURL(suggestion.item.eventUrl);
+    await openExternalUrl(suggestion.item.eventUrl);
   };
 
   const openPlanningSuggestionWebsite = async (suggestion: PlanningSuggestion) => {
@@ -5749,13 +6061,11 @@ function NomNomGoApp() {
     return nextStop;
   };
 
-  const selectNowDestination = (slot: PlanSlot, item: PlaceCard | string) => {
+  const selectNowDestination = async (slot: PlanSlot, item: PlaceCard | string) => {
     const category = slot === 'food' ? nowFoodCategory : nowActivityCategory;
-    setNowSelectedDestination({ slot, item, category });
+    await createNowPlanFromDestination({ slot, item, category });
     setManualSearch('');
     setManualSearchSubmitted(false);
-    addLog(`NOW destination selected: ${cardToName(item) || slot}`);
-    showToast(`${cardToName(item) || 'Destination'} selected`);
   };
 
   const selectCard = async (card: PlaceCard) => {
@@ -5778,7 +6088,7 @@ function NomNomGoApp() {
     }
 
     if (nowDiscovering) {
-      selectNowDestination(resultMode, card);
+      await selectNowDestination(resultMode, card);
       return;
     }
 
@@ -5800,13 +6110,13 @@ function NomNomGoApp() {
 
   const openCardMaps = async (card: PlaceCard) => {
     addLog(`Card Open Maps action: ${card.title}`);
-    await Linking.openURL(card.mapsUri || mapsSearchUrl(card.title));
+    await openExternalUrl(card.mapsUri || mapsSearchUrl(card.title));
   };
 
   const openCardEvent = async (card: PlaceCard) => {
     if (!card.eventUrl) return;
     addLog(`Card Open Event action: ${card.title}`);
-    await Linking.openURL(card.eventUrl);
+    await openExternalUrl(card.eventUrl);
   };
 
   const openCardWebsite = async (card: PlaceCard) => {
@@ -5817,10 +6127,10 @@ function NomNomGoApp() {
     const name = cardToName(stop.item);
     addLog(`Plan Map action: ${name || stop.slot}`);
     if (typeof stop.item !== 'string') {
-      await Linking.openURL(stop.item.mapsUri || mapsSearchUrl(stop.item.title, stop.item));
+      await openExternalUrl(stop.item.mapsUri || mapsSearchUrl(stop.item.title, stop.item));
       return;
     }
-    await Linking.openURL(mapsSearchUrl(stop.item, activeSearchLocation || location));
+    await openExternalUrl(mapsSearchUrl(stop.item, activeSearchLocation || location));
   };
 
   const openStopWebsite = async (stop: ItineraryStop) => {
@@ -5854,26 +6164,6 @@ function NomNomGoApp() {
     const range = dateRangeForSavedPlan(saved);
     return absoluteDateRangeLabel(range.start, range.end) || new Date(saved.createdAt).toLocaleDateString([], { month: 'short', day: 'numeric' });
   };
-
-  const savedPlanType = (saved: SavedPlan) => {
-    const range = dateRangeForSavedPlan(saved);
-    return saved.planType || inferPlanType({
-      planDateStart: range.start,
-      planDateEnd: range.end,
-      destinationLabel: saved.searchLocationLabel,
-      title: saved.title,
-    });
-  };
-
-  const savedPlanRoadTripMode = (saved: SavedPlan) => inferRoadTripMode({
-    planType: savedPlanType(saved),
-    destinationLabel: saved.searchLocationLabel,
-    startingLocationLabel: saved.routeOriginLabel,
-    routeProvider: saved.routeProvider,
-    sourceUrl: saved.sourceUrl,
-    stops: saved.stops,
-    currentRoadTripMode: saved.roadTripMode,
-  });
 
   const currentPlanContext = (contextStops: ItineraryStop[] = plan.stops) => {
     const contextPlanType = inferPlanType({
@@ -5915,70 +6205,24 @@ function NomNomGoApp() {
   const isImportedGoogleMapsPlan = plan.routeProvider === 'google_maps';
   const isImportedGoogleMapsDraft = isImportedGoogleMapsPlan && plan.status === 'draft';
   const planInvitees = plan.invitees || [];
-  const timeSignature = (time?: StopTime) => time ? `${time.hours}:${time.minutes}` : '';
-  const stopSaveSignature = (stop: ItineraryStop, duration?: StopTime, arrival?: StopTime) => ({
-    slot: stop.slot,
-    itemId: cardToId(stop.item),
-    name: cardToName(stop.item) || '',
-    travelMode: stop.travelMode || '',
-    duration: timeSignature(duration),
-    arrival: timeSignature(arrival),
-    features: [...(stop.selectedFeatures || [])].sort(),
-  });
-  const savedPlanSignature = (saved: SavedPlan) => JSON.stringify({
+  const currentContextSignature = currentPlanContext();
+  const savedPlanContentSignature = (saved: SavedPlan) => JSON.stringify({
     title: saved.title,
-    sourceUrl: saved.sourceUrl || '',
-    routeProvider: saved.routeProvider || '',
-    status: saved.status || '',
-    invitees: [...(saved.invitees || [])].sort(),
-    dateWindow: saved.dateWindow || '',
-    customDateRange: saved.customDateRange || null,
     planDateStart: dateRangeForSavedPlan(saved).start,
     planDateEnd: dateRangeForSavedPlan(saved).end,
-    planType: savedPlanType(saved),
     timeWindow: saved.timeWindow || '',
-    routeOriginLabel: saved.routeOriginLabel || '',
-    routeStartLocation: saved.routeStartLocation ? `${saved.routeStartLocation.latitude.toFixed(4)},${saved.routeStartLocation.longitude.toFixed(4)}` : '',
-    searchLocationLabel: saved.searchLocationLabel || '',
-    searchLocation: saved.searchLocation ? `${saved.searchLocation.latitude.toFixed(4)},${saved.searchLocation.longitude.toFixed(4)}` : '',
-    roadTripMode: savedPlanRoadTripMode(saved),
-    vehicleProfile: vehicleProfileForPlan(savedPlanRoadTripMode(saved), saved.vehicleProfile, saved.stops, saved.searchLocationLabel)?.kind || '',
-    chargingStops: chargingStopIdeasFromStops(saved.stops, saved.chargingStops || []).map((item) => item.name).sort(),
-    stops: saved.stops.map((stop) => stopSaveSignature(
-      stop,
-      saved.planTimes?.[stop.key],
-      savedArrivalClockTime(saved, stop),
-    )),
+    stops: saved.stops.map((stop) => ({ slot: stop.slot, itemId: cardToId(stop.item) })),
   });
-  const currentContextSignature = currentPlanContext();
-  const currentPlanSignature = JSON.stringify({
+  const currentPlanContentSignature = JSON.stringify({
     title: planTitle,
-    sourceUrl: plan.sourceUrl || '',
-    routeProvider: plan.routeProvider || '',
-    status: plan.status || '',
-    invitees: [...planInvitees].sort(),
-    dateWindow: currentContextSignature.dateWindow || '',
-    customDateRange: currentContextSignature.customDateRange || null,
     planDateStart: currentContextSignature.planDateStart,
     planDateEnd: currentContextSignature.planDateEnd,
-    planType: currentContextSignature.planType,
     timeWindow: currentContextSignature.timeWindow || '',
-    routeOriginLabel: currentContextSignature.routeOriginLabel || '',
-    routeStartLocation: currentContextSignature.routeStartLocation ? `${currentContextSignature.routeStartLocation.latitude.toFixed(4)},${currentContextSignature.routeStartLocation.longitude.toFixed(4)}` : '',
-    searchLocationLabel: currentContextSignature.searchLocationLabel || '',
-    searchLocation: currentContextSignature.searchLocation ? `${currentContextSignature.searchLocation.latitude.toFixed(4)},${currentContextSignature.searchLocation.longitude.toFixed(4)}` : '',
-    roadTripMode: Boolean(currentContextSignature.roadTripMode),
-    vehicleProfile: currentContextSignature.vehicleProfile?.kind || '',
-    chargingStops: (currentContextSignature.chargingStops || []).map((item) => item.name).sort(),
-    stops: plan.stops.map((stop, index) => stopSaveSignature(
-      stop,
-      planTimes[stop.key],
-      displayedArrivalTimeForStop(stop, index),
-    )),
+    stops: plan.stops.map((stop) => ({ slot: stop.slot, itemId: cardToId(stop.item) })),
   });
-  const isCurrentPlanSaved = Boolean(plan.savedPlanId && visibleSavedPlans.some((saved) => saved.id === plan.savedPlanId && saved.source === 'saved')) ||
+  const isCurrentPlanSaved = Boolean(plan.savedPlanId) ||
     visibleSavedPlans.some((saved) =>
-    saved.source === 'saved' && savedPlanSignature(saved) === currentPlanSignature,
+    saved.source === 'saved' && savedPlanContentSignature(saved) === currentPlanContentSignature,
   );
 
   const cloneStopForSavedPlan = (stop: ItineraryStop, suffix = ''): ItineraryStop => ({
@@ -6014,10 +6258,22 @@ function NomNomGoApp() {
       finalizedSuggestionIds: base?.finalizedSuggestionIds || plan.finalizedSuggestionIds || [],
       rsvps: base?.rsvps || plan.rsvps || { [currentTesterName]: 'going' },
       status,
+      savedPlanId: plan.savedPlanId,
       createdAt: base?.createdAt || stamp,
       updatedAt: stamp,
     };
   };
+  betaPlanRecordBuilderRef.current = betaPlanRecordFromCurrentState;
+
+  useEffect(() => {
+    const recordId = activeBetaPlanId || plan.sharedPlanId;
+    if (!recordId) return;
+    const base = betaPlansRef.current.find((record) => record.id === recordId);
+    if (!base) return;
+    const nextRecord = betaPlanRecordBuilderRef.current?.(base);
+    if (!nextRecord) return;
+    void saveBetaPlans((current) => [nextRecord, ...current.filter((record) => record.id !== nextRecord.id)]);
+  }, [activeBetaPlanId, plan]);
 
   const ensureActiveBetaPlanRecord = async () => {
     const existing = activeBetaPlan || betaPlansRef.current.find((record) => record.id === plan.sharedPlanId) || null;
@@ -6030,12 +6286,12 @@ function NomNomGoApp() {
     return nextRecord;
   };
 
-  const createNowPlanFromSelection = async () => {
-    if (!nowSelectedDestination || nowPlanCreating) return;
+  const createNowPlanFromDestination = async (selection: NowDestinationSelection) => {
+    if (nowPlanCreating) return;
 
     setNowPlanCreating(true);
     try {
-      const { slot, item, category } = nowSelectedDestination;
+      const { slot, item, category } = selection;
       const effectiveDateWindow: DateWindowId = 'today';
       const nextDateRange = dateRangeKeysForWindow(effectiveDateWindow, null, new Date());
       const nextTitle = contextualNowPlanTitle(slot, item, category);
@@ -6064,7 +6320,7 @@ function NomNomGoApp() {
         planDateEnd: nextDateRange.end,
         timeWindow: undefined,
         timePreference: 'Now',
-        intent: slot,
+        intent: 'both',
         locationLabel: selectedLocationLabel,
         searchLocation: selectedSearchLocation,
         routeOriginLabel: startingLocationLabel,
@@ -6084,7 +6340,7 @@ function NomNomGoApp() {
         title: nextTitle,
         sharedPlanId: betaRecord.id,
         owner: betaRecord.owner,
-        intent: slot,
+        intent: 'both',
         status: 'draft',
         stops: [nextStop],
         dateWindow: effectiveDateWindow,
@@ -6112,7 +6368,6 @@ function NomNomGoApp() {
       setSelectedStopKey(nextStop.key);
       setTimeEditorKey(null);
       setNowMode('closed');
-      setNowSelectedDestination(null);
       setPlanSetupOpen(false);
       setHomeOpen(false);
       setSavedPlansLandingOpen(false);
@@ -6125,7 +6380,7 @@ function NomNomGoApp() {
       void refreshStopFeatures(nextStop.key, slot, item);
       scrollToPlan();
       addLog(`NOW plan created: ${nextTitle}`);
-      showToast('Plan created');
+      showToast('Added to current plan');
     } catch (err) {
       addLog(`NOW plan creation failed: ${compactError(err)}`);
       Alert.alert('Could not create plan', compactError(err));
@@ -6145,17 +6400,35 @@ function NomNomGoApp() {
     }
   };
 
+  const refreshResultsForParticipantChange = () => {
+    if (!hasInitiatedSearch || loading) return;
+    setResultFilter('all');
+    setCards([]);
+    setVisibleCount(PAGE_SIZE);
+    setLoading(true);
+    setTimeout(() => {
+      void searchForSlot(resultMode, true, true);
+    }, 25);
+  };
+
   const togglePlanInvitee = (user: string) => {
+    const nextInvitees = planInvitees.includes(user)
+      ? planInvitees.filter((item) => item !== user)
+      : unique([...planInvitees, user]);
     setPlan((prev) => {
-      const invitees = prev.invitees || [];
       return {
         ...prev,
-        invitees: invitees.includes(user)
-          ? invitees.filter((item) => item !== user)
-          : unique([...invitees, user]),
+        invitees: nextInvitees,
         savedPlanId: undefined,
       };
     });
+    if (activeBetaPlanId) {
+      void patchBetaPlan(activeBetaPlanId, (record) => ({
+        ...record,
+        participants: unique([record.owner, currentTesterName, ...nextInvitees]),
+      }));
+    }
+    refreshResultsForParticipantChange();
   };
 
   const moveStop = (key: string, direction: -1 | 1) => {
@@ -6295,7 +6568,7 @@ function NomNomGoApp() {
   const openImportedGoogleRoute = async () => {
     if (!plan.sourceUrl) return;
     addLog('Imported Google Maps route opened');
-    await Linking.openURL(plan.sourceUrl);
+    await openExternalUrl(plan.sourceUrl);
   };
 
   const openPlanRoute = async () => {
@@ -6398,7 +6671,11 @@ function NomNomGoApp() {
   const saveCurrentPlan = async () => {
     if (!plan.stops.length) return;
     const saved = makeSavedPlan(plan.stops, 'saved');
-    await saveSavedPlans((current) => [saved, ...current.filter((item) => item.id !== saved.id)]);
+    const signature = savedPlanContentSignature(saved);
+    await saveSavedPlans((current) => [
+      saved,
+      ...current.filter((item) => item.source !== 'saved' || savedPlanContentSignature(item) !== signature),
+    ]);
     setPlan((prev) => ({
       ...prev,
       ...currentPlanContext(),
@@ -6499,7 +6776,6 @@ function NomNomGoApp() {
     setHasInitiatedSearch(false);
     setCards([]);
     setNowMode('closed');
-    setNowSelectedDestination(null);
     setNowPeoplePickerOpen(false);
     setHomeOpen(false);
     setSavedPlansLandingOpen(false);
@@ -6510,19 +6786,40 @@ function NomNomGoApp() {
 
   const deleteSavedPlan = async (id: string) => {
     await saveSavedPlans((current) => current.filter((item) => item.id !== id));
+    setPlan((current) => current.savedPlanId === id ? { ...current, savedPlanId: undefined } : current);
     addLog('Saved plan removed');
+    showToast('Saved plan deleted');
   };
 
-  const quickShareMapsUrl = (target: QuickShareTarget) => {
-    const item = target.kind === 'card' ? target.card : target.stop.item;
-    if (typeof item !== 'string') return item.mapsUri || mapsSearchUrl(item.title, item);
-    return mapsSearchUrl(item, activeSearchLocation || location);
+  const confirmAction = (title: string, message: string, confirmLabel: string, action: () => void) => {
+    setPendingConfirmation({ title, message, confirmLabel, action });
+  };
+
+  const requestDeleteSavedPlan = (saved: SavedPlan) => {
+    confirmAction('Delete saved plan?', `Delete “${saved.title}”? This cannot be undone.`, 'Delete', () => {
+      void deleteSavedPlan(saved.id);
+    });
+  };
+
+  const clearCurrentPlan = () => {
+    setPlan(EMPTY_PLAN);
+    setPlanTimes({});
+    setArrivalTimes({});
+    setSelectedStopKey(null);
+    setHasInitiatedSearch(false);
+    setCards([]);
+    addLog('Plan cleared');
+    showToast('Plan cleared');
+  };
+
+  const requestClearCurrentPlan = () => {
+    confirmAction('Clear this plan?', 'Remove every stop from the current plan?', 'Clear plan', clearCurrentPlan);
   };
 
   const quickShareMessage = (target: QuickShareTarget) => {
     const title = quickShareTitle(target);
-    const url = quickShareMapsUrl(target);
-    return [title, url, 'Shared from NomNomGo'].join('\n');
+    if (target.kind === 'stop') return shareStopLine(target.stop, target.index);
+    return title;
   };
 
   const openQuickShare = (target: QuickShareTarget) => {
@@ -6587,55 +6884,6 @@ function NomNomGoApp() {
     addLog(`Never recommend again: ${card.title}`);
   };
 
-  const addManualCardToPlan = async (slot: PlanSlot, card: PlaceCard) => {
-    if (isPlanLocked && !planningSuggestionMode) {
-      showToast('Unlock the plan to edit it');
-      return;
-    }
-    const nextMemory = {
-      ...memory,
-      selectedHistory: unique([card.id, ...memory.selectedHistory]).slice(0, 80),
-    };
-    await saveMemory(nextMemory);
-
-    if (planningSuggestionMode) {
-      await addPlanningSuggestion(slot, card, 'manual');
-      setResultMode(slot);
-      setCards((prev) => {
-        const existing = prev.some((item) => item.id === card.id);
-        return existing ? prev : [card, ...prev];
-      });
-      setVisibleCount(PAGE_SIZE);
-      return;
-    }
-
-    if (nowDiscovering) {
-      selectNowDestination(slot, card);
-      setResultMode(slot);
-      setCards((prev) => {
-        const existing = prev.some((item) => item.id === card.id);
-        return existing ? prev : [card, ...prev];
-      });
-      setVisibleCount(PAGE_SIZE);
-      return;
-    }
-
-    const alreadySelected = plan.stops.some((stop) => stop.slot === slot && cardToId(stop.item) === card.id);
-    const insertedStop = !alreadySelected ? insertStopIntoPlan(slot, card) : undefined;
-    setResultMode(slot);
-    setCards((prev) => {
-      const existing = prev.some((item) => item.id === card.id);
-      return existing ? prev : [card, ...prev];
-    });
-    setVisibleCount(PAGE_SIZE);
-    if (insertedStop) scrollToPlanStop(insertedStop.key);
-
-    if (slot === 'food' && !alreadySelected && pendingInsertIndex === null) {
-      setResultMode('activity');
-      await searchActivitiesNearFood(card);
-    }
-  };
-
   const clearManualSearch = () => {
     setManualSearch('');
     setManualSearchSubmitted(false);
@@ -6645,7 +6893,7 @@ function NomNomGoApp() {
     setTimeout(() => manualSearchRef.current?.focus(), 50);
   };
 
-  const useManual = async (slot: PlanSlot) => {
+  const runManualSearch = async (slot: PlanSlot) => {
     if (isPlanLocked && !planningSuggestionMode) {
       showToast('Unlock the plan to edit it');
       return;
@@ -6661,9 +6909,9 @@ function NomNomGoApp() {
         return;
       }
       if (nowDiscovering) {
-        selectNowDestination(slot, value);
-        addLog(`Manual NOW ${slot} selected without Places lookup: ${value}`);
-        notifyGooglePlacesMissing('Manual lookup skipped: Google Places key missing', 'Use Create Plan when you are ready.');
+        await selectNowDestination(slot, value);
+        addLog(`Manual NOW ${slot} added without Places lookup: ${value}`);
+        notifyGooglePlacesMissing('Manual lookup skipped: Google Places key missing', 'Added to current plan. Places details need a Google key.');
         return;
       }
       const insertedStop = insertStopIntoPlan(slot, value);
@@ -6681,64 +6929,25 @@ function NomNomGoApp() {
         addLog(`Manual lookup location unavailable: ${compactError(err)}`);
         return null;
       });
-      const matches = await searchPlaceByText(value, slot, center);
-      const resolved = matches[0];
-      if (!resolved) {
-        if (planningSuggestionMode) {
-          await addPlanningSuggestion(slot, value, 'manual');
-          setManualSearch('');
-          addLog(`Manual ${slot} suggestion added without match: ${value}`);
-          return;
-        }
-        if (nowDiscovering) {
-          selectNowDestination(slot, value);
-          addLog(`Manual NOW ${slot} selected without match: ${value}`);
-          Alert.alert('Place not found', `I could not load details for "${value}", but you can still create a plan with it.`);
-          return;
-        }
-        const insertedStop = insertStopIntoPlan(slot, value);
-        if (insertedStop) scrollToPlanStop(insertedStop.key);
-        setManualSearch('');
-        setManualSearchSubmitted(false);
-        addLog(`Manual ${slot} lookup found no match: ${value}`);
-        Alert.alert('Place not found', `I added "${value}" manually, but Google Places did not return a match.`);
-        return;
-      }
-
-      if (matches.length > 1) {
-        setResultMode(slot);
-        setHasInitiatedSearch(true);
-        setCards(matches);
-        setVisibleCount(PAGE_SIZE);
-        setPreferencesOpen(false);
-        setLoading(false);
-        scrollToResults();
-        addLog(`Manual ${slot} needs choice: ${matches.slice(0, 3).map((card) => card.title).join(' | ')}`);
-        return;
-      }
-
-      await addManualCardToPlan(slot, resolved);
-      setManualSearch('');
-      addLog(`Manual ${slot} resolved: ${resolved.title}`);
+      const matches = (await searchPlaceByText(value, slot, center)).map(cardForActivePlanTiming);
+      setResultMode(slot);
+      setHasInitiatedSearch(true);
+      setCards(matches);
+      setVisibleCount(PAGE_SIZE);
+      setPreferencesOpen(false);
+      setSearchNotice(matches.length ? '' : 'No matching place found. Try a more specific name or address.');
+      setLoading(false);
+      scrollToResults();
+      addLog(matches.length
+        ? `Manual ${slot} needs choice: ${matches.slice(0, 3).map((card) => card.title).join(' | ')}`
+        : `Manual ${slot} lookup found no match: ${value}`);
     } catch (err) {
-      if (planningSuggestionMode) {
-        await addPlanningSuggestion(slot, value, 'manual');
-        setManualSearch('');
-        addLog(`Manual ${slot} suggestion added after lookup failure: ${compactError(err)}`);
-        return;
-      }
-      if (nowDiscovering) {
-        selectNowDestination(slot, value);
-        addLog(`Manual NOW ${slot} selected after lookup failure: ${compactError(err)}`);
-        Alert.alert('Manual lookup failed', `I could not load details for "${value}", but you can still create a plan with it.`);
-        return;
-      }
-      const insertedStop = insertStopIntoPlan(slot, value);
-      if (insertedStop) scrollToPlanStop(insertedStop.key);
-      setManualSearch('');
-      setManualSearchSubmitted(false);
+      setResultMode(slot);
+      setHasInitiatedSearch(true);
+      setCards([]);
+      setSearchNotice('Place lookup failed. Nothing was added; check the search area and try again.');
       addLog(`Manual ${slot} lookup failed: ${compactError(err)}`);
-      Alert.alert('Manual lookup failed', `I added "${value}" manually, but could not load details from Google Places.`);
+      Alert.alert('Manual lookup failed', 'Nothing was added. Check the search area and try again.');
     } finally {
       setLoading(false);
     }
@@ -6818,7 +7027,7 @@ function NomNomGoApp() {
       return;
     }
     addLog('Directions to plan opened');
-    await Linking.openURL(url);
+    await openExternalUrl(url);
   };
 
   const sharePlan = async () => {
@@ -6901,48 +7110,19 @@ function NomNomGoApp() {
     showToast('Suggestion added');
   };
 
-  const finalizeBetaSuggestion = async (suggestion: PlanningSuggestion) => {
-    if (activeBetaPlan && activeBetaPlan.owner !== currentTesterName) {
-      showToast(`${activeBetaPlan.owner} can finalize this plan`);
-      return;
+  const addSuggestionToCurrentPlan = (suggestion: PlanningSuggestion) => {
+    if (isPlanLocked) return;
+    const insertedStop = insertStopIntoPlan(suggestion.slot, suggestion.item);
+    if (insertedStop) {
+      scrollToPlanStop(insertedStop.key);
+      showToast('Suggestion added to current plan');
     }
-    const record = await ensureActiveBetaPlanRecord();
-    const finalStop = suggestionToStop(suggestion, `-beta-final-${record.id}`);
-    const nextStops = [finalStop];
-    const context = currentPlanContext(nextStops);
-    const lockedArrivalTimes: Record<string, StopTime | undefined> = {
-      [finalStop.key]: clockTimeFromOffsetMinutes(estimateDriveMinutes(routeStartLocation, finalStop.item), activePlanTimelineBaseMs),
-    };
-    setPlan((prev) => ({
-      ...prev,
-      ...context,
-      title: prev.title || record.title,
-      stops: nextStops,
-      status: 'locked',
-      lockedArrivalTimes,
-      finalizedSuggestionIds: [suggestion.id],
-      savedPlanId: undefined,
-    }));
-    setPlanTimes({});
-    setArrivalTimes({});
-    setPendingInsertIndex(null);
-    setSelectedStopKey(finalStop.key);
-    setTimeEditorKey(null);
-    await patchBetaPlan(record.id, (current) => ({
-      ...current,
-      status: 'finalized',
-      stops: nextStops.map((stop) => cloneStopForSavedPlan(stop)),
-      finalizedSuggestionIds: [suggestion.id],
-    }));
-    showToast('Plan finalized');
-    scrollToPlan();
   };
 
   const shareActiveBetaPlan = async () => {
     try {
       const record = await ensureActiveBetaPlanRecord();
-      const shareUrl = betaPlanShareUrl(record);
-      await Share.share({ message: betaPlanShareMessage(record, shareUrl) });
+      await Share.share({ message: plan.stops.length ? sharePlanText() : betaPlanShareMessage(record) });
       addLog('Beta plan shared');
     } catch (err) {
       addLog(`Beta plan share failed: ${compactError(err)}`);
@@ -7028,8 +7208,7 @@ function NomNomGoApp() {
   const shareVisitorBetaPlan = async () => {
     if (!visitorBetaPlan) return;
     try {
-      const shareUrl = betaPlanShareUrl(visitorBetaPlan);
-      await Share.share({ message: betaPlanShareMessage(visitorBetaPlan, shareUrl) });
+      await Share.share({ message: betaPlanShareMessage(visitorBetaPlan) });
       addLog('Visitor beta plan shared');
     } catch (err) {
       addLog(`Visitor beta plan share failed: ${compactError(err)}`);
@@ -7221,7 +7400,7 @@ function NomNomGoApp() {
   };
   const preferenceSummaryParts = [
     selectedMoods.slice(0, 2).join(', '),
-    selectedTime,
+    activePlanTimePreference,
     resultMode === 'food'
       ? summarizeSelection('Food', selectedFoods)
       : summarizeSelection('Activity', selectedActivities),
@@ -7236,33 +7415,58 @@ function NomNomGoApp() {
   const canFinalizeActiveBetaPlan = activeBetaPlanOwner === currentTesterName;
   const activeBetaPlanFinalLabel = activeBetaPlan ? betaPlanFinalLabel(activeBetaPlan) : plan.stops.map((stop) => cardToName(stop.item)).filter(Boolean).join(' + ');
   const selectedDraftFinalLabel = plan.stops.map((stop) => cardToName(stop.item)).filter(Boolean).join(' + ');
-  const activePlanRecord = activeBetaPlan || betaPlans.find((record) => record.id === plan.sharedPlanId) || null;
-  const showNowLightweightPlan = Boolean(activePlanRecord?.source === 'now' && hasAnyActiveStop && !isPlanLocked && !nowExperienceActive);
-  const showBetaPlanDetail = Boolean((activeBetaPlan || plan.sharedPlanId || !homeOpen) && !nowExperienceActive && !showNowLightweightPlan);
-  const showDiscoveryTools = !savedPlansLandingOpen && !isPlanLocked && (!nowExperienceActive || nowDiscovering) && !showNowLightweightPlan;
-  const showPlanningTools = !savedPlansLandingOpen && !isPlanLocked && !nowExperienceActive && !showNowLightweightPlan;
+  const showBetaPlanDetail = Boolean((activeBetaPlan || plan.sharedPlanId || !homeOpen) && !nowExperienceActive && !hasAnyActiveStop && !isPlanLocked);
+  const showDiscoveryTools = !savedPlansLandingOpen && !isPlanLocked && (!nowExperienceActive || nowDiscovering);
+  const showPlanningTools = !savedPlansLandingOpen && !isPlanLocked && !nowExperienceActive;
+  const activeNavigationKey: MainNavigationKey | undefined = accountSettingsOpen
+    ? 'profile'
+    : homeOpen && !planSetupOpen
+      ? 'home'
+      : savedPlansLandingOpen
+        ? savedPlansNavigationSource
+        : planSetupOpen
+          ? undefined
+          : 'plans';
 
   const quickShareUsers = unique(TEST_USERS.filter((user) => user !== currentTesterName));
-  const planPeopleSummary = planInvitees.length ? unique([currentTesterName, ...planInvitees]).join(', ') : 'Just Me';
+  const recentPeople = quickShareUsers.slice(0, 2);
+  const favoritePeople = quickShareUsers.filter((user) => !recentPeople.includes(user)).slice(0, 3);
+  const planPeopleSummary = activePlanPeopleSummary;
   const planSetupPeopleSummary = planSetupInvitees.length ? unique([currentTesterName, ...planSetupInvitees]).join(', ') : 'Just me';
   const nowPeopleSummary = nowSelectedPeople.length ? unique([currentTesterName, ...nowSelectedPeople]).join(', ') : 'Just me';
   const activePlanIntentLabel = planningIntentLabel(plan.intent || activeBetaPlan?.intent || 'both');
   const activePlanGoingCount = rsvpCountsFor(betaPlanRsvps).going;
   const activePlanSummaryLine = [
-    activePlanDateLabel,
+    activePlanContextLabel,
     searchLocationLabel,
     activePlanIntentLabel,
     `${activePlanGoingCount} Going`,
   ].filter(Boolean).join(' | ');
+  const placeDetailIsSelected = Boolean(placeDetailCard && !nowDiscovering && plan.stops.some(
+    (stop) => stop.slot === resultMode && cardToId(stop.item) === placeDetailCard.id,
+  ));
+  const placeDetailIsSuggested = Boolean(placeDetailCard && planningSuggestionMode && activePlanningSession?.suggestions.some(
+    (suggestion) => samePlanningSuggestion(suggestion, resultMode, placeDetailCard),
+  ));
+  const placeDetailActionLabel = nowDiscovering
+    ? 'Use'
+    : planningSuggestionMode
+      ? placeDetailIsSuggested ? 'Suggested' : 'Suggest'
+      : placeDetailIsSelected ? 'Deselect' : 'Add to Plan';
+  const placeDetailActionIcon: React.ComponentProps<typeof Ionicons>['name'] = nowDiscovering
+    ? 'navigate-outline'
+    : planningSuggestionMode
+      ? placeDetailIsSuggested ? 'checkmark-done-outline' : 'chatbubble-ellipses-outline'
+      : placeDetailIsSelected ? 'remove-circle-outline' : 'add';
   const togglePlanSetupInvitee = (user: string) => {
     setPlanSetupInvitees((prev) => prev.includes(user) ? prev.filter((item) => item !== user) : unique([...prev, user]));
   };
 
   if (!authLoaded) {
     return (
-      <SafeAreaView style={[styles.safeArea, isLightMode && styles.lightScreen, isDarkMode && styles.darkScreen]} edges={['top', 'left', 'right']}>
+      <SafeAreaView style={[styles.safeArea, isLightMode && styles.lightScreen, isDarkMode && styles.darkScreen]} edges={['top', 'bottom', 'left', 'right']}>
         <View style={styles.authCentered}>
-          <ActivityIndicator color="#f23b35" />
+          <ActivityIndicator color={colors.coral} />
           <Text style={styles.authHint}>Loading NomNomGo</Text>
         </View>
       </SafeAreaView>
@@ -7280,8 +7484,20 @@ function NomNomGoApp() {
       planningIntentLabel(visitorBetaPlan.intent),
       `${rsvpCountsFor(visitorRsvps).going} Going`,
     ].filter(Boolean).join(' | ');
+    const openVisitorStopMaps = async (stop: ItineraryStop) => {
+      const name = cardToName(stop.item) || stop.slot;
+      addLog(`Shared Plan Map action: ${name}`);
+      if (typeof stop.item !== 'string') {
+        await openExternalUrl(stop.item.mapsUri || mapsSearchUrl(stop.item.title, stop.item));
+        return;
+      }
+      await openExternalUrl(mapsSearchUrl(
+        stop.item,
+        visitorBetaPlan.searchLocation || visitorBetaPlan.routeStartLocation,
+      ));
+    };
     return (
-      <SafeAreaView style={[styles.safeArea, isLightMode && styles.lightScreen, isDarkMode && styles.darkScreen]} edges={['top', 'left', 'right']}>
+      <SafeAreaView style={[styles.safeArea, isLightMode && styles.lightScreen, isDarkMode && styles.darkScreen]} edges={['top', 'bottom', 'left', 'right']}>
         <KeyboardAvoidingView
           style={styles.keyboardAvoider}
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -7292,27 +7508,27 @@ function NomNomGoApp() {
             contentContainerStyle={styles.content}
             keyboardShouldPersistTaps="handled"
           >
-            <View style={[styles.appBanner, isDarkMode && styles.darkPanel]}>
-              <TouchableOpacity
-                style={styles.bannerBrand}
-                onPress={() => setVisitorBetaPlan(null)}
-                accessibilityRole="button"
-                accessibilityLabel="Open NomNomGo"
-              >
+            <AppHeader
+              style={[styles.appBanner, styles.darkPanel]}
+              onBrandPress={() => setVisitorBetaPlan(null)}
+              brandAccessibilityLabel="Open NomNomGo"
+              logo={(
                 <Image
                   source={require('./assets/nom-nom-go-mark-transparent-v19.png')}
                   style={styles.bannerLogoMark}
                   resizeMode="contain"
                 />
+              )}
+              content={(
                 <View style={styles.bannerBrandText}>
                   <View style={styles.bannerNameRow}>
-                    <Text style={[styles.bannerName, styles.bannerNameMain, isDarkMode && styles.bannerNameMainDark]} numberOfLines={1}>NomNom</Text>
+                    <Text style={[styles.bannerName, styles.bannerNameMain, styles.bannerNameMainDark]} numberOfLines={1}>NomNom</Text>
                     <Text style={[styles.bannerName, styles.bannerNameGo]} numberOfLines={1}>Go</Text>
                   </View>
-                  <Text style={[styles.bannerTagline, isDarkMode && styles.darkMutedText]} numberOfLines={1}>Come together</Text>
+                  <Text style={[styles.bannerTagline, styles.darkMutedText]} numberOfLines={1}>Come together</Text>
                 </View>
-              </TouchableOpacity>
-            </View>
+              )}
+            />
 
             {toastMessage ? (
               <View style={styles.toastBox}>
@@ -7341,14 +7557,57 @@ function NomNomGoApp() {
                 </View>
               ) : null}
 
+              {visitorBetaPlan.status === 'finalized' && visitorBetaPlan.stops.length ? (
+                <View style={styles.visitorRouteSection}>
+                  <View style={styles.betaSectionHeader}>
+                    <View style={styles.visitorRouteHeading}>
+                      <Text style={[styles.sessionSubhead, styles.darkText]}>Your route</Text>
+                      <Text style={[styles.betaSuggestionMeta, styles.darkMutedText]}>
+                        {visitorBetaPlan.stops.length} stop{visitorBetaPlan.stops.length === 1 ? '' : 's'}
+                      </Text>
+                    </View>
+                    <Ionicons name="navigate-outline" size={20} color={colors.teal} />
+                  </View>
+                  <View style={styles.visitorRouteList}>
+                    {visitorBetaPlan.stops.map((stop, index) => {
+                      const stopLocation = cityStateLabel(cityStateForPlace(stop.item));
+                      return (
+                        <TouchableOpacity
+                          key={`visitor-route-${stop.key}`}
+                          style={styles.visitorRouteStop}
+                          onPress={() => openVisitorStopMaps(stop)}
+                          accessibilityRole="button"
+                          accessibilityLabel={`Open route to stop ${index + 1}, ${cardToName(stop.item) || 'Stop'}`}
+                        >
+                          <Text style={[
+                            styles.visitorRouteIndex,
+                            stop.slot === 'food' ? styles.stopIndexFood : styles.stopIndexActivity,
+                          ]}>{index + 1}</Text>
+                          <View style={styles.visitorRouteStopText}>
+                            <Text style={[
+                              styles.visitorRouteType,
+                              stop.slot === 'food' ? styles.visitorRouteTypeFood : styles.visitorRouteTypeActivity,
+                            ]}>{stop.slot === 'food' ? 'Food' : 'Activity'}</Text>
+                            <Text style={styles.visitorRouteName} numberOfLines={1}>{cardToName(stop.item) || 'Stop'}</Text>
+                            {stopLocation ? <Text style={styles.visitorRouteMeta} numberOfLines={1}>{stopLocation}</Text> : null}
+                          </View>
+                          <Ionicons name="chevron-forward" size={18} color={colors.textTertiary} />
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                </View>
+              ) : null}
+
               <View style={styles.betaSection}>
                 <Text style={[styles.sessionSubhead, isDarkMode && styles.darkText]}>Your name</Text>
                 <TextInput
                   style={[styles.input, isDarkMode && styles.darkPanelInput, Platform.OS === 'web' && styles.webInput]}
                   value={visitorName}
                   onChangeText={setVisitorName}
+                  accessibilityLabel="Your name"
                   placeholder={testerAuthenticated ? currentTesterName : 'Guest'}
-                  placeholderTextColor={isLightMode ? '#64748b' : '#94a3b8'}
+                  placeholderTextColor={isLightMode ? colors.textTertiary : colors.textSecondary}
                   returnKeyType="done"
                 />
               </View>
@@ -7361,8 +7620,9 @@ function NomNomGoApp() {
                       style={[styles.input, isDarkMode && styles.darkPanelInput, Platform.OS === 'web' && styles.webInput]}
                       value={betaSuggestionInput}
                       onChangeText={setBetaSuggestionInput}
+                      accessibilityLabel="Suggest a place or idea"
                       placeholder="Place or idea"
-                      placeholderTextColor={isLightMode ? '#64748b' : '#94a3b8'}
+                      placeholderTextColor={isLightMode ? colors.textTertiary : colors.textSecondary}
                       returnKeyType="done"
                       onSubmitEditing={addVisitorSuggestion}
                     />
@@ -7408,26 +7668,17 @@ function NomNomGoApp() {
                     <Text style={[styles.betaSuggestionMeta, isDarkMode && styles.darkMutedText]}>{rsvpStatusLabel(visitorRsvp)}</Text>
                   ) : null}
                 </View>
-                <View style={styles.rsvpButtonRow}>
-                  {RSVP_OPTIONS.map((option) => {
-                    const active = visitorRsvp === option.status;
-                    return (
-                      <TouchableOpacity
-                        key={`visitor-rsvp-${option.status}`}
-                        style={[styles.rsvpButton, isDarkMode && styles.darkChip, active && styles.rsvpButtonActive]}
-                        onPress={() => setVisitorRsvp(option.status)}
-                      >
-                        <Text style={[styles.rsvpButtonText, isDarkMode && styles.darkMutedText, active && styles.rsvpButtonTextActive]}>
-                          {option.label}
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
+                <RsvpControl value={visitorRsvp} onChange={setVisitorRsvp} />
               </View>
 
               <View style={[styles.betaDetailsBox, isDarkMode && styles.darkChip]}>
-                <TouchableOpacity style={styles.betaDetailsHeader} onPress={() => setPlanSettingsOpen((prev) => !prev)}>
+                <TouchableOpacity
+                  style={styles.betaDetailsHeader}
+                  onPress={() => setPlanSettingsOpen((prev) => !prev)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${planSettingsOpen ? 'Hide' : 'Show'} details`}
+                  accessibilityState={{ expanded: planSettingsOpen }}
+                >
                   <View style={styles.betaSuggestionTextBlock}>
                     <Text style={[styles.sessionSubhead, isDarkMode && styles.darkText]}>Details</Text>
                     <Text style={[styles.betaSuggestionMeta, isDarkMode && styles.darkMutedText]} numberOfLines={1}>
@@ -7454,7 +7705,7 @@ function NomNomGoApp() {
 
   if (!testerAuthenticated) {
     return (
-      <SafeAreaView style={[styles.safeArea, isLightMode && styles.lightScreen, isDarkMode && styles.darkScreen]} edges={['top', 'left', 'right']}>
+      <SafeAreaView style={[styles.safeArea, isLightMode && styles.lightScreen, isDarkMode && styles.darkScreen]} edges={['top', 'bottom', 'left', 'right']}>
         <KeyboardAvoidingView
           style={styles.keyboardAvoider}
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -7501,6 +7752,7 @@ function NomNomGoApp() {
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       keyboardVerticalOffset={0}
     >
+    <View style={styles.appShell}>
     <ScrollView
       ref={scrollRef}
       style={[styles.screen, isLightMode && styles.lightScreen, isDarkMode && styles.darkScreen]}
@@ -7508,49 +7760,37 @@ function NomNomGoApp() {
       keyboardShouldPersistTaps="handled"
       keyboardDismissMode="interactive"
     >
-      <View style={[styles.appBanner, isDarkMode && styles.darkPanel]}>
-        <TouchableOpacity
-          style={styles.bannerBrand}
-          onPress={openHome}
-          accessibilityRole="button"
-          accessibilityLabel="Go to NomNomGo home"
-        >
+      <AppHeader
+        style={[styles.appBanner, styles.darkPanel]}
+        onBrandPress={openHome}
+        brandAccessibilityLabel="Go to NomNomGo home"
+        logo={(
           <Image
             source={require('./assets/nom-nom-go-mark-transparent-v19.png')}
             style={styles.bannerLogoMark}
             resizeMode="contain"
           />
+        )}
+        content={(
           <View style={styles.bannerBrandText}>
             <View style={styles.bannerNameRow}>
-              <Text
-                style={[styles.bannerName, styles.bannerNameMain, isDarkMode && styles.bannerNameMainDark]}
-                numberOfLines={1}
-                adjustsFontSizeToFit
-                minimumFontScale={0.72}
-                maxFontSizeMultiplier={1}
-              >
-                NomNom
-              </Text>
-              <Text style={[styles.bannerName, styles.bannerNameGo]} numberOfLines={1} maxFontSizeMultiplier={1}>
-                Go
-              </Text>
+              <Text style={[styles.bannerName, styles.bannerNameMain, styles.bannerNameMainDark]} numberOfLines={1}>NomNom</Text>
+              <Text style={[styles.bannerName, styles.bannerNameGo]} numberOfLines={1}>Go</Text>
             </View>
-            <Text style={[styles.bannerTagline, isDarkMode && styles.darkMutedText]} numberOfLines={1}>
-              Come together
-            </Text>
+            <Text style={[styles.bannerTagline, styles.darkMutedText]} numberOfLines={1}>Come together</Text>
           </View>
-        </TouchableOpacity>
-        <View style={styles.bannerActions}>
+        )}
+        trailing={(
           <TouchableOpacity
-            style={[styles.accountIconButton, isDarkMode && styles.darkChip]}
+            style={[styles.accountIconButton, styles.darkChip]}
             onPress={() => setAccountMenuOpen((prev) => !prev)}
             accessibilityRole="button"
             accessibilityLabel="Open user menu"
           >
-            <Ionicons name="person-circle-outline" size={28} color={isDarkMode ? '#fffaf3' : '#071827'} />
+            <Ionicons name="person-circle-outline" size={28} color={colors.textPrimary} />
           </TouchableOpacity>
-        </View>
-      </View>
+        )}
+      />
 
       {toastMessage ? (
         <View style={styles.toastBox}>
@@ -7568,7 +7808,7 @@ function NomNomGoApp() {
           <TouchableOpacity style={[styles.accountCard, isDarkMode && styles.darkModalCard]} activeOpacity={1} onPress={(event) => event.stopPropagation()}>
             <View style={styles.accountHeader}>
               <View style={styles.accountAvatar}>
-                <Ionicons name="person-circle-outline" size={36} color="#071827" />
+                <Ionicons name="person-circle-outline" size={36} color={colors.textPrimary} />
               </View>
               <View style={styles.accountTextBlock}>
                 <Text style={[styles.accountName, isDarkMode && styles.darkText]}>{testerUser?.name || 'Tester'}</Text>
@@ -7641,64 +7881,74 @@ function NomNomGoApp() {
           {!planSetupOpen ? (
             <>
               <View style={styles.homeTitleBlock}>
-                <Text style={[styles.homeTitle, isDarkMode && styles.darkText]}>NomNomGo</Text>
-                <Text style={[styles.homeSubtitle, isDarkMode && styles.darkMutedText]}>Come together</Text>
+                <Text style={[styles.homeTitle, isDarkMode && styles.darkText]}>Come together</Text>
+                <Text style={[styles.homeSubtitle, isDarkMode && styles.darkMutedText]}>What do you want to do?</Text>
               </View>
-              <View style={styles.homeActionGrid}>
+              <View style={styles.homePeoplePill}>
+                <Ionicons name="person-outline" size={16} color={colors.teal} />
+                <Text style={styles.homePeoplePillText}>Just me</Text>
+              </View>
+              <View style={styles.nowActionGrid}>
                 <TouchableOpacity
-                  style={[styles.homeMainButton, styles.homePrimaryAction, styles.homeNowButton]}
-                  onPress={() => { void startNowPlan(); }}
+                  style={[styles.nowActionCard, styles.nowFoodAction]}
+                  onPress={() => { void startNowDiscoveryFromHome('food'); }}
                   accessibilityRole="button"
-                  accessibilityLabel="Now. Find food and activities nearby."
+                  accessibilityLabel="Find food now"
                 >
-                  <View style={styles.homeActionLabelRow}>
-                    <Ionicons name="time-outline" size={26} color="#fffaf3" />
-                    <Text style={styles.homeMainButtonText}>Now</Text>
-                  </View>
-                  <Text style={styles.homeMainButtonSubtext}>Find food and activities nearby</Text>
+                  <Ionicons name="restaurant-outline" size={28} color={semanticTones.food.foreground} />
+                  <Text style={[styles.nowActionTitle, styles.nowActionTitleLight]}>Food</Text>
+                  <Ionicons name="chevron-forward" size={22} color={semanticTones.food.foreground} style={styles.homeActionChevron} />
                 </TouchableOpacity>
                 <TouchableOpacity
-                  style={[styles.homeMainButton, styles.homeSecondaryAction, styles.homeLaterButton]}
-                  onPress={() => openPlanSetup('later')}
+                  style={[styles.nowActionCard, styles.nowActivityAction]}
+                  onPress={() => { void startNowDiscoveryFromHome('activity'); }}
                   accessibilityRole="button"
-                  accessibilityLabel="Later. Plan something for another day."
+                  accessibilityLabel="Find an activity now"
                 >
-                  <View style={styles.homeActionLabelRow}>
-                    <Ionicons name="calendar-outline" size={22} color="#fffaf3" />
-                    <Text style={styles.homeMainButtonText}>Later</Text>
-                  </View>
-                  <Text style={styles.homeMainButtonSubtext}>Plan something for another day</Text>
+                  <Ionicons name="sparkles-outline" size={28} color={colors.textInverse} />
+                  <Text style={[styles.nowActionTitle, styles.nowActionTitleDark]}>Activity</Text>
+                  <Ionicons name="chevron-forward" size={22} color={colors.textInverse} style={styles.homeActionChevron} />
                 </TouchableOpacity>
                 <TouchableOpacity
-                  style={[styles.homeMainButton, styles.homeSecondaryAction, styles.homeSavedButton]}
-                  onPress={openSavedPlansHomeAction}
+                  style={[styles.nowActionCard, styles.nowPeopleAction]}
+                  onPress={() => { void openNowPeopleFromHome(); }}
                   accessibilityRole="button"
-                  accessibilityLabel="Saved or shared. Your plans and invitations."
+                  accessibilityLabel="Include someone"
                 >
-                  <View style={styles.homeActionLabelRow}>
-                    <Ionicons name="albums-outline" size={22} color="#071827" />
-                    <Text style={[styles.homeMainButtonText, styles.homeSavedButtonText]}>Saved/Shared</Text>
-                  </View>
-                  <Text style={[styles.homeMainButtonSubtext, styles.homeSavedButtonSubtext]}>Your plans and invitations</Text>
+                  <Ionicons name="people-outline" size={28} color={semanticTones.people.foreground} />
+                  <Text style={styles.nowActionTitle}>Include Someone</Text>
+                  <Ionicons name="chevron-forward" size={22} color={semanticTones.people.foreground} style={styles.homeActionChevron} />
                 </TouchableOpacity>
               </View>
-              <TouchableOpacity
-                style={[styles.peopleGroupsEntry, isDarkMode && styles.darkChip]}
-                onPress={openPeopleGroupsHomeAction}
-                accessibilityRole="button"
-                accessibilityLabel="People and groups. Plan with friends, family, and groups."
-              >
-                <View style={styles.peopleGroupsIcon}>
-                  <Ionicons name="people-outline" size={21} color="#071827" />
-                </View>
-                <View style={styles.peopleGroupsTextBlock}>
-                  <Text style={[styles.peopleGroupsTitle, isDarkMode && styles.darkText]}>People & Groups</Text>
-                  <Text style={[styles.peopleGroupsSubtitle, isDarkMode && styles.darkMutedText]}>
-                    Plan with friends, family, and groups
-                  </Text>
-                </View>
-                <Ionicons name="chevron-forward" size={18} color={isDarkMode ? '#fffaf3' : '#526170'} />
-              </TouchableOpacity>
+              <View style={styles.homeUtilityRow}>
+                <TouchableOpacity style={styles.homeUtilityButton} onPress={() => openPlanSetup('later')} accessibilityRole="button" accessibilityLabel="Plan for later">
+                  <Ionicons name="calendar-outline" size={20} color={colors.coral} />
+                  <Text style={styles.homeUtilityButtonText}>Plan for later</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.homeUtilityButton} onPress={() => openSavedPlansHomeAction('saved')} accessibilityRole="button" accessibilityLabel="Open saved and shared plans">
+                  <Ionicons name="albums-outline" size={20} color={colors.teal} />
+                  <Text style={styles.homeUtilityButtonText}>Saved plans</Text>
+                </TouchableOpacity>
+              </View>
+              {BETA_FEATURES.peopleGroups ? (
+                <TouchableOpacity
+                  style={[styles.peopleGroupsEntry, isDarkMode && styles.darkChip]}
+                  onPress={openPeopleGroupsHomeAction}
+                  accessibilityRole="button"
+                  accessibilityLabel="People and groups. Plan with friends, family, and groups."
+                >
+                  <View style={styles.peopleGroupsIcon}>
+                    <Ionicons name="people-outline" size={21} color={colors.teal} />
+                  </View>
+                  <View style={styles.peopleGroupsTextBlock}>
+                    <Text style={[styles.peopleGroupsTitle, isDarkMode && styles.darkText]}>People & Groups</Text>
+                    <Text style={[styles.peopleGroupsSubtitle, isDarkMode && styles.darkMutedText]}>
+                      Plan with friends, family, and groups
+                    </Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={18} color={isDarkMode ? colors.textPrimary : colors.textSecondary} />
+                </TouchableOpacity>
+              ) : null}
             </>
           ) : (
             <>
@@ -7711,6 +7961,21 @@ function NomNomGoApp() {
                 </View>
                 <Button label="Back" onPress={() => setPlanSetupOpen(false)} compact />
               </View>
+
+              {planSetupTiming === 'later' ? (
+                <View style={styles.setupField}>
+                  <Text style={[styles.setupLabel, isDarkMode && styles.darkMutedText]}>Plan name (optional)</Text>
+                  <TextInput
+                    style={[styles.input, isDarkMode && styles.darkPanelInput, Platform.OS === 'web' && styles.webInput]}
+                    value={planSetupName}
+                    onChangeText={setPlanSetupName}
+                    placeholder="Give this plan a name"
+                    placeholderTextColor={isLightMode ? colors.textTertiary : colors.textSecondary}
+                    accessibilityLabel="Plan name"
+                    returnKeyType="next"
+                  />
+                </View>
+              ) : null}
 
               {planSetupTiming === 'now' ? (
                 <View style={styles.setupPreferenceBlock}>
@@ -7783,6 +8048,9 @@ function NomNomGoApp() {
                             key={`setup-date-${option.id}`}
                             style={[styles.dateChip, active && styles.dateChipActive]}
                             onPress={() => setPlanSetupDateWindow(option.id)}
+                            accessibilityRole="button"
+                            accessibilityLabel={option.label}
+                            accessibilityState={{ selected: active }}
                           >
                             <Text style={[styles.dateChipText, active && styles.dateChipTextActive]}>{option.label}</Text>
                           </TouchableOpacity>
@@ -7796,16 +8064,18 @@ function NomNomGoApp() {
                             style={[styles.input, styles.customDateInput]}
                             value={planSetupCustomDateStartInput}
                             onChangeText={setPlanSetupCustomDateStartInput}
+                            accessibilityLabel="Plan start date"
                             placeholder="Start YYYY-MM-DD"
-                            placeholderTextColor="#64748b"
+                            placeholderTextColor={colors.textTertiary}
                             keyboardType="numbers-and-punctuation"
                           />
                           <TextInput
                             style={[styles.input, styles.customDateInput]}
                             value={planSetupCustomDateEndInput}
                             onChangeText={setPlanSetupCustomDateEndInput}
+                            accessibilityLabel="Plan end date"
                             placeholder="End YYYY-MM-DD"
-                            placeholderTextColor="#64748b"
+                            placeholderTextColor={colors.textTertiary}
                             keyboardType="numbers-and-punctuation"
                           />
                         </View>
@@ -7816,13 +8086,16 @@ function NomNomGoApp() {
                   <View style={styles.setupField}>
                     <Text style={[styles.setupLabel, isDarkMode && styles.darkMutedText]}>Time?</Text>
                     <View style={styles.chipWrap}>
-                      {TIMES.map((time) => {
+                      {TIMES.filter((time) => planSetupDateWindow === 'today' || time !== 'Now').map((time) => {
                         const active = planSetupTime === time;
                         return (
                           <TouchableOpacity
                             key={`setup-time-${time}`}
                             style={[styles.chip, isDarkMode && styles.darkChip, active && styles.chipActive]}
                             onPress={() => setPlanSetupTime(time)}
+                            accessibilityRole="button"
+                            accessibilityLabel={time}
+                            accessibilityState={{ selected: active }}
                           >
                             <Text style={[styles.chipText, isDarkMode && styles.darkMutedText, active && styles.chipTextActive]}>{time}</Text>
                           </TouchableOpacity>
@@ -7839,16 +8112,32 @@ function NomNomGoApp() {
                   style={[styles.input, isDarkMode && styles.darkPanelInput, Platform.OS === 'web' && styles.webInput]}
                   value={planSetupWhere}
                   onChangeText={setPlanSetupWhere}
+                  accessibilityLabel="Plan location"
                   placeholder="Current location, neighborhood, or city"
-                  placeholderTextColor={isLightMode ? '#64748b' : '#94a3b8'}
+                  placeholderTextColor={isLightMode ? colors.textTertiary : colors.textSecondary}
                   returnKeyType="done"
                   onSubmitEditing={submitPlanSetup}
                 />
               </View>
 
               <View style={styles.setupField}>
+                <Text style={[styles.setupLabel, styles.darkMutedText]}>Plan type</Text>
+                <View style={styles.inferredPlanTypeBox}>
+                  <Ionicons
+                    name={planSetupPreviewType === 'trip_plan' ? 'airplane-outline' : 'location-outline'}
+                    size={20}
+                    color={colors.teal}
+                  />
+                  <View style={styles.inferredPlanTypeTextBlock}>
+                    <Text style={styles.inferredPlanTypeText}>{planTypeLabel(planSetupPreviewType)}</Text>
+                    <Text style={styles.inferredPlanTypeHint}>Set automatically from your dates and destination.</Text>
+                  </View>
+                </View>
+              </View>
+
+              <View style={styles.setupField}>
                 <View style={styles.setupFieldHeader}>
-                  <Text style={[styles.setupLabel, isDarkMode && styles.darkMutedText]}>Who's going?</Text>
+                    <Text style={[styles.setupLabel, isDarkMode && styles.darkMutedText]}>Who’s going?</Text>
                   <Text style={[styles.setupPeopleSummary, isDarkMode && styles.darkMutedText]} numberOfLines={1}>
                     {planSetupPeopleSummary}
                   </Text>
@@ -7861,6 +8150,9 @@ function NomNomGoApp() {
                         key={`setup-person-${user}`}
                         style={[styles.quickShareUserButton, selected && styles.quickShareUserButtonSelected]}
                         onPress={() => togglePlanSetupInvitee(user)}
+                        accessibilityRole="button"
+                        accessibilityLabel={`${selected ? 'Remove' : 'Add'} ${user}`}
+                        accessibilityState={{ selected }}
                       >
                         <Text style={styles.quickShareUserText}>{user}</Text>
                       </TouchableOpacity>
@@ -7908,7 +8200,7 @@ function NomNomGoApp() {
                 accessibilityRole="button"
                 accessibilityLabel="Food"
               >
-                <Ionicons name="restaurant-outline" size={28} color="#fffaf3" />
+                <Ionicons name="restaurant-outline" size={28} color={semanticTones.food.foreground} />
                 <Text style={[styles.nowActionTitle, styles.nowActionTitleLight]}>Food</Text>
               </TouchableOpacity>
               <TouchableOpacity
@@ -7917,7 +8209,7 @@ function NomNomGoApp() {
                 accessibilityRole="button"
                 accessibilityLabel="Activity"
               >
-                <Ionicons name="sparkles-outline" size={28} color="#071827" />
+                <Ionicons name="sparkles-outline" size={28} color={colors.textInverse} />
                 <Text style={styles.nowActionTitle}>Activity</Text>
               </TouchableOpacity>
               <TouchableOpacity
@@ -7926,7 +8218,7 @@ function NomNomGoApp() {
                 accessibilityRole="button"
                 accessibilityLabel="Include Someone"
               >
-                <Ionicons name="people-outline" size={28} color="#071827" />
+                <Ionicons name="people-outline" size={28} color={colors.textInverse} />
                 <Text style={styles.nowActionTitle}>Include Someone</Text>
               </TouchableOpacity>
             </View>
@@ -7941,7 +8233,7 @@ function NomNomGoApp() {
                   accessibilityRole="button"
                   accessibilityLabel="Include Someone"
                 >
-                  <Ionicons name="people-outline" size={17} color={isDarkMode ? '#fffaf3' : '#071827'} />
+                  <Ionicons name="people-outline" size={17} color={isDarkMode ? colors.textPrimary : colors.textInverse} />
                   <Text style={[styles.nowPeopleMiniText, isDarkMode && styles.darkMutedText]} numberOfLines={1}>
                     {nowSelectedPeople.length ? `${nowSelectedPeople.length + 1}` : 'Add'}
                   </Text>
@@ -7955,6 +8247,9 @@ function NomNomGoApp() {
                       key={`now-category-${category}`}
                       style={[styles.nowCategoryChip, isDarkMode && styles.darkChip, active && styles.nowCategoryChipActive]}
                       onPress={() => { void startNowDiscovery(nowMode === 'food' ? 'food' : 'activity', category); }}
+                      accessibilityRole="button"
+                      accessibilityLabel={`${category} ${nowMode === 'food' ? 'food' : 'activity'} category`}
+                      accessibilityState={{ selected: active }}
                     >
                       <Text style={[styles.nowCategoryText, isDarkMode && styles.darkMutedText, active && styles.nowCategoryTextActive]}>
                         {category}
@@ -7962,6 +8257,25 @@ function NomNomGoApp() {
                     </TouchableOpacity>
                   );
                 })}
+              </View>
+              <View style={styles.setupField}>
+                <Text style={[styles.setupLabel, isDarkMode && styles.darkMutedText]}>Search area</Text>
+                <View style={styles.inputRow}>
+                  <TextInput
+                    style={[styles.input, isDarkMode && styles.darkPanelInput, Platform.OS === 'web' && styles.webInput]}
+                    value={searchLocationOverride}
+                    onChangeText={(value) => {
+                      setSearchLocationOverride(value);
+                      setSearchNotice('');
+                    }}
+                    accessibilityLabel="Search area"
+                    placeholder="ZIP, neighborhood, or city"
+                    placeholderTextColor={isLightMode ? colors.textTertiary : colors.textSecondary}
+                    returnKeyType="search"
+                    onSubmitEditing={searchFromSearchLocationOverride}
+                  />
+                  <Button label="Use" onPress={searchFromSearchLocationOverride} compact />
+                </View>
               </View>
             </View>
           )}
@@ -8018,8 +8332,9 @@ function NomNomGoApp() {
               style={styles.input}
               value={sessionLocationInput}
               onChangeText={setSessionLocationInput}
+              accessibilityLabel="Shared search location"
               placeholder={searchLocationLabel}
-              placeholderTextColor="#64748b"
+              placeholderTextColor={colors.textTertiary}
               returnKeyType="done"
             />
             <Button label="Use current" onPress={() => setSessionLocationInput(searchLocationLabel)} compact />
@@ -8034,6 +8349,9 @@ function NomNomGoApp() {
                   key={`session-date-${option.id}`}
                   style={[styles.dateChip, active && styles.dateChipActive]}
                   onPress={() => chooseDateWindow(option.id, option.label)}
+                  accessibilityRole="button"
+                  accessibilityLabel={option.label}
+                  accessibilityState={{ selected: active }}
                 >
                   <Text style={[styles.dateChipText, active && styles.dateChipTextActive]}>{option.label}</Text>
                 </TouchableOpacity>
@@ -8047,8 +8365,9 @@ function NomNomGoApp() {
               style={styles.input}
               value={sessionTimeWindowInput}
               onChangeText={setSessionTimeWindowInput}
+              accessibilityLabel="Shared time window"
               placeholder="6:00 PM - 9:00 PM"
-              placeholderTextColor="#64748b"
+              placeholderTextColor={colors.textTertiary}
               returnKeyType="done"
             />
           </View>
@@ -8121,8 +8440,9 @@ function NomNomGoApp() {
                     style={styles.input}
                     value={sessionManualSuggestion}
                     onChangeText={setSessionManualSuggestion}
+                    accessibilityLabel="Manual place or activity suggestion"
                     placeholder="Place or idea"
-                    placeholderTextColor="#64748b"
+                    placeholderTextColor={colors.textTertiary}
                     returnKeyType="done"
                   />
                   <Button label="Food" onPress={() => addManualPlanningSuggestion('food')} compact />
@@ -8236,40 +8556,6 @@ function NomNomGoApp() {
         style={[styles.planBox, isDarkMode && styles.darkPanel]}
         onLayout={(event) => { planBoxYRef.current = event.nativeEvent.layout.y; }}
       >
-        {showNowLightweightPlan ? (
-          <View style={[styles.nowCreatedPlanCard, isDarkMode && styles.darkCard]}>
-            <View style={styles.nowCreatedHeader}>
-              <View style={styles.nowHeaderTextBlock}>
-                <Text style={[styles.nowCreatedEyebrow, isDarkMode && styles.darkMutedText]}>Now</Text>
-                <Text style={[styles.nowCreatedTitle, isDarkMode && styles.darkText]} numberOfLines={2}>
-                  {planTitle}
-                </Text>
-                <Text style={[styles.nowCreatedMeta, isDarkMode && styles.darkMutedText]} numberOfLines={2}>
-                  {[searchLocationLabel, planPeopleSummary].filter(Boolean).join(' | ')}
-                </Text>
-              </View>
-              <View style={styles.nowCreatedIcon}>
-                <Ionicons name={plan.stops[0]?.slot === 'food' ? 'restaurant-outline' : 'sparkles-outline'} size={24} color="#071827" />
-              </View>
-            </View>
-            {plan.stops[0] ? (
-              <TouchableOpacity style={styles.nowDestinationRow} onPress={() => openStopMaps(plan.stops[0])}>
-                <Text style={styles.nowDestinationName} numberOfLines={1}>
-                  {cardToName(plan.stops[0].item) || 'Destination'}
-                </Text>
-                <Ionicons name="map-outline" size={18} color="#178f79" />
-              </TouchableOpacity>
-            ) : null}
-            <View style={styles.nowCreatedActions}>
-              {plan.stops.length ? (
-                <Button label={isImportedGoogleMapsPlan && plan.sourceUrl ? 'Open route' : 'Route'} onPress={openRouteOptions} primary compact />
-              ) : null}
-              {!isCurrentPlanSaved ? <Button label="Save" onPress={saveCurrentPlan} compact /> : null}
-              <Button label="Home" onPress={openHome} compact />
-            </View>
-          </View>
-        ) : null}
-
         {showBetaPlanDetail ? (
           <View style={[styles.betaPlanDetailCard, isDarkMode && styles.darkCard]}>
             <View style={styles.betaPlanHeader}>
@@ -8305,7 +8591,7 @@ function NomNomGoApp() {
                     accessibilityRole="button"
                     accessibilityLabel="Search Food"
                   >
-                    <Ionicons name="restaurant-outline" size={20} color="#fffaf3" />
+                    <Ionicons name="restaurant-outline" size={20} color={semanticTones.food.foreground} />
                     <Text style={[styles.betaSearchButtonText, styles.betaSearchButtonTextLight]}>Search Food</Text>
                   </TouchableOpacity>
                   <TouchableOpacity
@@ -8314,7 +8600,7 @@ function NomNomGoApp() {
                     accessibilityRole="button"
                     accessibilityLabel="Search Activities"
                   >
-                    <Ionicons name="sparkles-outline" size={20} color="#071827" />
+                    <Ionicons name="sparkles-outline" size={20} color={colors.textInverse} />
                     <Text style={styles.betaSearchButtonText}>Search Activities</Text>
                   </TouchableOpacity>
                 </View>
@@ -8336,8 +8622,8 @@ function NomNomGoApp() {
                       {suggestion.slot === 'food' ? 'Food' : 'Activity'} by {suggestion.addedBy}
                     </Text>
                   </View>
-                  {!isPlanLocked && canFinalizeActiveBetaPlan ? (
-                    <Button label="Finalize" onPress={() => finalizeBetaSuggestion(suggestion)} primary compact />
+                  {!isPlanLocked ? (
+                    <Button label="Add Stop" onPress={() => addSuggestionToCurrentPlan(suggestion)} primary compact />
                   ) : null}
                 </View>
               )) : (
@@ -8349,8 +8635,9 @@ function NomNomGoApp() {
                     style={[styles.input, isDarkMode && styles.darkPanelInput, Platform.OS === 'web' && styles.webInput]}
                     value={betaSuggestionInput}
                     onChangeText={setBetaSuggestionInput}
+                    accessibilityLabel="Plan suggestion"
                     placeholder="Place or idea"
-                    placeholderTextColor={isLightMode ? '#64748b' : '#94a3b8'}
+                    placeholderTextColor={isLightMode ? colors.textTertiary : colors.textSecondary}
                     returnKeyType="done"
                     onSubmitEditing={() => addActiveBetaSuggestion(resultMode)}
                   />
@@ -8391,26 +8678,17 @@ function NomNomGoApp() {
                   <Text style={[styles.betaSuggestionMeta, isDarkMode && styles.darkMutedText]}>{rsvpStatusLabel(currentBetaRsvp)}</Text>
                 ) : null}
               </View>
-              <View style={styles.rsvpButtonRow}>
-                {RSVP_OPTIONS.map((option) => {
-                  const active = currentBetaRsvp === option.status;
-                  return (
-                    <TouchableOpacity
-                      key={`owner-rsvp-${option.status}`}
-                      style={[styles.rsvpButton, isDarkMode && styles.darkChip, active && styles.rsvpButtonActive]}
-                      onPress={() => setActiveBetaRsvp(option.status)}
-                    >
-                      <Text style={[styles.rsvpButtonText, isDarkMode && styles.darkMutedText, active && styles.rsvpButtonTextActive]}>
-                        {option.label}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
+              <RsvpControl value={currentBetaRsvp} onChange={setActiveBetaRsvp} />
             </View>
 
             <View style={[styles.betaDetailsBox, isDarkMode && styles.darkChip]}>
-              <TouchableOpacity style={styles.betaDetailsHeader} onPress={() => setPlanSettingsOpen((prev) => !prev)}>
+              <TouchableOpacity
+                style={styles.betaDetailsHeader}
+                onPress={() => setPlanSettingsOpen((prev) => !prev)}
+                accessibilityRole="button"
+                accessibilityLabel={`${planSettingsOpen ? 'Hide' : 'Show'} details`}
+                accessibilityState={{ expanded: planSettingsOpen }}
+              >
                 <View style={styles.betaSuggestionTextBlock}>
                   <Text style={[styles.sessionSubhead, isDarkMode && styles.darkText]}>Details</Text>
                   <Text style={[styles.betaSuggestionMeta, isDarkMode && styles.darkMutedText]} numberOfLines={1}>
@@ -8428,8 +8706,9 @@ function NomNomGoApp() {
                         style={[styles.betaPlanTitleInput, isDarkMode && styles.darkPanelInput]}
                         value={plan.title ?? planTitle}
                         onChangeText={renamePlan}
+                        accessibilityLabel="Plan name"
                         placeholder={activeBetaPlan?.title || 'Plan title'}
-                        placeholderTextColor={isLightMode ? '#64748b' : '#94a3b8'}
+                        placeholderTextColor={isLightMode ? colors.textTertiary : colors.textSecondary}
                       />
                     </View>
                   ) : null}
@@ -8446,11 +8725,11 @@ function NomNomGoApp() {
           </View>
         ) : null}
 
-        {!isPlanLocked && !showNowLightweightPlan ? (
+        {!isPlanLocked ? (
           <View style={[styles.planPeopleBox, isDarkMode && styles.darkChip]}>
             <View style={styles.planPeopleHeader}>
               <View style={styles.planPeopleTextBlock}>
-                <Text style={[styles.planPeopleTitle, isDarkMode && styles.darkText]}>Who's going?</Text>
+                <Text style={[styles.planPeopleTitle, isDarkMode && styles.darkText]}>Who’s going?</Text>
                 <Text style={[styles.planPeopleSummary, isDarkMode && styles.darkMutedText]} numberOfLines={1}>
                   {planPeopleSummary}
                 </Text>
@@ -8461,7 +8740,7 @@ function NomNomGoApp() {
                 accessibilityRole="button"
                 accessibilityLabel={planPeopleOpen ? 'Done adding people' : 'Add people to this plan'}
               >
-                <Ionicons name={planPeopleOpen ? 'checkmark-outline' : 'add-outline'} size={17} color="#071827" />
+                <Ionicons name={planPeopleOpen ? 'checkmark-outline' : 'add-outline'} size={17} color={colors.teal} />
                 <Text style={styles.planPeopleAddText}>{planPeopleOpen ? 'Done' : '+ Add People'}</Text>
               </TouchableOpacity>
             </View>
@@ -8489,15 +8768,17 @@ function NomNomGoApp() {
           </View>
         ) : null}
 
-        {hasAnyActiveStop && !isPlanLocked && !showBetaPlanDetail && !showNowLightweightPlan ? (
+        {hasAnyActiveStop && !isPlanLocked && !showBetaPlanDetail ? (
           <View style={styles.planHeader}>
             <View style={styles.planTitleBlock}>
+              <Text style={[styles.startWithLabel, isDarkMode && styles.darkMutedText]}>Current Plan</Text>
               <TextInput
                 style={[styles.planTitleInput, isDarkMode && styles.darkPanelInput]}
                 value={plan.title ?? planTitle}
                 onChangeText={renamePlan}
+                accessibilityLabel="Plan name"
                 placeholder="Plan title"
-                placeholderTextColor="#64748b"
+                placeholderTextColor={colors.textTertiary}
               />
               <Text style={[styles.planMetaText, isDarkMode && styles.darkMutedText]} numberOfLines={2}>
                 {planHeaderMeta}
@@ -8505,14 +8786,101 @@ function NomNomGoApp() {
             </View>
             <View style={styles.planHeaderActions}>
               <Button label="Finalize Plan" onPress={lockPlan} primary compact />
-              <Button label="Save" onPress={saveCurrentPlan} compact />
+              {!isCurrentPlanSaved ? <Button label="Save" onPress={saveCurrentPlan} compact /> : null}
               <Button label="Share Plan" onPress={() => setSharePreviewOpen(true)} compact />
               <Button label={isImportedGoogleMapsPlan && plan.sourceUrl ? 'Open route' : 'Route'} onPress={openRouteOptions} compact />
+            </View>
+            <View style={styles.planStats}>
+              <Stat label="Stops" value={plan.stops.length} tone="primary" />
+              <Stat label="Total time" value={planTotalTimeLabel} tone="route" />
+              <Stat label="Est. finish" value={planFinishTimeLabel} tone="success" />
             </View>
           </View>
         ) : null}
 
-        {!hasAnyActiveStop && !showBetaPlanDetail && !showNowLightweightPlan ? (
+        {hasAnyActiveStop && !isPlanLocked && !showBetaPlanDetail ? (
+          <View style={[styles.betaPrimaryActionBox, isDarkMode && styles.darkChip]}>
+            <View style={styles.betaSectionHeader}>
+              <View style={styles.betaSuggestionTextBlock}>
+                <Text style={[styles.sessionSubhead, isDarkMode && styles.darkText]}>Build</Text>
+                <Text style={[styles.betaSuggestionMeta, isDarkMode && styles.darkMutedText]} numberOfLines={1}>
+                  Search or add ideas without locking the plan.
+                </Text>
+              </View>
+              <Text style={[styles.betaSuggestionMeta, isDarkMode && styles.darkMutedText]}>{activePlanContextLabel}</Text>
+            </View>
+            <View style={styles.betaSearchActions}>
+              <TouchableOpacity
+                style={[styles.betaSearchButton, styles.betaSearchButtonFood]}
+                onPress={() => searchFromPlan('food')}
+                accessibilityRole="button"
+                accessibilityLabel="Search Food"
+              >
+                <Ionicons name="restaurant-outline" size={20} color={semanticTones.food.foreground} />
+                <Text style={[styles.betaSearchButtonText, styles.betaSearchButtonTextLight]}>Search Food</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.betaSearchButton, styles.betaSearchButtonActivity]}
+                onPress={() => searchFromPlan('activity')}
+                accessibilityRole="button"
+                accessibilityLabel="Search Activities"
+              >
+                <Ionicons name="sparkles-outline" size={20} color={colors.textInverse} />
+                <Text style={styles.betaSearchButtonText}>Search Activities</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.betaSection}>
+              <View style={styles.betaSectionHeader}>
+                <Text style={[styles.sessionSubhead, isDarkMode && styles.darkText]}>Suggestions</Text>
+                <Text style={[styles.betaSuggestionMeta, isDarkMode && styles.darkMutedText]}>
+                  {betaPlanSuggestions.length ? `${betaPlanSuggestions.length} idea${betaPlanSuggestions.length === 1 ? '' : 's'}` : 'Add idea'}
+                </Text>
+              </View>
+              {betaPlanSuggestions.length ? betaPlanSuggestions.map((suggestion) => {
+                const suggestionInPlan = plan.stops.some((stop) => stop.slot === suggestion.slot && cardToId(stop.item) === cardToId(suggestion.item));
+                return (
+                  <View key={`builder-${suggestion.id}`} style={[styles.betaSuggestionRow, isDarkMode && styles.darkCard]}>
+                    <View style={styles.betaSuggestionTextBlock}>
+                      <Text style={[styles.betaSuggestionTitle, isDarkMode && styles.darkText]}>{cardToName(suggestion.item) || 'Suggestion'}</Text>
+                      <Text style={[styles.betaSuggestionMeta, isDarkMode && styles.darkMutedText]}>
+                        {suggestion.slot === 'food' ? 'Food' : 'Activity'} by {suggestion.addedBy}
+                      </Text>
+                    </View>
+                    <Button
+                      label={suggestionInPlan ? 'In Plan' : 'Add Stop'}
+                      onPress={() => addSuggestionToCurrentPlan(suggestion)}
+                      primary={!suggestionInPlan}
+                      compact
+                      disabled={suggestionInPlan}
+                    />
+                  </View>
+                );
+              }) : (
+                <Text style={[styles.empty, isDarkMode && styles.darkMutedText]}>No candidate ideas yet.</Text>
+              )}
+              <View style={styles.betaSuggestionComposer}>
+                <Text style={[styles.setupLabel, isDarkMode && styles.darkMutedText]}>Add idea</Text>
+                <TextInput
+                  style={[styles.input, isDarkMode && styles.darkPanelInput, Platform.OS === 'web' && styles.webInput]}
+                  value={betaSuggestionInput}
+                  onChangeText={setBetaSuggestionInput}
+                  accessibilityLabel="Add a plan idea"
+                  placeholder="Place or idea"
+                  placeholderTextColor={isLightMode ? colors.textTertiary : colors.textSecondary}
+                  returnKeyType="done"
+                  onSubmitEditing={() => addActiveBetaSuggestion(resultMode)}
+                />
+                <View style={styles.betaSuggestionComposerActions}>
+                  <Button label="Food" onPress={() => addActiveBetaSuggestion('food')} compact />
+                  <Button label="Activity" onPress={() => addActiveBetaSuggestion('activity')} compact />
+                </View>
+              </View>
+            </View>
+          </View>
+        ) : null}
+
+        {!hasAnyActiveStop && !showBetaPlanDetail ? (
           <View>
             <Text style={[styles.startWithLabel, isDarkMode && styles.darkMutedText]}>Plan</Text>
             <View style={styles.startChooser}>
@@ -8520,14 +8888,14 @@ function NomNomGoApp() {
                 style={[styles.startChoice, styles.startChoiceFood]}
                 onPress={() => searchFromPlan('food')}
               >
-                <Ionicons name="restaurant-outline" size={22} color="#fffaf3" />
+                <Ionicons name="restaurant-outline" size={22} color={semanticTones.food.foreground} />
                 <Text style={[styles.startChoiceLabel, styles.startChoiceFoodLabel]}>Food</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.startChoice, styles.startChoiceActivity]}
                 onPress={() => searchFromPlan('activity')}
               >
-                <Ionicons name="sparkles-outline" size={22} color="#071827" />
+                <Ionicons name="sparkles-outline" size={22} color={colors.textInverse} />
                 <Text style={[styles.startChoiceLabel, styles.startChoiceActivityLabel]}>Activity</Text>
               </TouchableOpacity>
             </View>
@@ -8543,7 +8911,7 @@ function NomNomGoApp() {
                   {planTitle}
                 </Text>
                 <Text style={[styles.lockedPlanMeta, isDarkMode && styles.darkMutedText]} numberOfLines={1}>
-                  {activePlanDateTimeLabel}
+                  {activePlanDateTimeLabel} | {searchLocationLabel}
                 </Text>
               </View>
               <View style={styles.lockedPlanCardTools}>
@@ -8553,21 +8921,31 @@ function NomNomGoApp() {
                   accessibilityRole="button"
                   accessibilityLabel="View larger plan"
                 >
-                  <Ionicons name="expand-outline" size={18} color={isDarkMode ? '#fffaf3' : '#071827'} />
+                  <Ionicons name="expand-outline" size={18} color={isDarkMode ? colors.textPrimary : colors.textInverse} />
                 </TouchableOpacity>
                 <Text style={[styles.lockedPlanMeta, isDarkMode && styles.darkMutedText]}>{plan.stops.length} stops</Text>
               </View>
+            </View>
+            <View style={styles.planStats}>
+              <Stat label="Stops" value={plan.stops.length} tone="primary" />
+              <Stat label="Total time" value={planTotalTimeLabel} tone="route" />
+              <Stat label="Est. finish" value={planFinishTimeLabel} tone="success" />
             </View>
             {leaveForFirstStopText ? (
               <Text style={[styles.lockedPlanLeave, isDarkMode && styles.darkMutedText]} numberOfLines={1}>
                 {leaveForFirstStopText}
               </Text>
             ) : null}
-            {planInvitees.length ? (
-              <Text style={[styles.lockedPlanInvitees, isDarkMode && styles.darkMutedText]} numberOfLines={1}>
-                With {unique([currentTesterName, ...planInvitees]).join(', ')}
-              </Text>
-            ) : null}
+            <Text style={[styles.lockedPlanInvitees, isDarkMode && styles.darkMutedText]} numberOfLines={1}>
+              With {planPeopleSummary}
+            </Text>
+            <View style={styles.lockedPlanRsvp}>
+              <View style={styles.betaSectionHeader}>
+                <Text style={[styles.sessionSubhead, styles.darkText]}>RSVP</Text>
+                <Text style={[styles.betaSuggestionMeta, styles.darkMutedText]}>{betaPlanRsvpSummary}</Text>
+              </View>
+              <RsvpControl value={currentBetaRsvp} onChange={setActiveBetaRsvp} />
+            </View>
             <View style={styles.lockedStopList}>
               {plan.stops.map((stop, index) => {
                 const stopCityState = cityStateLabel(cityStateForPlace(stop.item));
@@ -8575,14 +8953,17 @@ function NomNomGoApp() {
                 const walkableAfterTesla = travelMeta.mode === 'walk' && isWalkableAfterTeslaStop(plan.stops[index - 1], stop);
                 return (
                   <TouchableOpacity key={`locked-${stop.key}`} style={styles.lockedStopRow} onPress={() => openStopMaps(stop)}>
-                    <Text style={styles.lockedStopIndex}>{index + 1}</Text>
+                    <Text style={[
+                      styles.lockedStopIndex,
+                      stop.slot === 'food' ? styles.stopIndexFood : styles.stopIndexActivity,
+                    ]}>{index + 1}</Text>
                     <View style={styles.lockedStopTravelBlock}>
-                      <Ionicons name={travelMeta.icon} size={16} color="#178f79" />
+                      <Ionicons name={travelMeta.icon} size={16} color={colors.teal} />
                       <Text style={styles.lockedStopTravelText} numberOfLines={1}>{travelMeta.duration}</Text>
                     </View>
                     <Text style={styles.lockedStopTime}>{formatClockTime(displayedArrivalTimeForStop(stop, index))}</Text>
                     {walkableAfterTesla ? (
-                      <Ionicons name="walk-outline" size={14} color="#178f79" />
+                      <Ionicons name="walk-outline" size={14} color={colors.teal} />
                     ) : null}
                     <View style={styles.lockedStopTextBlock}>
                       <Text style={styles.lockedStopName} numberOfLines={1}>{cardToName(stop.item) || 'Stop'}</Text>
@@ -8598,15 +8979,16 @@ function NomNomGoApp() {
             </View>
           </View>
           <View style={styles.lockedPlanActions}>
-            <Button label="Unlock/Edit" onPress={unlockPlan} compact />
-            {!isCurrentPlanSaved ? <Button label="Save" onPress={saveCurrentPlan} compact /> : null}
-            <Button label="Share Plan" onPress={() => setSharePreviewOpen(true)} compact />
             <Button label={isImportedGoogleMapsPlan && plan.sourceUrl ? 'Open route' : 'Route'} onPress={openRouteOptions} primary compact />
+            <Button label="Add to Calendar" onPress={addActiveBetaPlanToCalendar} success compact />
+            <Button label="Share" onPress={() => setSharePreviewOpen(true)} compact />
+            {!isCurrentPlanSaved ? <Button label="Save" onPress={saveCurrentPlan} compact /> : null}
+            <Button label="Unlock/Edit" onPress={unlockPlan} compact />
           </View>
           </>
         ) : null}
 
-        {hasAnyActiveStop && !isPlanLocked && !showNowLightweightPlan ? (
+        {hasAnyActiveStop && !isPlanLocked ? (
         <View
           style={styles.timeline}
           onLayout={(event) => { timelineYRef.current = event.nativeEvent.layout.y; }}
@@ -8619,6 +9001,7 @@ function NomNomGoApp() {
             >
               <PlanStep
                 number={`${index + 1}`}
+                tone={stop.slot}
                 title={isImportedGoogleMapsDraft ? 'Stop' : stop.slot === 'food' ? 'Food' : 'Activity'}
                 value={cardToName(stop.item) || (stop.slot === 'food' ? 'Food stop' : 'Activity stop')}
                 detail={stepDetail(stop, index)}
@@ -8632,6 +9015,7 @@ function NomNomGoApp() {
                 onToggleFeaturesOpen={() => toggleStopFeaturesOpen(stop.key)}
                 onToggleFeature={(feature) => toggleStopFeature(stop.key, feature)}
                 active
+                last={index === plan.stops.length - 1}
                 onPress={() => {
                   markStopSelected(stop.key);
                   void addStopAfter(stop.slot, index);
@@ -8692,27 +9076,25 @@ function NomNomGoApp() {
         </View>
         ) : null}
 
-        {(hasFood || hasActivity) && !isPlanLocked && !showNowLightweightPlan ? (
+        {(hasFood || hasActivity) && !isPlanLocked ? (
           <View style={styles.planActions}>
             <Button
               label="Clear plan"
-              onPress={() => {
-                setPlan(EMPTY_PLAN);
-                setPlanTimes({});
-                setArrivalTimes({});
-                setSelectedStopKey(null);
-                setHasInitiatedSearch(false);
-                setCards([]);
-                addLog('Plan cleared');
-              }}
+              onPress={requestClearCurrentPlan}
               compact
             />
           </View>
         ) : null}
 
-        {!isPlanLocked && !showNowLightweightPlan ? (
+        {!isPlanLocked ? (
         <View style={styles.routeOriginBox}>
-          <TouchableOpacity style={styles.planSettingsHeader} onPress={() => setPlanSettingsOpen((prev) => !prev)}>
+          <TouchableOpacity
+            style={styles.planSettingsHeader}
+            onPress={() => setPlanSettingsOpen((prev) => !prev)}
+            accessibilityRole="button"
+            accessibilityLabel={`${planSettingsOpen ? 'Hide' : 'Show'} plan settings`}
+            accessibilityState={{ expanded: planSettingsOpen }}
+          >
             <View style={styles.locationSummaryText}>
               <Text style={[styles.bridgeTitle, isDarkMode && styles.darkText]}>Plan Settings</Text>
               <Text style={[styles.routeOriginHint, isDarkMode && styles.darkMutedText]} numberOfLines={1} ellipsizeMode="tail">
@@ -8740,8 +9122,9 @@ function NomNomGoApp() {
                   style={styles.input}
                   value={routeOriginOverride}
                   onChangeText={setRouteOriginOverride}
+                  accessibilityLabel="Starting location"
                   placeholder="ZIP, address, or place"
-                  placeholderTextColor="#64748b"
+                  placeholderTextColor={colors.textTertiary}
                   returnKeyType="search"
                   onSubmitEditing={searchFromLocationOverride}
                 />
@@ -8772,8 +9155,9 @@ function NomNomGoApp() {
                   style={styles.input}
                   value={searchLocationOverride}
                   onChangeText={setSearchLocationOverride}
+                  accessibilityLabel="Search location"
                   placeholder="ZIP, address, or place"
-                  placeholderTextColor="#64748b"
+                  placeholderTextColor={colors.textTertiary}
                   returnKeyType="search"
                   onSubmitEditing={searchFromSearchLocationOverride}
                 />
@@ -8787,59 +9171,64 @@ function NomNomGoApp() {
             </>
           ) : null}
 
-          <View style={styles.locationSummaryRow}>
-            <View style={styles.locationSummaryText}>
-              <Text style={[styles.bridgeTitle, isDarkMode && styles.darkText]}>Import route</Text>
-              <Text style={[styles.routeOriginHint, isDarkMode && styles.darkMutedText]}>
-                {isImportedGoogleMapsPlan ? `Google Maps route | ${plan.stops.length} stops` : 'Paste a Google Maps directions URL.'}
-              </Text>
-            </View>
-            <Button
-              label={routeImportOpen ? 'Hide' : 'Edit'}
-              onPress={() => {
-                setRouteImportOpen((prev) => !prev);
-                setRouteImportError('');
-              }}
-              compact
-            />
-          </View>
-          {routeImportOpen ? (
-            <View style={styles.routeImportBox}>
-              <TextInput
-                style={styles.input}
-                value={routeImportUrl}
-                onChangeText={(value) => {
-                  setRouteImportUrl(value);
-                  setRouteImportError('');
-                }}
-                placeholder="Paste Google Maps route URL"
-                placeholderTextColor="#64748b"
-                autoCapitalize="none"
-                autoCorrect={false}
-                returnKeyType="done"
-                onSubmitEditing={importGoogleMapsRoute}
-              />
-              {routeImportError ? (
-                <Text style={styles.routeImportError}>{routeImportError}</Text>
-              ) : null}
-              <View style={styles.buttonRow}>
+          {BETA_FEATURES.routeImport ? (
+            <>
+              <View style={styles.locationSummaryRow}>
+                <View style={styles.locationSummaryText}>
+                  <Text style={[styles.bridgeTitle, isDarkMode && styles.darkText]}>Import route</Text>
+                  <Text style={[styles.routeOriginHint, isDarkMode && styles.darkMutedText]}>
+                    {isImportedGoogleMapsPlan ? `Google Maps route | ${plan.stops.length} stops` : 'Paste a Google Maps directions URL.'}
+                  </Text>
+                </View>
                 <Button
-                  label={routeImporting ? 'Importing' : 'Import'}
-                  onPress={importGoogleMapsRoute}
-                  primary
-                  compact
-                  disabled={routeImporting}
-                />
-                <Button
-                  label="Cancel"
+                  label={routeImportOpen ? 'Hide' : 'Edit'}
                   onPress={() => {
-                    setRouteImportOpen(false);
+                    setRouteImportOpen((prev) => !prev);
                     setRouteImportError('');
                   }}
                   compact
                 />
               </View>
-            </View>
+              {routeImportOpen ? (
+                <View style={styles.routeImportBox}>
+                  <TextInput
+                    style={styles.input}
+                    value={routeImportUrl}
+                    onChangeText={(value) => {
+                      setRouteImportUrl(value);
+                      setRouteImportError('');
+                    }}
+                    accessibilityLabel="Google Maps route URL"
+                    placeholder="Paste Google Maps route URL"
+                    placeholderTextColor={colors.textTertiary}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    returnKeyType="done"
+                    onSubmitEditing={importGoogleMapsRoute}
+                  />
+                  {routeImportError ? (
+                    <Text style={styles.routeImportError}>{routeImportError}</Text>
+                  ) : null}
+                  <View style={styles.buttonRow}>
+                    <Button
+                      label={routeImporting ? 'Importing' : 'Import'}
+                      onPress={importGoogleMapsRoute}
+                      primary
+                      compact
+                      disabled={routeImporting}
+                    />
+                    <Button
+                      label="Cancel"
+                      onPress={() => {
+                        setRouteImportOpen(false);
+                        setRouteImportError('');
+                      }}
+                      compact
+                    />
+                  </View>
+                </View>
+              ) : null}
+            </>
           ) : null}
 
           {showChargingStopIdeas ? (
@@ -8859,7 +9248,7 @@ function NomNomGoApp() {
                 <View style={styles.chargingIdeaList}>
                   {activeChargingStops.slice(0, 4).map((idea) => (
                     <View key={idea.id} style={styles.chargingIdeaRow}>
-                      <Ionicons name="flash-outline" size={16} color="#178f79" />
+                      <Ionicons name="flash-outline" size={16} color={colors.teal} />
                       <View style={styles.chargingIdeaTextBlock}>
                         <Text style={[styles.chargingIdeaName, isDarkMode && styles.darkText]} numberOfLines={1}>{idea.name}</Text>
                         <Text style={[styles.chargingIdeaMeta, isDarkMode && styles.darkMutedText]} numberOfLines={2}>
@@ -8901,6 +9290,9 @@ function NomNomGoApp() {
                     key={option.id}
                     style={[styles.dateChip, active && styles.dateChipActive]}
                     onPress={() => chooseDateWindow(option.id, option.label)}
+                    accessibilityRole="button"
+                    accessibilityLabel={option.label}
+                    accessibilityState={{ selected: active }}
                   >
                     <Text style={[styles.dateChipText, active && styles.dateChipTextActive]}>{option.label}</Text>
                   </TouchableOpacity>
@@ -8914,16 +9306,18 @@ function NomNomGoApp() {
                     style={[styles.input, styles.customDateInput]}
                     value={customDateStartInput}
                     onChangeText={setCustomDateStartInput}
+                    accessibilityLabel="Custom start date"
                     placeholder="Start YYYY-MM-DD"
-                    placeholderTextColor="#64748b"
+                    placeholderTextColor={colors.textTertiary}
                     keyboardType="numbers-and-punctuation"
                   />
                   <TextInput
                     style={[styles.input, styles.customDateInput]}
                     value={customDateEndInput}
                     onChangeText={setCustomDateEndInput}
+                    accessibilityLabel="Custom end date"
                     placeholder="End YYYY-MM-DD"
-                    placeholderTextColor="#64748b"
+                    placeholderTextColor={colors.textTertiary}
                     keyboardType="numbers-and-punctuation"
                   />
                 </View>
@@ -8950,10 +9344,10 @@ function NomNomGoApp() {
           style={[styles.savedPlansBox, isLightMode && styles.lightPanel, isDarkMode && styles.darkPanel]}
           onLayout={(event) => { savedPlansYRef.current = event.nativeEvent.layout.y; }}
         >
-          <TouchableOpacity style={styles.savedPlansHeader} onPress={openHome}>
+          <TouchableOpacity style={styles.savedPlansHeader} onPress={openHome} accessibilityRole="button" accessibilityLabel="Open NomNomGo home">
             <View style={styles.sectionHeaderTextBlock}>
               <Text style={[styles.sectionTitle, isLightMode && styles.lightSectionTitle, isDarkMode && styles.darkText]}>
-                Saved/Shared Plans
+                {savedPlansNavigationSource === 'plans' ? 'Plans' : 'Saved/Shared Plans'}
               </Text>
               <Text style={[styles.savedPlansHint, isLightMode && styles.lightMutedText, isDarkMode && styles.darkMutedText]}>
                 {visibleSavedPlans.length ? `${visibleSavedPlans.length} saved or shared for ${currentTesterName}` : 'Saved and shared plans will show here.'}
@@ -8978,11 +9372,15 @@ function NomNomGoApp() {
                   </View>
                   <View style={styles.savedPlanActions}>
                     <Button label="Load" onPress={() => loadSavedPlan(saved)} primary compact />
-                    <Button label="Delete" onPress={() => deleteSavedPlan(saved.id)} compact />
+                    <Button label="Delete" onPress={() => requestDeleteSavedPlan(saved)} danger compact />
                   </View>
                 </View>
               )) : (
-                <Text style={[styles.empty, isLightMode && styles.lightMutedText]}>No saved plans yet.</Text>
+                <EmptyState
+                  title="No saved plans yet"
+                  description="Plans you save or receive from friends will appear here."
+                  icon={<Ionicons name="heart-outline" size={30} color={colors.textSecondary} />}
+                />
               )}
             </View>
           ) : null}
@@ -8992,7 +9390,13 @@ function NomNomGoApp() {
       {showPlanningTools ? (
       <>
       <View style={[styles.pairingBox, isLightMode && styles.lightPairingBox, isDarkMode && styles.darkAccentPanel]}>
-          <TouchableOpacity style={styles.pairingHeader} onPress={toggleSuggestedPairingsOpen}>
+          <TouchableOpacity
+            style={styles.pairingHeader}
+            onPress={toggleSuggestedPairingsOpen}
+            accessibilityRole="button"
+            accessibilityLabel={`${suggestedPairingsOpen ? 'Hide' : 'Show'} suggested pairings`}
+            accessibilityState={{ expanded: suggestedPairingsOpen }}
+          >
             <View style={styles.pairingHeaderText}>
               <Text style={[styles.sectionTitle, styles.pairingTitle, isLightMode && styles.lightSectionTitle, isDarkMode && styles.darkText]}>
                 Suggested pairings
@@ -9012,8 +9416,20 @@ function NomNomGoApp() {
             <View style={styles.pairingBody}>
               <View style={styles.chipWrap}>
                 {visibleSuggestedPairings.map((suggestion, index) => (
-                  <TouchableOpacity key={`${suggestion.slot}-${suggestion.label}-${index}`} style={styles.mapChip} onPress={() => runSuggestion(suggestion)}>
-                    <Text style={styles.mapChipText}>{suggestion.label}</Text>
+                  <TouchableOpacity
+                    key={`${suggestion.slot}-${suggestion.label}-${index}`}
+                    style={[
+                      styles.mapChip,
+                      suggestion.slot === 'food' ? styles.mapChipFood : styles.mapChipActivity,
+                    ]}
+                    onPress={() => runSuggestion(suggestion)}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${suggestion.slot === 'food' ? 'Food' : 'Activity'} pairing: ${suggestion.label}`}
+                  >
+                    <Text style={[
+                      styles.mapChipText,
+                      suggestion.slot === 'food' ? styles.mapChipTextFood : styles.mapChipTextActivity,
+                    ]}>{suggestion.label}</Text>
                   </TouchableOpacity>
                 ))}
               </View>
@@ -9031,7 +9447,13 @@ function NomNomGoApp() {
       </View>
 
       <View style={[styles.preferencesBox, isLightMode && styles.lightPanel, isDarkMode && styles.darkPanel]}>
-        <TouchableOpacity style={styles.preferencesHeader} onPress={() => setPreferencesOpen((prev) => !prev)}>
+        <TouchableOpacity
+          style={styles.preferencesHeader}
+          onPress={() => setPreferencesOpen((prev) => !prev)}
+          accessibilityRole="button"
+          accessibilityLabel={`${preferencesOpen ? 'Hide' : 'Edit'} preferences`}
+          accessibilityState={{ expanded: preferencesOpen }}
+        >
           <View style={styles.sectionHeaderTextBlock}>
             <Text style={[styles.sectionTitle, isLightMode && styles.lightSectionTitle, isDarkMode && styles.darkText]}>Preferences</Text>
             <Text style={[styles.preferenceSummary, isLightMode && styles.lightMutedText, isDarkMode && styles.darkMutedText]}>
@@ -9059,17 +9481,30 @@ function NomNomGoApp() {
             />
             <PreferenceGroup
               label="Time"
-              items={TIMES}
-              selected={[selectedTime]}
+              items={activePlanDateWindow === 'today' ? TIMES : TIMES.filter((time) => time !== 'Now')}
+              selected={[activePlanTimePreference]}
               onPress={(value) => {
                 addLog(`Time chip tapped: ${value}`);
+                const nextTimeWindow = value === 'Now' ? undefined : defaultTimeWindowForPreference(value);
+                activePlanTimingRef.current = {
+                  ...activePlanTimingRef.current,
+                  timeWindow: nextTimeWindow,
+                  timePreference: value,
+                };
                 setSelectedTime(value);
                 setPlan((prev) => prev.status !== 'locked' ? {
                   ...prev,
-                  timeWindow: value === 'Now' ? undefined : defaultTimeWindowForPreference(value),
+                  timeWindow: nextTimeWindow,
                   lockedArrivalTimes: undefined,
                   savedPlanId: undefined,
                 } : prev);
+                if (hasInitiatedSearch) {
+                  setResultFilter('all');
+                  setCards([]);
+                  setVisibleCount(PAGE_SIZE);
+                  setLoading(true);
+                  setTimeout(() => { void searchForSlot(resultMode, true, false); }, 25);
+                }
               }}
             />
             {resultMode === 'food' ? (
@@ -9117,7 +9552,13 @@ function NomNomGoApp() {
                 ) : null}
               </>
             )}
-            <TouchableOpacity style={styles.advancedPreferenceHeader} onPress={() => setAdvancedPreferencesOpen((prev) => !prev)}>
+            <TouchableOpacity
+              style={styles.advancedPreferenceHeader}
+              onPress={() => setAdvancedPreferencesOpen((prev) => !prev)}
+              accessibilityRole="button"
+              accessibilityLabel={`${advancedPreferencesOpen ? 'Hide' : 'Show'} advanced preferences`}
+              accessibilityState={{ expanded: advancedPreferencesOpen }}
+            >
               <Text style={[styles.filterLabel, styles.advancedPreferenceLabel]}>Advanced preferences</Text>
               <HeaderAction label={advancedPreferencesOpen ? 'Hide' : 'Show'} />
             </TouchableOpacity>
@@ -9132,7 +9573,7 @@ function NomNomGoApp() {
                 }}
               />
             ) : null}
-            <TouchableOpacity style={styles.bottomHideButton} onPress={refreshFromPreferences}>
+            <TouchableOpacity style={styles.bottomHideButton} onPress={refreshFromPreferences} accessibilityRole="button" accessibilityLabel="Refresh results">
               <Text style={styles.bottomHideText}>Refresh Results</Text>
             </TouchableOpacity>
           </View>
@@ -9155,27 +9596,29 @@ function NomNomGoApp() {
               setManualSearch(value);
               setManualSearchSubmitted(false);
             }}
+            accessibilityLabel="Find a specific place"
             placeholder="restaurant, activity, or place"
-            placeholderTextColor={isLightMode ? '#64748b' : '#94a3b8'}
+            placeholderTextColor={isLightMode ? colors.textTertiary : colors.textSecondary}
             returnKeyType="search"
-            onSubmitEditing={() => useManual(resultMode)}
+            onSubmitEditing={() => runManualSearch(resultMode)}
           />
           {manualSearchSubmitted ? (
             <Button label="Clear" onPress={clearManualSearch} compact />
           ) : (
-            <Button label="Search" onPress={() => useManual(resultMode)} compact />
+            <Button label="Search" onPress={() => runManualSearch(resultMode)} compact />
           )}
         </View>
+        <Text style={[styles.preferenceSummary, isDarkMode && styles.darkMutedText]}>Search shows matches first. Choose Add, Suggest, or Use to select one.</Text>
       </View>
 
       {!hasInitiatedSearch ? (
         <View onLayout={(event) => { resultsYRef.current = event.nativeEvent.layout.y; }}>
-          <View style={[styles.emptyState, styles.preSearchEmptyState, isDarkMode && styles.darkPanel]}>
-            <Text style={[styles.emptyTitle, isDarkMode && styles.darkText]}>Waiting for food or activity</Text>
-            <Text style={[styles.empty, isDarkMode && styles.darkMutedText]}>
-              Search results and suggested stops will appear here.
-            </Text>
-          </View>
+          <EmptyState
+            style={styles.preSearchEmptyState}
+            title="Ready when you are"
+            description={`Choose Search Food or Search Activities to find options for ${activePlanDateLabel} at ${activePlanTimeLabel}.`}
+            icon={<Ionicons name="compass-outline" size={32} color={colors.textSecondary} />}
+          />
         </View>
       ) : (
         <View onLayout={(event) => { resultsYRef.current = event.nativeEvent.layout.y; }}>
@@ -9184,47 +9627,30 @@ function NomNomGoApp() {
             <FilterTab label="All" active={resultFilter === 'all'} onPress={() => setResultFilter('all')} />
             <FilterTab label="Favorites" active={resultFilter === 'favorites'} onPress={() => setResultFilter('favorites')} />
           </View>
-          {nowDiscovering && nowSelectedDestination ? (
-            <View style={[styles.nowDecisionBar, isDarkMode && styles.darkCard]}>
-              <View style={styles.nowDecisionTextBlock}>
-                <Text style={[styles.nowDecisionLabel, isDarkMode && styles.darkMutedText]}>
-                  Selected
-                </Text>
-                <Text style={[styles.nowDecisionTitle, isDarkMode && styles.darkText]} numberOfLines={1}>
-                  {cardToName(nowSelectedDestination.item) || 'Destination'}
-                </Text>
-              </View>
-              <Button
-                label={nowPlanCreating ? 'Creating' : 'Create Plan'}
-                onPress={createNowPlanFromSelection}
-                primary
-                compact
-                disabled={nowPlanCreating}
-              />
-            </View>
-          ) : null}
           {loading ? (
-            <View style={[styles.loadingResults, isDarkMode && styles.darkPanel]}>
-              <ActivityIndicator color="#f23b35" />
-              <Text style={styles.loadingResultsText}>
-                Searching {resultMode === 'food' ? 'food places' : 'activities'}...
-              </Text>
-            </View>
+            <EmptyState
+              status="loading"
+              tone={resultMode === 'food' ? 'food' : 'activity'}
+              title={`Searching ${resultMode === 'food' ? 'food places' : 'activities'}…`}
+              description="Gathering the best nearby matches."
+            />
           ) : null}
           {!loading && shownCards.length === 0 && resultFilter === 'favorites' ? (
-            <View style={[styles.emptyState, isDarkMode && styles.darkPanel]}>
-              <Text style={styles.emptyTitle}>No favorites in this search</Text>
-              <Text style={styles.empty}>Star places from the results, then use Favorites to narrow this list.</Text>
-            </View>
+            <EmptyState
+              title="No favorites in this search"
+              description="Save places from the results, then use Favorites to narrow this list."
+              icon={<Ionicons name="heart-outline" size={30} color={colors.textSecondary} />}
+            />
           ) : !loading && shownCards.length === 0 ? (
-            <View style={[styles.emptyState, isDarkMode && styles.darkPanel]}>
-              <Text style={styles.emptyTitle}>{searchNotice ? 'Google Places key missing' : 'Ready when you are'}</Text>
-              <Text style={styles.empty}>{searchNotice || 'Adjust preferences or search for places nearby.'}</Text>
-            </View>
+            <EmptyState
+              status={searchNotice ? 'error' : 'empty'}
+              title={searchNotice ? 'Search unavailable' : 'No results found'}
+              description={searchNotice || 'Try a different category, search area, or preference.'}
+              icon={<Ionicons name={searchNotice ? 'alert-circle-outline' : 'search-outline'} size={30} color={searchNotice ? colors.red : colors.textSecondary} />}
+            />
           ) : null}
           {!loading && shownCards.map((card, index) => {
-            const isNowSelected = Boolean(nowDiscovering && nowSelectedDestination?.slot === resultMode && cardToId(nowSelectedDestination.item) === card.id);
-            const isSelected = isNowSelected || (!nowDiscovering && selectedCards.some((item) => cardToId(item) === card.id));
+            const isSelected = !nowDiscovering && selectedCards.some((item) => cardToId(item) === card.id);
             const isSuggested = planningSuggestionMode && Boolean(activePlanningSession?.suggestions.some((suggestion) => samePlanningSuggestion(suggestion, resultMode, card)));
             const isFavorite = memory.favorites.includes(card.id);
             const distanceText = resultDistanceAnchor && resultDistanceContext
@@ -9240,9 +9666,9 @@ function NomNomGoApp() {
               startDistanceText ? `${startDistanceText} from start` : undefined,
             ].filter(Boolean).join(' | ') || undefined;
             const resultActionLabel = nowDiscovering
-              ? isNowSelected
-                ? 'Selected'
-                : 'Choose'
+              ? nowPlanCreating
+                ? 'Adding'
+                : 'Use'
               : planningSuggestionMode
                 ? isSuggested
                   ? 'Suggested'
@@ -9251,9 +9677,7 @@ function NomNomGoApp() {
                   ? 'Deselect'
                   : 'Add';
             const resultActionIcon: React.ComponentProps<typeof Ionicons>['name'] = nowDiscovering
-              ? isNowSelected
-                ? 'checkmark-circle-outline'
-                : 'navigate-outline'
+              ? 'navigate-outline'
               : planningSuggestionMode
                 ? isSuggested
                   ? 'checkmark-done-outline'
@@ -9261,46 +9685,85 @@ function NomNomGoApp() {
                 : isSelected
                   ? 'remove-circle-outline'
                   : 'add-outline';
+            const imageUri = cardImageUri(card);
             return (
-            <View key={`${card.id}-${index}`} style={[styles.card, isDarkMode && styles.darkCard, (isSelected || isSuggested) && styles.cardSelected]}>
-              <View style={styles.cardHeaderGrid}>
-                <View style={styles.cardHeaderMain}>
-                  <Text style={[styles.cardRank, isSelected && styles.cardRankSelected]}>
-                    {resultBadgeForCard(card, isSelected, index)}
-                  </Text>
-                  <Text style={[
-                    styles.cardTitle,
-                    isDarkMode && !(isSelected || isSuggested) && styles.darkText,
-                    (isSelected || isSuggested) && styles.cardTitleSelected,
-                  ]}>{card.title}</Text>
-                </View>
-                <View style={styles.cardHeaderActions}>
-                  <Text style={[
-                    styles.cardHours,
-                    isDarkMode && !(isSelected || isSuggested) && styles.darkMutedText,
-                    card.isOpen ? styles.open : card.isOpen === false ? styles.closed : undefined,
-                  ]}>
-                    {card.kind === 'event' ? card.eventDateText || 'Date TBA' : card.hoursText || 'Hours unknown'}
-                  </Text>
+            <View key={`${card.id}-${index}`} style={[
+              styles.card,
+              resultMode === 'food' ? styles.cardFood : styles.cardActivity,
+              isDarkMode && styles.darkCard,
+              (isSelected || isSuggested) && styles.cardSelected,
+            ]}>
+              <View style={styles.placeCardBody}>
+                <TouchableOpacity
+                  style={styles.placeCardMedia}
+                  onPress={() => setPlaceDetailCard(card)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Open details for ${card.title}`}
+                >
+                  {imageUri ? (
+                    <Image source={{ uri: imageUri }} style={styles.placeCardImage} resizeMode="cover" />
+                  ) : (
+                    <View style={[styles.placeCardImage, styles.placeCardImageFallback]}>
+                      <Ionicons
+                        name={card.kind === 'event' ? 'ticket-outline' : resultMode === 'food' ? 'restaurant-outline' : 'sparkles-outline'}
+                        size={30}
+                        color={resultMode === 'food' ? colors.coral : colors.amber}
+                      />
+                    </View>
+                  )}
+                  {card.photoAttribution ? (
+                    <Text style={styles.placeCardAttribution} numberOfLines={1}>Photo: {card.photoAttribution}</Text>
+                  ) : null}
+                </TouchableOpacity>
+                <View style={styles.placeCardContent}>
+                  <View style={styles.cardHeaderGrid}>
+                    <View style={styles.cardHeaderMain}>
+                      <Text style={[styles.cardRank, isSelected && styles.cardRankSelected]}>
+                        {resultBadgeForCard(card, isSelected, index)}
+                      </Text>
+                      <Text style={[
+                        styles.cardTitle,
+                        isDarkMode && !(isSelected || isSuggested) && styles.darkText,
+                        (isSelected || isSuggested) && styles.cardTitleSelected,
+                      ]} numberOfLines={2}>{card.title}</Text>
+                    </View>
+                  </View>
+                  <Text
+                    style={[styles.cardCategory, resultMode === 'food' ? styles.cardCategoryFood : styles.cardCategoryActivity]}
+                    numberOfLines={1}
+                  >{cardCategoryLabel(card)}</Text>
+                  <View style={styles.cardMetadataRow}>
+                    {typeof card.rating === 'number' ? (
+                      <View style={styles.cardMetadataPill}>
+                        <Ionicons name="star" size={13} color={colors.amber} />
+                        <Text style={styles.cardMetadataText}>{card.rating.toFixed(1)}{card.ratingCount ? ` (${card.ratingCount})` : ''}</Text>
+                      </View>
+                    ) : null}
+                    {distanceText ? (
+                      <View style={styles.cardMetadataPill}>
+                        <Ionicons name="navigate-outline" size={13} color={colors.teal} />
+                        <Text style={styles.cardMetadataText}>{distanceText}</Text>
+                      </View>
+                    ) : null}
+                    <Text style={[
+                      styles.cardHours,
+                      card.isOpen ? styles.open : card.isOpen === false ? styles.closed : styles.darkMutedText,
+                    ]} numberOfLines={1}>
+                      {card.kind === 'event' ? card.eventDateText || 'Date TBA' : card.hoursText || 'Hours unknown'}
+                    </Text>
+                  </View>
+                  {card.address ? <Text style={[styles.address, styles.darkMutedText]} numberOfLines={2}>{card.address}</Text> : null}
                 </View>
               </View>
-              <Text style={styles.cardSubtitle}>{card.subtitle}</Text>
-              {distanceLabel ? (
-                <Text style={[styles.cardDistance, isDarkMode && !(isSelected || isSuggested) && styles.darkMutedText]}>{distanceLabel}</Text>
-              ) : null}
-              {card.kind === 'event' && card.source ? (
-                <Text style={[styles.hoursDetail, isDarkMode && !(isSelected || isSuggested) && styles.darkMutedText]}>Source: {card.source}</Text>
-              ) : null}
-              {card.address ? <Text style={[styles.address, isDarkMode && !(isSelected || isSuggested) && styles.darkMutedText]}>{card.address}</Text> : null}
-              {card.todayHours ? <Text style={[styles.hoursDetail, isDarkMode && !(isSelected || isSuggested) && styles.darkMutedText]}>{card.todayHours}</Text> : null}
               <View style={styles.buttonRow}>
                 <CardIconButton
                   label={resultActionLabel}
                   icon={resultActionIcon}
                   onPress={() => selectCard(card)}
-                  success={nowDiscovering ? !isNowSelected : !isSelected && !isSuggested}
-                  disabled={nowDiscovering && isNowSelected}
+                  success={nowDiscovering ? true : !isSelected && !isSuggested}
+                  disabled={nowDiscovering && nowPlanCreating}
                 />
+                <CardIconButton label="Details" icon="information-circle-outline" onPress={() => setPlaceDetailCard(card)} />
                 {card.kind === 'event' && card.eventUrl ? (
                   <CardIconButton label="Open event" icon="ticket-outline" onPress={() => openCardEvent(card)} />
                 ) : null}
@@ -9319,8 +9782,11 @@ function NomNomGoApp() {
                 {!nowDiscovering ? (
                   <CardIconButton label="Share" icon="share-outline" onPress={() => openQuickShare({ kind: 'card', slot: resultMode, card })} />
                 ) : null}
-                <CardIconButton label="Don't recommend again" icon="ban-outline" onPress={() => neverRecommendCard(card)} />
+                <CardIconButton label="Don't recommend again" icon="ban-outline" onPress={() => neverRecommendCard(card)} danger />
               </View>
+              {distanceLabel && startDistanceText ? (
+                <Text style={[styles.cardDistance, styles.darkMutedText]}>{distanceLabel}</Text>
+              ) : null}
             </View>
             );
           })}
@@ -9336,12 +9802,150 @@ function NomNomGoApp() {
       )}
 
       <Modal
+        visible={Boolean(placeDetailCard)}
+        animationType="slide"
+        presentationStyle="fullScreen"
+        onRequestClose={() => setPlaceDetailCard(null)}
+      >
+        <SafeAreaView style={[styles.safeArea, styles.darkScreen]} edges={['top', 'bottom', 'left', 'right']}>
+          {placeDetailCard ? (
+            <ScrollView style={styles.placeDetailScreen} contentContainerStyle={styles.placeDetailContent}>
+              <View style={styles.placeDetailHeader}>
+                <TouchableOpacity
+                  style={styles.placeDetailHeaderButton}
+                  onPress={() => setPlaceDetailCard(null)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Close place details"
+                >
+                  <Ionicons name="chevron-back" size={24} color={colors.textPrimary} />
+                </TouchableOpacity>
+                <Text style={styles.placeDetailHeaderTitle} numberOfLines={1}>Place details</Text>
+                <TouchableOpacity
+                  style={[styles.placeDetailHeaderButton, memory.favorites.includes(placeDetailCard.id) && styles.placeDetailHeaderButtonActive]}
+                  onPress={() => toggleFavorite(placeDetailCard)}
+                  accessibilityRole="button"
+                  accessibilityLabel={memory.favorites.includes(placeDetailCard.id) ? 'Remove from saved places' : 'Save place'}
+                >
+                  <Ionicons
+                    name={memory.favorites.includes(placeDetailCard.id) ? 'heart' : 'heart-outline'}
+                    size={22}
+                    color={memory.favorites.includes(placeDetailCard.id) ? colors.coral : colors.textPrimary}
+                  />
+                </TouchableOpacity>
+              </View>
+
+              <View style={styles.placeDetailHero}>
+                {cardImageUri(placeDetailCard) ? (
+                  <Image source={{ uri: cardImageUri(placeDetailCard)! }} style={styles.placeDetailHeroImage} resizeMode="cover" />
+                ) : (
+                  <View style={[styles.placeDetailHeroImage, styles.placeDetailHeroFallback]}>
+                    <Ionicons
+                      name={placeDetailCard.kind === 'event' ? 'ticket-outline' : resultMode === 'food' ? 'restaurant-outline' : 'sparkles-outline'}
+                      size={54}
+                      color={resultMode === 'food' ? colors.coral : colors.amber}
+                    />
+                  </View>
+                )}
+                {placeDetailCard.photoAttribution ? (
+                  <Text style={styles.placeDetailAttribution}>Photo: {placeDetailCard.photoAttribution}</Text>
+                ) : null}
+              </View>
+
+              <View style={styles.placeDetailTitleBlock}>
+                <Text style={[
+                  styles.placeDetailEyebrow,
+                  resultMode === 'food' ? styles.placeDetailEyebrowFood : styles.placeDetailEyebrowActivity,
+                ]}>{cardCategoryLabel(placeDetailCard)}</Text>
+                <Text style={styles.placeDetailTitle}>{placeDetailCard.title}</Text>
+                <View style={styles.placeDetailMetaRow}>
+                  {typeof placeDetailCard.rating === 'number' ? (
+                    <View style={styles.placeDetailMetaItem}>
+                      <Ionicons name="star" size={16} color={colors.amber} />
+                      <Text style={styles.placeDetailMetaText}>
+                        {placeDetailCard.rating.toFixed(1)}{placeDetailCard.ratingCount ? ` (${placeDetailCard.ratingCount})` : ''}
+                      </Text>
+                    </View>
+                  ) : null}
+                  {placeDetailCard.priceLevel ? <Text style={styles.placeDetailMetaText}>{placeDetailCard.priceLevel}</Text> : null}
+                  <Text style={[styles.placeDetailMetaText, placeDetailCard.isOpen ? styles.open : placeDetailCard.isOpen === false ? styles.closed : undefined]}>
+                    {placeDetailCard.kind === 'event'
+                      ? placeDetailCard.eventDateText || 'Date TBA'
+                      : placeDetailCard.hoursText || 'Hours unknown'}
+                  </Text>
+                </View>
+                {placeDetailCard.address ? (
+                  <View style={styles.placeDetailAddressRow}>
+                    <Ionicons name="location-outline" size={18} color={colors.teal} />
+                    <Text style={styles.placeDetailAddress}>{placeDetailCard.address}</Text>
+                  </View>
+                ) : null}
+                {placeDetailCard.todayHours ? <Text style={styles.placeDetailHours}>{placeDetailCard.todayHours}</Text> : null}
+              </View>
+
+              <View style={styles.placeDetailPrimaryActions}>
+                <TouchableOpacity
+                  style={[styles.placeDetailAction, styles.placeDetailRouteAction]}
+                  onPress={() => openCardMaps(placeDetailCard)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Route to ${placeDetailCard.title}`}
+                >
+                  <Ionicons name="navigate" size={22} color={semanticTones.route.foreground} />
+                  <Text style={styles.placeDetailActionText}>Route</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.placeDetailAction, styles.placeDetailSaveAction]}
+                  onPress={() => toggleFavorite(placeDetailCard)}
+                  accessibilityRole="button"
+                  accessibilityLabel={memory.favorites.includes(placeDetailCard.id) ? 'Remove from saved places' : 'Save place'}
+                  accessibilityState={{ selected: memory.favorites.includes(placeDetailCard.id) }}
+                >
+                  <Ionicons name={memory.favorites.includes(placeDetailCard.id) ? 'heart' : 'heart-outline'} size={22} color={colors.textInverse} />
+                  <Text style={[styles.placeDetailActionText, styles.placeDetailActionTextDark]}>
+                    {memory.favorites.includes(placeDetailCard.id) ? 'Saved' : 'Save'}
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    styles.placeDetailAction,
+                    placeDetailIsSelected ? styles.placeDetailRemoveAction : styles.placeDetailAddAction,
+                  ]}
+                  onPress={() => {
+                    void selectCard(placeDetailCard);
+                    setPlaceDetailCard(null);
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${placeDetailActionLabel}: ${placeDetailCard.title}`}
+                  accessibilityState={{ selected: placeDetailIsSelected || placeDetailIsSuggested }}
+                >
+                  <Ionicons
+                    name={placeDetailActionIcon}
+                    size={24}
+                    color={placeDetailIsSelected ? semanticTones.danger.foreground : semanticTones.primary.foreground}
+                  />
+                  <Text style={styles.placeDetailActionText}>{placeDetailActionLabel}</Text>
+                </TouchableOpacity>
+              </View>
+
+              <View style={styles.placeDetailSecondaryActions}>
+                {placeDetailCard.kind === 'event' && placeDetailCard.eventUrl ? (
+                  <Button label="Open event" onPress={() => openCardEvent(placeDetailCard)} compact />
+                ) : null}
+                {canOpenPlaceWebsite(placeDetailCard) ? (
+                  <Button label="Website" onPress={() => openCardWebsite(placeDetailCard)} compact />
+                ) : null}
+              </View>
+            </ScrollView>
+          ) : null}
+        </SafeAreaView>
+      </Modal>
+
+      <Modal
         visible={nowPeoplePickerOpen}
         animationType="slide"
         presentationStyle="fullScreen"
         onRequestClose={() => setNowPeoplePickerOpen(false)}
       >
-        <SafeAreaView style={[styles.safeArea, isLightMode && styles.lightScreen, isDarkMode && styles.darkScreen]} edges={['top', 'left', 'right']}>
+        <SafeAreaView style={[styles.safeArea, isLightMode && styles.lightScreen, isDarkMode && styles.darkScreen]} edges={['top', 'bottom', 'left', 'right']}>
           <View style={[styles.nowPeopleScreen, isDarkMode && styles.darkScreen]}>
             <View style={styles.nowPeopleHeader}>
               <View style={styles.nowHeaderTextBlock}>
@@ -9357,73 +9961,61 @@ function NomNomGoApp() {
               <View style={styles.nowPeopleSection}>
                 <Text style={[styles.nowPeopleSectionTitle, isDarkMode && styles.darkText]}>Recent</Text>
                 <View style={styles.nowPeopleList}>
-                  {quickShareUsers.slice(0, 3).map((user) => {
-                    const selected = nowSelectedPeople.includes(user);
-                    return (
-                      <TouchableOpacity
-                        key={`now-recent-${user}`}
-                        style={[styles.nowPersonRow, isDarkMode && styles.darkCard, selected && styles.nowPersonRowSelected]}
-                        onPress={() => toggleNowPerson(user)}
-                      >
-                        <View style={styles.nowPersonAvatar}>
-                          <Text style={styles.nowPersonAvatarText}>{user.slice(0, 1)}</Text>
-                        </View>
-                        <Text style={[styles.nowPersonName, isDarkMode && styles.darkText]}>{user}</Text>
-                        <Ionicons name={selected ? 'checkmark-circle' : 'add-circle-outline'} size={22} color={selected ? '#178f79' : '#526170'} />
-                      </TouchableOpacity>
-                    );
-                  })}
+                  {recentPeople.map((user) => (
+                    <PersonRow
+                      key={`now-recent-${user}`}
+                      name={user}
+                      subtitle="Recently planned with"
+                      selected={nowSelectedPeople.includes(user)}
+                      onPress={() => toggleNowPerson(user)}
+                    />
+                  ))}
                 </View>
               </View>
 
               <View style={styles.nowPeopleSection}>
                 <Text style={[styles.nowPeopleSectionTitle, isDarkMode && styles.darkText]}>Favorites</Text>
                 <View style={styles.nowPeopleList}>
-                  {quickShareUsers.slice().reverse().slice(0, 3).map((user) => {
-                    const selected = nowSelectedPeople.includes(user);
-                    return (
-                      <TouchableOpacity
-                        key={`now-favorite-${user}`}
-                        style={[styles.nowPersonRow, isDarkMode && styles.darkCard, selected && styles.nowPersonRowSelected]}
-                        onPress={() => toggleNowPerson(user)}
-                      >
-                        <View style={styles.nowPersonAvatar}>
-                          <Text style={styles.nowPersonAvatarText}>{user.slice(0, 1)}</Text>
-                        </View>
-                        <Text style={[styles.nowPersonName, isDarkMode && styles.darkText]}>{user}</Text>
-                        <Ionicons name={selected ? 'checkmark-circle' : 'add-circle-outline'} size={22} color={selected ? '#178f79' : '#526170'} />
-                      </TouchableOpacity>
-                    );
-                  })}
+                  {favoritePeople.map((user) => (
+                    <PersonRow
+                      key={`now-favorite-${user}`}
+                      name={user}
+                      subtitle="Favorite planning partner"
+                      selected={nowSelectedPeople.includes(user)}
+                      onPress={() => toggleNowPerson(user)}
+                    />
+                  ))}
                 </View>
               </View>
 
-              <View style={styles.nowPeopleSection}>
-                <Text style={[styles.nowPeopleSectionTitle, isDarkMode && styles.darkText]}>Groups</Text>
-                <View style={styles.nowPeopleList}>
-                  {PEOPLE_PICKER_GROUPS.map((group) => {
-                    const selected = group.members.every((member) => nowSelectedPeople.includes(member));
-                    return (
-                      <TouchableOpacity
-                        key={`now-group-${group.name}`}
-                        style={[styles.nowPersonRow, isDarkMode && styles.darkCard, selected && styles.nowPersonRowSelected]}
-                        onPress={() => toggleNowGroup(group)}
-                      >
-                        <View style={styles.nowGroupAvatar}>
-                          <Ionicons name="people-outline" size={18} color="#071827" />
-                        </View>
-                        <View style={styles.nowGroupTextBlock}>
-                          <Text style={[styles.nowPersonName, isDarkMode && styles.darkText]}>{group.name}</Text>
-                          <Text style={[styles.nowGroupMembers, isDarkMode && styles.darkMutedText]} numberOfLines={1}>
-                            {group.members.join(', ')}
-                          </Text>
-                        </View>
-                        <Ionicons name={selected ? 'checkmark-circle' : 'add-circle-outline'} size={22} color={selected ? '#178f79' : '#526170'} />
-                      </TouchableOpacity>
-                    );
-                  })}
+              {BETA_FEATURES.peopleGroups ? (
+                <View style={styles.nowPeopleSection}>
+                  <Text style={[styles.nowPeopleSectionTitle, isDarkMode && styles.darkText]}>Groups</Text>
+                  <View style={styles.nowPeopleList}>
+                    {PEOPLE_PICKER_GROUPS.map((group) => {
+                      const selected = group.members.every((member) => nowSelectedPeople.includes(member));
+                      return (
+                        <TouchableOpacity
+                          key={`now-group-${group.name}`}
+                          style={[styles.nowPersonRow, isDarkMode && styles.darkCard, selected && styles.nowPersonRowSelected]}
+                          onPress={() => toggleNowGroup(group)}
+                        >
+                          <View style={styles.nowGroupAvatar}>
+                            <Ionicons name="people-outline" size={18} color={colors.teal} />
+                          </View>
+                          <View style={styles.nowGroupTextBlock}>
+                            <Text style={[styles.nowPersonName, isDarkMode && styles.darkText]}>{group.name}</Text>
+                            <Text style={[styles.nowGroupMembers, isDarkMode && styles.darkMutedText]} numberOfLines={1}>
+                              {group.members.join(', ')}
+                            </Text>
+                          </View>
+                          <Ionicons name={selected ? 'checkmark-circle' : 'add-circle-outline'} size={22} color={selected ? colors.teal : colors.textSecondary} />
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
                 </View>
-              </View>
+              ) : null}
             </ScrollView>
           </View>
         </SafeAreaView>
@@ -9442,7 +10034,7 @@ function NomNomGoApp() {
               Plan with friends, family, and groups
             </Text>
             <View style={[styles.peopleGroupsComingSoonBox, isDarkMode && styles.darkChip]}>
-              <Ionicons name="people-outline" size={24} color={isDarkMode ? '#fffaf3' : '#178f79'} />
+              <Ionicons name="people-outline" size={24} color={isDarkMode ? colors.textPrimary : colors.teal} />
               <View style={styles.peopleGroupsTextBlock}>
                 <Text style={[styles.peopleGroupsComingSoonTitle, isDarkMode && styles.darkText]}>Coming soon</Text>
                 <Text style={[styles.peopleGroupsComingSoonText, isDarkMode && styles.darkMutedText]}>
@@ -9470,19 +10062,23 @@ function NomNomGoApp() {
               {planTitle}
             </Text>
             <Text style={[styles.routeOptionHint, isDarkMode && styles.darkMutedText]}>
-              Tesla/app navigation remains the source of truth. NomNomGo shares destinations only; confirm route and charging in Tesla before departure.
+              {BETA_FEATURES.roadTrips
+                ? 'Tesla/app navigation remains the source of truth. NomNomGo shares destinations only; confirm route and charging in Tesla before departure.'
+                : 'Open the current plan in Google Maps for final routing and navigation.'}
             </Text>
-            <View style={styles.routeOptionList}>
+              <View style={styles.routeOptionList}>
               <TouchableOpacity style={styles.routeOptionButton} onPress={openGoogleRouteFromOptions}>
-                <Ionicons name="map-outline" size={18} color="#071827" />
+                <Ionicons name="map-outline" size={18} color={colors.teal} />
                 <Text style={styles.routeOptionButtonText}>
                   {isImportedGoogleMapsPlan && plan.sourceUrl ? 'Open Google route' : 'Google Maps'}
                 </Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.routeOptionButton} onPress={sendPlanToTesla}>
-                <Ionicons name="car-sport-outline" size={18} color="#071827" />
-                <Text style={styles.routeOptionButtonText}>Send to Tesla</Text>
-              </TouchableOpacity>
+              {BETA_FEATURES.roadTrips ? (
+                <TouchableOpacity style={styles.routeOptionButton} onPress={sendPlanToTesla}>
+                  <Ionicons name="car-sport-outline" size={18} color={colors.teal} />
+                  <Text style={styles.routeOptionButtonText}>Send to Tesla</Text>
+                </TouchableOpacity>
+              ) : null}
             </View>
             <View style={styles.shareActions}>
               <Button label="Cancel" onPress={() => setRouteOptionsOpen(false)} />
@@ -9497,17 +10093,21 @@ function NomNomGoApp() {
         transparent
         onRequestClose={() => setPlanPreviewOpen(false)}
       >
-        <View style={styles.shareOverlay}>
+        <ScrollView
+          style={styles.shareOverlayScroll}
+          contentContainerStyle={styles.shareOverlayContent}
+          keyboardShouldPersistTaps="handled"
+        >
           <View style={styles.planPreviewShell}>
             <View style={[styles.planPreviewCard, isDarkMode && styles.darkModalCard]}>
               <Text style={[styles.planPreviewTitle, isDarkMode && styles.darkText]} numberOfLines={2}>
                 {planTitle}
               </Text>
               <View style={styles.planPreviewMetaRow}>
-                <Text style={[styles.planPreviewMeta, isDarkMode && styles.darkMutedText]} numberOfLines={1}>
+                <Text style={[styles.planPreviewMeta, styles.planPreviewMetaPrimary, isDarkMode && styles.darkMutedText]} numberOfLines={2}>
                   {activePlanDateTimeLabel}
                 </Text>
-                <Text style={[styles.planPreviewMeta, isDarkMode && styles.darkMutedText]}>{plan.stops.length} stops</Text>
+                <Text style={[styles.planPreviewMeta, styles.planPreviewMetaCount, isDarkMode && styles.darkMutedText]}>{plan.stops.length} stops</Text>
               </View>
               {leaveForFirstStopText ? (
                 <Text style={styles.shareLeaveTime}>{leaveForFirstStopText}</Text>
@@ -9520,13 +10120,20 @@ function NomNomGoApp() {
               <View style={styles.planPreviewStopList}>
                 {plan.stops.map((stop, index) => (
                   <View key={`preview-${stop.key}`} style={styles.planPreviewStopRow}>
-                    <Text style={styles.planPreviewStopIndex}>{index + 1}</Text>
-                    <View style={styles.planPreviewTravelBlock}>
-                      <Ionicons name={travelMetaForStop(stop, index).icon} size={15} color="#178f79" />
-                      <Text style={styles.planPreviewTravelText} numberOfLines={1}>{travelMetaForStop(stop, index).duration}</Text>
+                    <Text style={[
+                      styles.planPreviewStopIndex,
+                      stop.slot === 'food' ? styles.stopIndexFood : styles.stopIndexActivity,
+                    ]}>{index + 1}</Text>
+                    <View style={styles.planPreviewStopContent}>
+                      <Text style={styles.planPreviewStopName} numberOfLines={2}>{cardToName(stop.item) || 'Stop'}</Text>
+                      <View style={styles.planPreviewStopMetadata}>
+                        <Text style={styles.planPreviewStopTime}>{formatClockTime(displayedArrivalTimeForStop(stop, index))}</Text>
+                        <View style={styles.planPreviewTravelBlock}>
+                          <Ionicons name={travelMetaForStop(stop, index).icon} size={15} color={colors.teal} />
+                          <Text style={styles.planPreviewTravelText} numberOfLines={1}>{travelMetaForStop(stop, index).duration}</Text>
+                        </View>
+                      </View>
                     </View>
-                    <Text style={styles.planPreviewStopTime}>{formatClockTime(displayedArrivalTimeForStop(stop, index))}</Text>
-                    <Text style={styles.planPreviewStopName} numberOfLines={1}>{cardToName(stop.item) || 'Stop'}</Text>
                   </View>
                 ))}
               </View>
@@ -9537,7 +10144,7 @@ function NomNomGoApp() {
               </View>
             </View>
           </View>
-        </View>
+        </ScrollView>
       </Modal>
 
       <Modal
@@ -9546,7 +10153,11 @@ function NomNomGoApp() {
         transparent
         onRequestClose={() => setSharePreviewOpen(false)}
       >
-        <View style={styles.shareOverlay}>
+        <ScrollView
+          style={styles.shareOverlayScroll}
+          contentContainerStyle={styles.shareOverlayContent}
+          keyboardShouldPersistTaps="handled"
+        >
           <View style={styles.shareModalShell}>
           <View style={[styles.shareCard, isDarkMode && styles.darkModalCard]}>
             <View style={styles.shareHeader}>
@@ -9566,9 +10177,12 @@ function NomNomGoApp() {
               <View style={styles.shareLockedStopList}>
                 {plan.stops.map((stop, index) => (
                   <View key={`share-locked-${stop.key}`} style={styles.shareLockedStopRow}>
-                    <Text style={styles.shareLockedStopIndex}>{index + 1}</Text>
+                    <Text style={[
+                      styles.shareLockedStopIndex,
+                      stop.slot === 'food' ? styles.stopIndexFood : styles.stopIndexActivity,
+                    ]}>{index + 1}</Text>
                     <View style={styles.shareLockedTravelBlock}>
-                      <Ionicons name={travelMetaForStop(stop, index).icon} size={15} color="#178f79" />
+                      <Ionicons name={travelMetaForStop(stop, index).icon} size={15} color={colors.teal} />
                       <Text style={styles.shareLockedTravelText} numberOfLines={1}>{travelMetaForStop(stop, index).duration}</Text>
                     </View>
                     <Text style={styles.shareLockedStopTime}>{formatClockTime(displayedArrivalTimeForStop(stop, index))}</Text>
@@ -9579,11 +10193,17 @@ function NomNomGoApp() {
             ) : (
               plan.stops.map((stop, index) => (
                 <View key={`share-${stop.key}`} style={styles.shareStop}>
-                  <View style={styles.shareStopNumber}>
+                  <View style={[
+                    styles.shareStopNumber,
+                    stop.slot === 'food' ? styles.shareStopNumberFood : styles.shareStopNumberActivity,
+                  ]}>
                     <Text style={styles.shareStopNumberText}>{index + 1}</Text>
                   </View>
                   <View style={styles.shareStopBody}>
-                    <Text style={styles.shareStopType}>{stop.slot === 'food' ? 'Food' : 'Activity'}</Text>
+                    <Text style={[
+                      styles.shareStopType,
+                      stop.slot === 'food' ? styles.shareStopTypeFood : styles.shareStopTypeActivity,
+                    ]}>{stop.slot === 'food' ? 'Food' : 'Activity'}</Text>
                     <Text style={[styles.shareStopName, isDarkMode && styles.darkText]}>{cardToName(stop.item) || 'Stop'}</Text>
                     <Text style={[styles.shareStopTime, isDarkMode && styles.darkMutedText]}>{stepDetail(stop, index)}</Text>
                     {stop.selectedFeatures?.length ? (
@@ -9629,6 +10249,32 @@ function NomNomGoApp() {
             </View>
           </View>
           </View>
+        </ScrollView>
+      </Modal>
+
+      <Modal
+        visible={Boolean(pendingConfirmation)}
+        animationType="fade"
+        transparent
+        onRequestClose={() => setPendingConfirmation(null)}
+      >
+        <View style={styles.shareOverlay}>
+          <View style={[styles.quickShareCard, isDarkMode && styles.darkModalCard]}>
+            <Text style={[styles.quickShareTitle, isDarkMode && styles.darkText]}>{pendingConfirmation?.title || 'Confirm action'}</Text>
+            <Text style={[styles.quickSharePlace, isDarkMode && styles.darkMutedText]}>{pendingConfirmation?.message || ''}</Text>
+            <View style={styles.shareActions}>
+              <Button
+                label={pendingConfirmation?.confirmLabel || 'Confirm'}
+                onPress={() => {
+                  const action = pendingConfirmation?.action;
+                  setPendingConfirmation(null);
+                  action?.();
+                }}
+                primary
+              />
+              <Button label="Cancel" onPress={() => setPendingConfirmation(null)} />
+            </View>
+          </View>
         </View>
       </Modal>
 
@@ -9661,17 +10307,70 @@ function NomNomGoApp() {
       </Modal>
 
     </ScrollView>
+    <BottomNavigation<MainNavigationKey>
+      style={styles.bottomNavigation}
+      activeKey={activeNavigationKey}
+      onSelect={handleMainNavigation}
+      items={[
+        {
+          key: 'home',
+          label: 'Home',
+          icon: <Ionicons name="home-outline" size={iconSizes.md} color={colors.textTertiary} />,
+          selectedIcon: <Ionicons name="home" size={iconSizes.md} color={colors.coral} />,
+        },
+        {
+          key: 'plans',
+          label: 'Plans',
+          icon: <Ionicons name="calendar-outline" size={iconSizes.md} color={colors.textTertiary} />,
+          selectedIcon: <Ionicons name="calendar" size={iconSizes.md} color={colors.coral} />,
+        },
+        {
+          key: 'saved',
+          label: 'Saved',
+          icon: <Ionicons name="heart-outline" size={iconSizes.md} color={colors.textTertiary} />,
+          selectedIcon: <Ionicons name="heart" size={iconSizes.md} color={colors.coral} />,
+        },
+        {
+          key: 'profile',
+          label: 'Profile',
+          icon: <Ionicons name="person-outline" size={iconSizes.md} color={colors.textTertiary} />,
+          selectedIcon: <Ionicons name="person" size={iconSizes.md} color={colors.coral} />,
+        },
+      ]}
+      createAction={{
+        label: 'Create',
+        icon: <Ionicons name="add" size={iconSizes.xl} color={semanticTones.primary.foreground} />,
+        onPress: () => openPlanSetup('later'),
+        accessibilityLabel: 'Create a plan',
+      }}
+    />
+    </View>
     </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
 
 export default function App() {
-  const colorScheme = useColorScheme();
-  useWebDocumentSurface(colorScheme === 'dark' ? DARK_WEB_BACKGROUND : LIGHT_WEB_BACKGROUND);
+  const [iconsLoaded, iconsError] = useFonts(Ionicons.font);
+  useWebDocumentSurface(DARK_WEB_BACKGROUND);
+
+  if (!iconsLoaded && !iconsError) {
+    return (
+      <SafeAreaProvider>
+        <StatusBar style="light" backgroundColor={colors.background} />
+        <SafeAreaView style={[styles.safeArea, styles.darkScreen]} edges={['top', 'bottom', 'left', 'right']}>
+          <View style={styles.authCentered}>
+            <ActivityIndicator color={colors.coral} />
+            <Text style={[styles.authHint, styles.darkMutedText]}>Loading NomNomGo</Text>
+          </View>
+        </SafeAreaView>
+      </SafeAreaProvider>
+    );
+  }
 
   return (
     <SafeAreaProvider>
+      <StatusBar style="light" backgroundColor={colors.background} />
       <AlphaAccessGate>
         <NomNomGoApp />
       </AlphaAccessGate>
@@ -9680,7 +10379,7 @@ export default function App() {
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  const isDarkMode = useColorScheme() === 'dark';
+  const isDarkMode = true;
   return (
     <View style={styles.section}>
       <Text style={[styles.sectionTitle, isDarkMode && styles.darkText]}>{title}</Text>
@@ -9698,13 +10397,20 @@ function ChipRow<T extends string>({
   selected: string[];
   onPress: (value: T) => void;
 }) {
-  const isDarkMode = useColorScheme() === 'dark';
+  const isDarkMode = true;
   return (
     <View style={styles.chipWrap}>
       {items.map((item) => {
         const active = selected.includes(item);
         return (
-          <TouchableOpacity key={item} style={[styles.chip, isDarkMode && styles.darkChip, active && styles.chipActive]} onPress={() => onPress(item)}>
+          <TouchableOpacity
+            key={item}
+            style={[styles.chip, isDarkMode && styles.darkChip, active && styles.chipActive]}
+            onPress={() => onPress(item)}
+            accessibilityRole="button"
+            accessibilityLabel={item}
+            accessibilityState={{ selected: active }}
+          >
             <Text style={[styles.chipText, isDarkMode && styles.darkMutedText, active && styles.chipTextActive]}>{item}</Text>
           </TouchableOpacity>
         );
@@ -9730,7 +10436,7 @@ function PreferenceGroup<T extends string>({
   expanded?: boolean;
   onToggleExpanded?: () => void;
 }) {
-  const isDarkMode = useColorScheme() === 'dark';
+  const isDarkMode = true;
   const limit = previewCount || items.length;
   const canExpand = items.length > limit && Boolean(onToggleExpanded);
   const visibleItems = expanded || !canExpand ? items : items.slice(0, limit);
@@ -9743,13 +10449,26 @@ function PreferenceGroup<T extends string>({
         {visibleItems.map((item) => {
           const active = selected.includes(item);
           return (
-            <TouchableOpacity key={item} style={[styles.chip, isDarkMode && styles.darkChip, active && styles.chipActive]} onPress={() => onPress(item)}>
+            <TouchableOpacity
+              key={item}
+              style={[styles.chip, isDarkMode && styles.darkChip, active && styles.chipActive]}
+              onPress={() => onPress(item)}
+              accessibilityRole="button"
+              accessibilityLabel={`${label}: ${item}`}
+              accessibilityState={{ selected: active }}
+            >
               <Text style={[styles.chipText, isDarkMode && styles.darkMutedText, active && styles.chipTextActive]}>{item}</Text>
             </TouchableOpacity>
           );
         })}
         {canExpand ? (
-          <TouchableOpacity style={[styles.chip, isDarkMode && styles.darkChip, styles.preferenceMoreChip]} onPress={() => onToggleExpanded?.()}>
+          <TouchableOpacity
+            style={[styles.chip, isDarkMode && styles.darkChip, styles.preferenceMoreChip]}
+            onPress={() => onToggleExpanded?.()}
+            accessibilityRole="button"
+            accessibilityLabel={expanded ? `Show fewer ${label} options` : `Show ${hiddenCount} more ${label} options`}
+            accessibilityState={{ expanded: Boolean(expanded) }}
+          >
             <Text style={[styles.chipText, isDarkMode && styles.darkMutedText, styles.preferenceMoreText]}>
               {expanded ? 'Less' : `More (${hiddenCount})`}
             </Text>
@@ -9769,17 +10488,22 @@ function FilterTab({
   active: boolean;
   onPress: () => void;
 }) {
-  const isDarkMode = useColorScheme() === 'dark';
-  const useActiveStepText = active;
+  const isDarkMode = true;
   return (
-    <TouchableOpacity style={[styles.filterTab, isDarkMode && styles.darkChip, active && styles.filterTabActive]} onPress={onPress}>
+    <TouchableOpacity
+      style={[styles.filterTab, isDarkMode && styles.darkChip, active && styles.filterTabActive]}
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ selected: active }}
+    >
       <Text style={[styles.filterTabText, isDarkMode && styles.darkMutedText, active && styles.filterTabTextActive]}>{label}</Text>
     </TouchableOpacity>
   );
 }
 
 function PlanLine({ label, value }: { label: string; value: string }) {
-  const isDarkMode = useColorScheme() === 'dark';
+  const isDarkMode = true;
   return (
     <View style={styles.planLine}>
       <Text style={[styles.planLabel, isDarkMode && styles.darkMutedText]}>{label}:</Text>
@@ -9807,7 +10531,7 @@ function PlanningSuggestionCard({
   onOpenEvent?: () => void;
   onOpenWebsite?: () => void;
 }) {
-  const isDarkMode = useColorScheme() === 'dark';
+  const isDarkMode = true;
   const voted = suggestion.votes.includes(currentUser);
   const voteCount = unique(suggestion.votes).length;
   const item = suggestion.item;
@@ -9834,7 +10558,7 @@ function PlanningSuggestionCard({
         {onOpenEvent ? <CardIconButton label="Open event" icon="ticket-outline" onPress={onOpenEvent} /> : null}
         {onOpenMap ? <CardIconButton label="Map" icon="map-outline" onPress={onOpenMap} /> : null}
         {onOpenWebsite ? <CardIconButton label="Website" icon="globe-outline" onPress={onOpenWebsite} /> : null}
-        {canRemove ? <CardIconButton label="Remove" icon="trash-outline" onPress={onRemove} /> : null}
+        {canRemove ? <CardIconButton label="Remove" icon="trash-outline" onPress={onRemove} danger /> : null}
       </View>
     </View>
   );
@@ -9863,6 +10587,7 @@ function stepActionIconForLabel(label: string): React.ComponentProps<typeof Ioni
 
 function PlanStep({
   number,
+  tone,
   title,
   value,
   detail,
@@ -9894,6 +10619,7 @@ function PlanStep({
   onRemovePress,
 }: {
   number: string;
+  tone: PlanSlot;
   title: string;
   value: string;
   detail: string;
@@ -9924,7 +10650,8 @@ function PlanStep({
   removeLabel?: string;
   onRemovePress?: () => void;
 }) {
-  const isDarkMode = useColorScheme() === 'dark';
+  const isDarkMode = true;
+  const tonePalette = semanticTones[tone];
   const ignoreNextCardPressRef = useRef(false);
   const nextTravelMode = travelMeta?.mode === 'walk' ? 'car' : 'walk';
   const blockNextCardPress = () => {
@@ -9942,9 +10669,15 @@ function PlanStep({
   };
   const renderStepAction = (label?: string, onStepAction?: () => void, highlighted = false) => {
     if (!label || !onStepAction) return null;
+    const destructive = label === 'Remove';
     return (
       <TouchableOpacity
-        style={[styles.stepActionButton, highlighted && styles.stepActionButtonActive]}
+        style={[
+          styles.stepActionButton,
+          highlighted && styles.stepActionButtonActive,
+          highlighted && { borderColor: tonePalette.border, backgroundColor: tonePalette.soft },
+          destructive && styles.stepActionButtonDanger,
+        ]}
         onPress={(event: GestureResponderEvent) => {
           event.stopPropagation();
           Keyboard.dismiss();
@@ -9953,22 +10686,29 @@ function PlanStep({
         accessibilityRole="button"
         accessibilityLabel={label}
       >
-        <Ionicons name={stepActionIconForLabel(label)} size={17} color={highlighted ? '#071827' : '#526170'} />
+        <Ionicons
+          name={stepActionIconForLabel(label)}
+          size={17}
+          color={destructive ? colors.red : highlighted ? tonePalette.accent : colors.textSecondary}
+        />
       </TouchableOpacity>
     );
   };
   return (
     <View style={styles.stepRow}>
       <View style={styles.stepRail}>
-        <View style={[styles.stepDot, active && styles.stepDotActive]}>
-          <Text style={[styles.stepNumber, active && styles.stepNumberActive]}>{number}</Text>
+        <View style={[styles.stepDot, active && styles.stepDotActive, active && { backgroundColor: tonePalette.solid, borderColor: tonePalette.border }]}>
+          <Text style={[styles.stepNumber, active && styles.stepNumberActive, active && { color: tonePalette.foreground }]}>{number}</Text>
         </View>
         {!last ? <View style={styles.stepLine} /> : null}
       </View>
-      <TouchableOpacity style={[styles.stepCard, isDarkMode && styles.darkCard, active && styles.stepCardActive]} onPress={handleCardPress}>
+      <TouchableOpacity
+        style={[styles.stepCard, isDarkMode && styles.darkCard, active && styles.stepCardActive, active && { borderColor: tonePalette.border }]}
+        onPress={handleCardPress}
+      >
         <View style={styles.stepTopLine}>
           <View style={styles.stepTextBlock}>
-            <Text style={styles.stepTitle}>{title}</Text>
+            <Text style={[styles.stepTitle, { color: tonePalette.accent }]}>{title}</Text>
             <Text style={[styles.stepValue, isDarkMode && !active && styles.darkText, active && styles.stepValueActive]}>{value}</Text>
             {cityState ? (
               <Text style={[styles.stepCityState, isDarkMode && !active && styles.darkMutedText]} numberOfLines={1}>{cityState}</Text>
@@ -9993,14 +10733,14 @@ function PlanStep({
                 ? `${travelMeta.label}, ${travelMeta.duration}. Switch to ${travelModeLabel(nextTravelMode)}.`
                 : `${travelMeta.label}, ${travelMeta.duration}`}
             >
-              <Ionicons name={travelMeta.icon} size={18} color="#178f79" />
+              <Ionicons name={travelMeta.icon} size={18} color={colors.teal} />
               <Text style={styles.stepTravelDuration} numberOfLines={1}>{travelMeta.duration}</Text>
             </TouchableOpacity>
           ) : null}
         </View>
         <View style={styles.stepDetailRow}>
           {walkable ? (
-            <Ionicons name="walk-outline" size={13} color={isDarkMode && !active ? '#fffaf3' : '#178f79'} />
+            <Ionicons name="walk-outline" size={13} color={isDarkMode && !active ? colors.textPrimary : colors.teal} />
           ) : null}
           <Text style={[styles.stepDetail, isDarkMode && !active && styles.darkMutedText, active && styles.stepDetailActive]}>{detail}</Text>
         </View>
@@ -10080,19 +10820,19 @@ function ArrivalTimeControl({
   return (
     <View style={styles.arrivalControl}>
       <View style={styles.arrivalTimeRow}>
-        <TouchableOpacity style={styles.arrivalButton} onPress={onHourMinus}>
+        <TouchableOpacity style={styles.arrivalButton} onPress={onHourMinus} accessibilityRole="button" accessibilityLabel="Subtract one hour">
           <Text style={styles.arrivalButtonText}>-1 hr</Text>
         </TouchableOpacity>
         <Text style={styles.arrivalTimeValue}>{value}</Text>
-        <TouchableOpacity style={styles.arrivalButton} onPress={onHourPlus}>
+        <TouchableOpacity style={styles.arrivalButton} onPress={onHourPlus} accessibilityRole="button" accessibilityLabel="Add one hour">
           <Text style={styles.arrivalButtonText}>+1 hr</Text>
         </TouchableOpacity>
       </View>
       <View style={styles.arrivalMinuteRow}>
-        <TouchableOpacity style={styles.arrivalSmallButton} onPress={onMinuteMinus}>
+        <TouchableOpacity style={styles.arrivalSmallButton} onPress={onMinuteMinus} accessibilityRole="button" accessibilityLabel="Subtract fifteen minutes">
           <Text style={styles.arrivalSmallButtonText}>-15 min</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.arrivalSmallButton} onPress={onMinutePlus}>
+        <TouchableOpacity style={styles.arrivalSmallButton} onPress={onMinutePlus} accessibilityRole="button" accessibilityLabel="Add fifteen minutes">
           <Text style={styles.arrivalSmallButtonText}>+15 min</Text>
         </TouchableOpacity>
       </View>
@@ -10115,11 +10855,11 @@ function TimeStepper({
     <View style={styles.timeStepper}>
       <Text style={styles.timeStepperLabel}>{label}</Text>
       <View style={styles.timeStepperControls}>
-        <TouchableOpacity style={styles.timeStepperButton} onPress={onMinus}>
+        <TouchableOpacity style={styles.timeStepperButton} onPress={onMinus} accessibilityRole="button" accessibilityLabel={`Decrease ${label}`}>
           <Text style={styles.timeStepperButtonText}>-</Text>
         </TouchableOpacity>
         <Text style={styles.timeStepperValue}>{value}</Text>
-        <TouchableOpacity style={styles.timeStepperButton} onPress={onPlus}>
+        <TouchableOpacity style={styles.timeStepperButton} onPress={onPlus} accessibilityRole="button" accessibilityLabel={`Increase ${label}`}>
           <Text style={styles.timeStepperButtonText}>+</Text>
         </TouchableOpacity>
       </View>
@@ -10133,6 +10873,7 @@ function CardIconButton({
   onPress,
   primary,
   success,
+  danger,
   active,
   disabled,
 }: {
@@ -10141,6 +10882,7 @@ function CardIconButton({
   onPress: () => void;
   primary?: boolean;
   success?: boolean;
+  danger?: boolean;
   active?: boolean;
   disabled?: boolean;
 }) {
@@ -10150,6 +10892,7 @@ function CardIconButton({
         styles.cardIconButton,
         primary && styles.primaryButton,
         success && styles.successButton,
+        danger && styles.dangerButton,
         active && styles.cardIconButtonActive,
         disabled && styles.disabledButton,
       ]}
@@ -10160,8 +10903,13 @@ function CardIconButton({
       disabled={disabled}
       accessibilityRole="button"
       accessibilityLabel={label}
+      accessibilityState={{ disabled: Boolean(disabled) }}
     >
-      <Ionicons name={icon} size={20} color={active ? '#ffc84a' : '#fffaf3'} />
+      <Ionicons
+        name={icon}
+        size={20}
+        color={active ? colors.amber : (primary || success || danger) ? colors.textInverse : colors.textPrimary}
+      />
     </TouchableOpacity>
   );
 }
@@ -10171,6 +10919,7 @@ function Button({
   onPress,
   primary,
   success,
+  danger,
   disabled,
   compact,
 }: {
@@ -10178,26 +10927,22 @@ function Button({
   onPress: () => void;
   primary?: boolean;
   success?: boolean;
+  danger?: boolean;
   disabled?: boolean;
   compact?: boolean;
 }) {
   return (
-    <TouchableOpacity
-      style={[
-        styles.button,
-        primary && styles.primaryButton,
-        success && styles.successButton,
-        compact && styles.compactButton,
-        disabled && styles.disabledButton,
-      ]}
+    <ActionButton
+      label={label}
+      tone={danger ? 'danger' : success ? 'success' : primary ? 'primary' : 'secondary'}
+      size={compact ? 'compact' : 'regular'}
+      style={compact ? styles.compactButton : undefined}
       onPress={() => {
         Keyboard.dismiss();
         void onPress();
       }}
       disabled={disabled}
-    >
-      <Text style={[styles.buttonText, (primary || success) && styles.primaryButtonText]}>{label}</Text>
-    </TouchableOpacity>
+    />
   );
 }
 
@@ -10212,41 +10957,54 @@ function HeaderAction({ label }: { label: string }) {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: '#fff7ed',
+    backgroundColor: colors.background,
   },
   keyboardAvoider: {
     flex: 1,
   },
+  appShell: {
+    flex: 1,
+    backgroundColor: colors.background,
+  },
+  bottomNavigation: {
+    width: '100%',
+    maxWidth: layout.contentMaxWidth,
+    alignSelf: 'center',
+  },
   screen: {
     flex: 1,
-    backgroundColor: '#fff7ed',
+    backgroundColor: colors.background,
   },
   lightScreen: {
-    backgroundColor: '#fff7ed',
+    backgroundColor: colors.background,
   },
   darkScreen: {
-    backgroundColor: '#071827',
+    backgroundColor: colors.background,
   },
   content: {
     flexGrow: 1,
-    padding: 16,
-    paddingTop: 12,
-    paddingBottom: 42,
+    width: '100%',
+    maxWidth: layout.contentMaxWidth,
+    alignSelf: 'center',
+    paddingHorizontal: layout.screenPaddingHorizontal,
+    paddingTop: spacing.sm,
+    paddingBottom: layout.bottomNavigationContentInset,
   },
   appBanner: {
-    minHeight: 72,
-    borderRadius: 8,
+    minHeight: layout.headerMinHeight,
+    borderRadius: radii.lg,
     borderWidth: 1,
-    borderColor: '#eadccb',
-    backgroundColor: '#fffaf3',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    marginTop: 6,
-    marginBottom: 16,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceRaised,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    marginTop: spacing.xs,
+    marginBottom: spacing.lg,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: 10,
+    gap: spacing.sm,
+    ...elevations.low,
   },
   bannerBrand: {
     flex: 1,
@@ -10256,8 +11014,8 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   bannerLogoMark: {
-    width: 52,
-    height: 50,
+    width: 48,
+    height: 46,
     flexShrink: 0,
   },
   bannerBrandText: {
@@ -10271,29 +11029,27 @@ const styles = StyleSheet.create({
     minWidth: 0,
   },
   bannerName: {
-    color: '#071827',
+    color: colors.textPrimary,
     fontSize: 23,
     lineHeight: 27,
     fontWeight: '900',
     flexShrink: 1,
   },
   bannerNameMain: {
-    color: '#071827',
+    color: colors.textPrimary,
     fontWeight: '900',
   },
   bannerNameMainDark: {
-    color: '#fffaf3',
+    color: colors.textPrimary,
   },
   bannerNameGo: {
-    color: '#66c5a8',
+    color: colors.teal,
     fontWeight: '900',
     flexShrink: 0,
   },
   bannerTagline: {
-    color: '#526170',
-    fontSize: 11,
-    lineHeight: 14,
-    fontWeight: '900',
+    color: colors.textSecondary,
+    ...typography.caption,
     marginTop: 1,
   },
   bannerActions: {
@@ -10304,38 +11060,80 @@ const styles = StyleSheet.create({
     flexShrink: 0,
   },
   accountIconButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: controls.iconButtonSize,
+    height: controls.iconButtonSize,
+    borderRadius: radii.pill,
     borderWidth: 1,
-    borderColor: '#eadccb',
-    backgroundColor: '#fffdf8',
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
     alignItems: 'center',
     justifyContent: 'center',
   },
   homeBox: {
-    backgroundColor: '#fffaf3',
+    backgroundColor: colors.surfaceRaised,
     borderWidth: 1,
-    borderColor: '#eadccb',
-    borderRadius: 8,
-    padding: 16,
-    marginBottom: 16,
-    gap: 16,
+    borderColor: colors.border,
+    borderRadius: radii.xl,
+    padding: spacing.lg,
+    marginBottom: spacing.lg,
+    gap: spacing.md,
+    ...elevations.low,
   },
   homeTitleBlock: {
-    gap: 2,
+    gap: spacing.micro,
+    alignItems: 'center',
   },
   homeTitle: {
-    color: '#071827',
-    fontSize: 24,
-    lineHeight: 30,
-    fontWeight: '900',
+    color: colors.textPrimary,
+    ...typography.title,
+    textAlign: 'center',
   },
   homeSubtitle: {
-    color: '#526170',
-    fontSize: 13,
-    lineHeight: 18,
-    fontWeight: '900',
+    color: colors.textSecondary,
+    ...typography.body,
+    textAlign: 'center',
+  },
+  homePeoplePill: {
+    minHeight: controls.minimumTouchTarget,
+    alignSelf: 'center',
+    borderRadius: radii.pill,
+    borderWidth: 1,
+    borderColor: semanticTones.people.border,
+    backgroundColor: semanticTones.people.soft,
+    paddingHorizontal: spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+  },
+  homePeoplePillText: {
+    color: colors.textPrimary,
+    ...typography.label,
+  },
+  homeActionChevron: {
+    marginLeft: 'auto',
+  },
+  homeUtilityRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.xs,
+  },
+  homeUtilityButton: {
+    flex: 1,
+    minWidth: 140,
+    minHeight: controls.buttonHeight,
+    borderRadius: radii.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    paddingHorizontal: spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.xs,
+  },
+  homeUtilityButtonText: {
+    color: colors.textPrimary,
+    ...typography.label,
   },
   homeActionGrid: {
     flexDirection: 'row',
@@ -10346,7 +11144,7 @@ const styles = StyleSheet.create({
     flex: 1,
     minWidth: 142,
     minHeight: 82,
-    borderRadius: 8,
+    borderRadius: radii.md,
     borderWidth: 1,
     borderColor: 'transparent',
     paddingHorizontal: 14,
@@ -10372,40 +11170,40 @@ const styles = StyleSheet.create({
     maxWidth: '100%',
   },
   homeNowButton: {
-    backgroundColor: '#178f79',
+    backgroundColor: colors.teal,
   },
   homeLaterButton: {
-    backgroundColor: '#071827',
+    backgroundColor: colors.surfaceInteractive,
   },
   homeSavedButton: {
-    backgroundColor: '#fffdf8',
-    borderColor: '#eadccb',
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
   },
   homeMainButtonText: {
-    color: '#fffaf3',
+    color: colors.textPrimary,
     fontSize: 16,
     lineHeight: 20,
     fontWeight: '900',
     textAlign: 'left',
   },
   homeMainButtonSubtext: {
-    color: '#f5d7c2',
+    color: colors.textSecondary,
     fontSize: 13,
     lineHeight: 18,
     fontWeight: '800',
   },
   homeSavedButtonText: {
-    color: '#071827',
+    color: colors.textPrimary,
   },
   homeSavedButtonSubtext: {
-    color: '#526170',
+    color: colors.textSecondary,
   },
   peopleGroupsEntry: {
     minHeight: 70,
-    borderRadius: 8,
+    borderRadius: radii.md,
     borderWidth: 1,
-    borderColor: '#eadccb',
-    backgroundColor: '#fffdf8',
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
     paddingHorizontal: 12,
     paddingVertical: 11,
     flexDirection: 'row',
@@ -10415,10 +11213,10 @@ const styles = StyleSheet.create({
   peopleGroupsIcon: {
     width: 38,
     height: 38,
-    borderRadius: 19,
-    backgroundColor: '#dff7ef',
+    borderRadius: radii.pill,
+    backgroundColor: colors.tealSoft,
     borderWidth: 1,
-    borderColor: '#66c5a8',
+    borderColor: colors.teal,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -10428,25 +11226,25 @@ const styles = StyleSheet.create({
     gap: 2,
   },
   peopleGroupsTitle: {
-    color: '#071827',
+    color: colors.textPrimary,
     fontSize: 15,
     lineHeight: 19,
     fontWeight: '900',
   },
   peopleGroupsSubtitle: {
-    color: '#526170',
+    color: colors.textSecondary,
     fontSize: 13,
     lineHeight: 18,
     fontWeight: '800',
   },
   nowBox: {
     borderWidth: 1,
-    borderColor: '#66c5a8',
-    borderRadius: 8,
-    backgroundColor: '#fffdf8',
-    padding: 14,
-    marginBottom: 16,
-    gap: 14,
+    borderColor: colors.teal,
+    borderRadius: radii.xl,
+    backgroundColor: colors.surfaceRaised,
+    padding: spacing.md,
+    marginBottom: spacing.lg,
+    gap: spacing.md,
   },
   nowHeaderRow: {
     flexDirection: 'row',
@@ -10460,49 +11258,55 @@ const styles = StyleSheet.create({
     gap: 3,
   },
   nowTitle: {
-    color: '#071827',
+    color: colors.textPrimary,
     fontSize: 24,
     lineHeight: 30,
     fontWeight: '900',
   },
   nowSubtitle: {
-    color: '#526170',
+    color: colors.textSecondary,
     fontSize: 13,
     lineHeight: 18,
     fontWeight: '800',
   },
   nowActionGrid: {
-    gap: 10,
+    gap: spacing.sm,
   },
   nowActionCard: {
-    minHeight: 92,
-    borderRadius: 8,
+    minHeight: 68,
+    borderRadius: radii.lg,
     borderWidth: 1,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
+    gap: spacing.sm,
   },
   nowFoodAction: {
-    backgroundColor: '#f23b35',
-    borderColor: '#ff8a7f',
+    backgroundColor: semanticTones.food.solid,
+    borderColor: semanticTones.food.border,
   },
   nowActivityAction: {
-    backgroundColor: '#dff7ef',
-    borderColor: '#66c5a8',
+    backgroundColor: semanticTones.activity.solid,
+    borderColor: semanticTones.activity.border,
   },
   nowPeopleAction: {
-    backgroundColor: '#fff7ed',
-    borderColor: '#eadccb',
+    backgroundColor: semanticTones.people.solid,
+    borderColor: semanticTones.people.border,
   },
   nowActionTitle: {
-    color: '#071827',
+    flex: 1,
+    color: semanticTones.people.foreground,
     fontSize: 20,
     lineHeight: 25,
     fontWeight: '900',
   },
   nowActionTitleLight: {
-    color: '#fffaf3',
+    color: semanticTones.food.foreground,
+  },
+  nowActionTitleDark: {
+    color: semanticTones.activity.foreground,
   },
   nowDiscoveryPanel: {
     gap: 12,
@@ -10514,18 +11318,18 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
   },
   nowPeopleMiniButton: {
-    minHeight: 38,
-    borderRadius: 8,
+    minHeight: controls.minimumTouchTarget,
+    borderRadius: radii.md,
     borderWidth: 1,
-    borderColor: '#eadccb',
-    backgroundColor: '#fff7ed',
+    borderColor: colors.border,
+    backgroundColor: colors.background,
     paddingHorizontal: 10,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 5,
   },
   nowPeopleMiniText: {
-    color: '#071827',
+    color: colors.textPrimary,
     fontSize: 12,
     lineHeight: 16,
     fontWeight: '900',
@@ -10536,32 +11340,32 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   nowCategoryChip: {
-    minHeight: 38,
-    borderRadius: 8,
+    minHeight: controls.chipHeight,
+    borderRadius: radii.md,
     borderWidth: 1,
-    borderColor: '#eadccb',
-    backgroundColor: '#fffdf8',
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
     paddingHorizontal: 12,
     justifyContent: 'center',
   },
   nowCategoryChipActive: {
-    backgroundColor: '#071827',
-    borderColor: '#071827',
+    backgroundColor: colors.surfaceInteractive,
+    borderColor: colors.borderStrong,
   },
   nowCategoryText: {
-    color: '#526170',
+    color: colors.textSecondary,
     fontSize: 13,
     lineHeight: 18,
     fontWeight: '900',
   },
   nowCategoryTextActive: {
-    color: '#fffaf3',
+    color: colors.textPrimary,
   },
   nowDecisionBar: {
     borderWidth: 1,
-    borderColor: '#66c5a8',
-    borderRadius: 8,
-    backgroundColor: '#eefaf5',
+    borderColor: colors.teal,
+    borderRadius: radii.md,
+    backgroundColor: colors.tealSoft,
     padding: 10,
     marginBottom: 10,
     flexDirection: 'row',
@@ -10574,23 +11378,23 @@ const styles = StyleSheet.create({
     minWidth: 0,
   },
   nowDecisionLabel: {
-    color: '#526170',
-    fontSize: 11,
-    lineHeight: 15,
+    color: colors.textSecondary,
+    fontSize: 12,
+    lineHeight: 16,
     fontWeight: '900',
     textTransform: 'uppercase',
   },
   nowDecisionTitle: {
-    color: '#071827',
+    color: colors.textPrimary,
     fontSize: 15,
     lineHeight: 20,
     fontWeight: '900',
   },
   nowCreatedPlanCard: {
     borderWidth: 1,
-    borderColor: '#66c5a8',
-    borderRadius: 8,
-    backgroundColor: '#eefaf5',
+    borderColor: colors.teal,
+    borderRadius: radii.md,
+    backgroundColor: colors.tealSoft,
     padding: 12,
     gap: 12,
   },
@@ -10600,20 +11404,20 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   nowCreatedEyebrow: {
-    color: '#178f79',
+    color: colors.teal,
     fontSize: 12,
     lineHeight: 16,
     fontWeight: '900',
     textTransform: 'uppercase',
   },
   nowCreatedTitle: {
-    color: '#071827',
+    color: colors.textPrimary,
     fontSize: 20,
     lineHeight: 25,
     fontWeight: '900',
   },
   nowCreatedMeta: {
-    color: '#526170',
+    color: colors.textSecondary,
     fontSize: 12,
     lineHeight: 17,
     fontWeight: '800',
@@ -10621,19 +11425,19 @@ const styles = StyleSheet.create({
   nowCreatedIcon: {
     width: 42,
     height: 42,
-    borderRadius: 8,
-    backgroundColor: '#fffdf8',
+    borderRadius: radii.md,
+    backgroundColor: colors.surface,
     borderWidth: 1,
-    borderColor: '#c7eadf',
+    borderColor: colors.borderStrong,
     alignItems: 'center',
     justifyContent: 'center',
   },
   nowDestinationRow: {
-    minHeight: 42,
-    borderRadius: 8,
+    minHeight: controls.minimumTouchTarget,
+    borderRadius: radii.md,
     borderWidth: 1,
-    borderColor: '#c7eadf',
-    backgroundColor: '#fffdf8',
+    borderColor: colors.borderStrong,
+    backgroundColor: colors.surface,
     paddingHorizontal: 10,
     flexDirection: 'row',
     alignItems: 'center',
@@ -10643,7 +11447,7 @@ const styles = StyleSheet.create({
   nowDestinationName: {
     flex: 1,
     minWidth: 0,
-    color: '#071827',
+    color: colors.textPrimary,
     fontSize: 15,
     lineHeight: 20,
     fontWeight: '900',
@@ -10655,13 +11459,13 @@ const styles = StyleSheet.create({
   },
   nowPeopleScreen: {
     flex: 1,
-    backgroundColor: '#fffaf3',
+    backgroundColor: colors.surface,
   },
   nowPeopleHeader: {
     paddingHorizontal: 16,
     paddingVertical: 14,
     borderBottomWidth: 1,
-    borderBottomColor: '#eadccb',
+    borderBottomColor: colors.border,
     flexDirection: 'row',
     alignItems: 'flex-start',
     justifyContent: 'space-between',
@@ -10675,7 +11479,7 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   nowPeopleSectionTitle: {
-    color: '#071827',
+    color: colors.textPrimary,
     fontSize: 17,
     lineHeight: 22,
     fontWeight: '900',
@@ -10685,10 +11489,10 @@ const styles = StyleSheet.create({
   },
   nowPersonRow: {
     minHeight: 60,
-    borderRadius: 8,
+    borderRadius: radii.md,
     borderWidth: 1,
-    borderColor: '#eadccb',
-    backgroundColor: '#fffdf8',
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
     paddingHorizontal: 12,
     paddingVertical: 10,
     flexDirection: 'row',
@@ -10696,19 +11500,19 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   nowPersonRowSelected: {
-    borderColor: '#66c5a8',
-    backgroundColor: '#eefaf5',
+    borderColor: colors.teal,
+    backgroundColor: colors.tealSoft,
   },
   nowPersonAvatar: {
     width: 36,
     height: 36,
-    borderRadius: 18,
-    backgroundColor: '#071827',
+    borderRadius: radii.xl,
+    backgroundColor: colors.surfaceInteractive,
     alignItems: 'center',
     justifyContent: 'center',
   },
   nowPersonAvatarText: {
-    color: '#fffaf3',
+    color: colors.textPrimary,
     fontSize: 14,
     lineHeight: 18,
     fontWeight: '900',
@@ -10716,7 +11520,7 @@ const styles = StyleSheet.create({
   nowPersonName: {
     flex: 1,
     minWidth: 0,
-    color: '#071827',
+    color: colors.textPrimary,
     fontSize: 15,
     lineHeight: 20,
     fontWeight: '900',
@@ -10724,10 +11528,10 @@ const styles = StyleSheet.create({
   nowGroupAvatar: {
     width: 36,
     height: 36,
-    borderRadius: 8,
-    backgroundColor: '#dff7ef',
+    borderRadius: radii.md,
+    backgroundColor: colors.tealSoft,
     borderWidth: 1,
-    borderColor: '#66c5a8',
+    borderColor: colors.teal,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -10737,7 +11541,7 @@ const styles = StyleSheet.create({
     gap: 2,
   },
   nowGroupMembers: {
-    color: '#526170',
+    color: colors.textSecondary,
     fontSize: 12,
     lineHeight: 16,
     fontWeight: '800',
@@ -10759,7 +11563,7 @@ const styles = StyleSheet.create({
     marginBottom: 0,
   },
   setupLabel: {
-    color: '#526170',
+    color: colors.textSecondary,
     fontSize: 12,
     lineHeight: 16,
     fontWeight: '900',
@@ -10773,26 +11577,36 @@ const styles = StyleSheet.create({
   },
   setupPeopleSummary: {
     flex: 1,
-    color: '#526170',
+    color: colors.textSecondary,
     fontSize: 12,
     lineHeight: 16,
     fontWeight: '800',
     textAlign: 'right',
   },
   inferredPlanTypeBox: {
+    minHeight: controls.inputHeight,
     borderWidth: 1,
-    borderColor: '#eadccb',
-    borderRadius: 8,
-    backgroundColor: '#fffdf8',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    gap: 3,
+    borderColor: colors.border,
+    borderRadius: radii.lg,
+    backgroundColor: colors.surfaceRaised,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  inferredPlanTypeTextBlock: {
+    flex: 1,
+    minWidth: 0,
+    gap: spacing.hairline,
   },
   inferredPlanTypeText: {
-    color: '#071827',
-    fontSize: 14,
-    lineHeight: 19,
-    fontWeight: '900',
+    color: colors.textPrimary,
+    ...typography.bodyStrong,
+  },
+  inferredPlanTypeHint: {
+    color: colors.textSecondary,
+    ...typography.caption,
   },
   setupActions: {
     flexDirection: 'row',
@@ -10800,53 +11614,56 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   hero: {
-    backgroundColor: '#fffaf3',
-    borderRadius: 8,
+    width: '100%',
+    maxWidth: 560,
+    alignSelf: 'center',
+    backgroundColor: colors.surface,
+    borderRadius: radii.md,
     paddingHorizontal: 10,
     paddingTop: 12,
     paddingBottom: 12,
     marginTop: 12,
     marginBottom: 16,
     borderWidth: 1,
-    borderColor: '#eadccb',
+    borderColor: colors.border,
   },
   lightHero: {
-    backgroundColor: '#fffaf3',
-    borderColor: '#eadccb',
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
   },
   darkHero: {
-    backgroundColor: '#fffaf3',
-    borderColor: '#2a3f52',
+    backgroundColor: colors.surfaceRaised,
+    borderColor: colors.borderStrong,
   },
   webHero: {
-    backgroundColor: '#f8fffc',
-    borderColor: '#b7e5d6',
+    backgroundColor: colors.surfaceRaised,
+    borderColor: colors.borderStrong,
   },
   darkPanel: {
-    backgroundColor: '#102338',
-    borderColor: '#2a3f52',
+    backgroundColor: colors.surfaceRaised,
+    borderColor: colors.borderStrong,
   },
   darkAccentPanel: {
-    backgroundColor: '#123a35',
-    borderColor: '#66c5a8',
+    backgroundColor: semanticTones.people.soft,
+    borderColor: colors.teal,
   },
   darkCard: {
-    backgroundColor: '#102338',
-    borderColor: '#2a3f52',
+    backgroundColor: colors.surfaceRaised,
+    borderColor: colors.borderStrong,
   },
   darkModalCard: {
-    backgroundColor: '#102338',
-    borderColor: '#2a3f52',
+    backgroundColor: colors.surfaceRaised,
+    borderColor: colors.borderStrong,
   },
   darkText: {
-    color: '#fffaf3',
+    color: colors.textPrimary,
   },
   darkMutedText: {
-    color: '#d8c8b7',
+    color: colors.textSecondary,
   },
   darkChip: {
-    backgroundColor: '#071827',
-    borderColor: '#2a3f52',
+    backgroundColor: colors.surfaceInteractive,
+    borderColor: colors.borderStrong,
   },
   wordmarkBlock: {
     alignItems: 'center',
@@ -10868,30 +11685,34 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   authCard: {
-    backgroundColor: '#fffaf3',
+    width: '100%',
+    maxWidth: 560,
+    alignSelf: 'center',
+    backgroundColor: colors.surface,
     borderWidth: 1,
-    borderColor: '#eadccb',
-    borderRadius: 8,
+    borderColor: colors.border,
+    borderRadius: radii.md,
     padding: 16,
+    ...elevations.low,
   },
   webAuthCard: {
-    backgroundColor: '#eefaf5',
-    borderColor: '#66c5a8',
+    backgroundColor: colors.surfaceRaised,
+    borderColor: colors.borderStrong,
   },
   authTitle: {
-    color: '#071827',
+    color: colors.textPrimary,
     fontSize: 24,
     fontWeight: '900',
     marginBottom: 8,
   },
   authCopy: {
-    color: '#526170',
+    color: colors.textSecondary,
     fontSize: 15,
     lineHeight: 21,
     marginBottom: 14,
   },
   authHint: {
-    color: '#526170',
+    color: colors.textSecondary,
     fontWeight: '800',
   },
   alphaGateShell: {
@@ -10901,41 +11722,41 @@ const styles = StyleSheet.create({
   },
   testerDropdown: {
     borderWidth: 1,
-    borderColor: '#eadccb',
-    borderRadius: 8,
+    borderColor: colors.border,
+    borderRadius: radii.md,
     overflow: 'hidden',
-    backgroundColor: '#fffdf8',
+    backgroundColor: colors.surface,
   },
   webTesterDropdown: {
-    borderColor: '#b7e5d6',
-    backgroundColor: '#f8fffc',
+    borderColor: colors.borderStrong,
+    backgroundColor: colors.surfaceRaised,
   },
   testerOption: {
     minHeight: 48,
     justifyContent: 'center',
     paddingHorizontal: 14,
     borderBottomWidth: 1,
-    borderBottomColor: '#f0e3d4',
+    borderBottomColor: colors.divider,
   },
   webTesterOption: {
-    borderBottomColor: '#d6f2e9',
+    borderBottomColor: colors.borderStrong,
   },
   testerOptionText: {
-    color: '#071827',
+    color: colors.textPrimary,
     fontSize: 16,
     fontWeight: '900',
   },
   authFinePrint: {
-    color: '#6b7280',
+    color: colors.textTertiary,
     fontSize: 12,
     lineHeight: 17,
     marginTop: 12,
   },
   usageBox: {
-    backgroundColor: '#071827',
+    backgroundColor: colors.surfaceInteractive,
     borderWidth: 1,
-    borderColor: '#f23b35',
-    borderRadius: 8,
+    borderColor: semanticTones.primary.border,
+    borderRadius: radii.md,
     padding: 12,
     marginBottom: 14,
     alignItems: 'stretch',
@@ -10945,12 +11766,12 @@ const styles = StyleSheet.create({
     gap: 3,
   },
   usageName: {
-    color: '#fffaf3',
+    color: colors.textPrimary,
     fontWeight: '900',
     fontSize: 15,
   },
   usageText: {
-    color: '#f5d7c2',
+    color: colors.textSecondary,
     fontSize: 12,
     fontWeight: '700',
   },
@@ -10963,7 +11784,7 @@ const styles = StyleSheet.create({
   accountOverlay: {
     flex: 1,
     position: 'relative',
-    backgroundColor: 'rgba(7, 24, 39, 0.18)',
+    backgroundColor: colors.scrim,
     alignItems: 'flex-end',
     paddingTop: 76,
     paddingHorizontal: 16,
@@ -10972,10 +11793,10 @@ const styles = StyleSheet.create({
     width: '100%',
     maxWidth: 320,
     zIndex: 1,
-    borderRadius: 8,
+    borderRadius: radii.md,
     borderWidth: 1,
-    borderColor: '#eadccb',
-    backgroundColor: '#fffaf3',
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
     padding: 12,
     gap: 12,
   },
@@ -10987,10 +11808,10 @@ const styles = StyleSheet.create({
   accountAvatar: {
     width: 42,
     height: 42,
-    borderRadius: 21,
-    backgroundColor: '#fffdf8',
+    borderRadius: radii.pill,
+    backgroundColor: colors.surface,
     borderWidth: 1,
-    borderColor: '#eadccb',
+    borderColor: colors.border,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -11000,12 +11821,12 @@ const styles = StyleSheet.create({
     gap: 2,
   },
   accountName: {
-    color: '#071827',
+    color: colors.textPrimary,
     fontSize: 18,
     fontWeight: '900',
   },
   accountUsage: {
-    color: '#526170',
+    color: colors.textSecondary,
     fontSize: 12,
     lineHeight: 17,
     fontWeight: '800',
@@ -11014,14 +11835,14 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   accountSettingLabel: {
-    color: '#526170',
+    color: colors.textSecondary,
     fontSize: 12,
     lineHeight: 16,
     fontWeight: '900',
     textTransform: 'uppercase',
   },
   accountSettingValue: {
-    color: '#071827',
+    color: colors.textPrimary,
     fontSize: 15,
     lineHeight: 20,
     fontWeight: '900',
@@ -11034,21 +11855,21 @@ const styles = StyleSheet.create({
   },
   toastBox: {
     alignSelf: 'center',
-    backgroundColor: '#ffd9cf',
+    backgroundColor: colors.coralSoft,
     borderWidth: 1,
-    borderColor: '#f23b35',
-    borderRadius: 8,
+    borderColor: semanticTones.primary.border,
+    borderRadius: radii.md,
     paddingHorizontal: 14,
     paddingVertical: 10,
     marginBottom: 14,
   },
   toastText: {
-    color: '#071827',
+    color: colors.textPrimary,
     fontSize: 14,
     fontWeight: '900',
   },
   eyebrow: {
-    color: '#f23b35',
+    color: colors.coral,
     fontSize: 12,
     fontWeight: '900',
     letterSpacing: 0,
@@ -11056,10 +11877,10 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   lightEyebrow: {
-    color: '#f23b35',
+    color: colors.coral,
   },
   eyebrowDark: {
-    color: '#f23b35',
+    color: colors.coral,
     fontSize: 12,
     fontWeight: '900',
     letterSpacing: 0,
@@ -11067,7 +11888,7 @@ const styles = StyleSheet.create({
     marginBottom: 3,
   },
   title: {
-    color: '#071827',
+    color: colors.textPrimary,
     fontSize: 31,
     fontWeight: '900',
   },
@@ -11076,15 +11897,15 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
   brandTitleMain: {
-    color: '#071827',
+    color: colors.textPrimary,
     fontWeight: '900',
   },
   brandTitleGo: {
-    color: '#ff3b30',
+    color: colors.red,
     fontWeight: '900',
   },
   lightTitle: {
-    color: '#111827',
+    color: colors.textPrimary,
   },
   taglineRow: {
     flexDirection: 'row',
@@ -11094,7 +11915,7 @@ const styles = StyleSheet.create({
     marginTop: 10,
   },
   taglineText: {
-    color: '#071827',
+    color: colors.textPrimary,
     fontSize: 13,
     fontWeight: '900',
     letterSpacing: 4,
@@ -11102,8 +11923,8 @@ const styles = StyleSheet.create({
   taglinePin: {
     width: 16,
     height: 21,
-    borderRadius: 10,
-    backgroundColor: '#ef4444',
+    borderRadius: radii.md,
+    backgroundColor: colors.red,
     alignItems: 'center',
     justifyContent: 'center',
     transform: [{ rotate: '45deg' }],
@@ -11112,17 +11933,17 @@ const styles = StyleSheet.create({
     width: 6,
     height: 6,
     borderRadius: 3,
-    backgroundColor: '#fffaf3',
+    backgroundColor: colors.surface,
   },
   heroCopy: {
-    color: '#d1fae5',
+    color: colors.greenSoft,
     marginTop: 10,
     marginBottom: 14,
     fontSize: 15,
     lineHeight: 21,
   },
   lightHeroCopy: {
-    color: '#526170',
+    color: colors.textSecondary,
   },
   filterTabs: {
     flexDirection: 'row',
@@ -11131,44 +11952,44 @@ const styles = StyleSheet.create({
     marginBottom: 14,
   },
   filterTab: {
-    minHeight: 36,
-    borderRadius: 8,
+    minHeight: controls.minimumTouchTarget,
+    borderRadius: radii.md,
     paddingHorizontal: 14,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#fffdf8',
+    backgroundColor: colors.surface,
     borderWidth: 1,
-    borderColor: '#eadccb',
+    borderColor: colors.border,
   },
   filterTabActive: {
-    backgroundColor: '#ffd9cf',
-    borderColor: '#ff5a4f',
+    backgroundColor: colors.coralSoft,
+    borderColor: colors.coral,
   },
   filterTabText: {
-    color: '#526170',
+    color: colors.textSecondary,
     fontWeight: '900',
   },
   filterTabTextActive: {
-    color: '#071827',
+    color: colors.textPrimary,
   },
   statusPill: {
-    borderRadius: 999,
+    borderRadius: radii.pill,
     paddingHorizontal: 10,
     paddingVertical: 7,
   },
   statusGood: {
-    backgroundColor: '#dcfce7',
+    backgroundColor: colors.greenSoft,
   },
   statusBad: {
-    backgroundColor: '#fee2e2',
+    backgroundColor: colors.redSoft,
   },
   statusText: {
-    color: '#052e16',
+    color: colors.textPrimary,
     fontSize: 12,
     fontWeight: '900',
   },
   provider: {
-    color: '#64748b',
+    color: colors.textTertiary,
     marginTop: 5,
     fontSize: 14,
   },
@@ -11176,13 +11997,13 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   sectionTitle: {
-    color: '#071827',
+    color: colors.textPrimary,
     fontSize: 17,
     fontWeight: '900',
     marginBottom: 10,
   },
   lightSectionTitle: {
-    color: '#111827',
+    color: colors.textPrimary,
   },
   chipWrap: {
     flexDirection: 'row',
@@ -11190,29 +12011,30 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   chip: {
+    minHeight: controls.chipHeight,
     borderWidth: 1,
-    borderColor: '#eadccb',
-    borderRadius: 999,
+    borderColor: colors.border,
+    borderRadius: radii.pill,
     paddingHorizontal: 12,
     paddingVertical: 9,
-    backgroundColor: '#fffdf8',
+    backgroundColor: colors.surface,
   },
   chipActive: {
-    backgroundColor: '#dff7ef',
-    borderColor: '#66c5a8',
+    backgroundColor: colors.tealSoft,
+    borderColor: colors.teal,
   },
   chipText: {
-    color: '#526170',
+    color: colors.textSecondary,
     fontWeight: '700',
   },
   chipTextActive: {
-    color: '#071827',
+    color: colors.textPrimary,
   },
   sessionBox: {
-    backgroundColor: '#fffdf8',
+    backgroundColor: colors.surface,
     borderWidth: 1,
-    borderColor: '#66c5a8',
-    borderRadius: 8,
+    borderColor: colors.teal,
+    borderRadius: radii.md,
     padding: 14,
     marginBottom: 18,
     gap: 12,
@@ -11234,13 +12056,13 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   sessionMetaText: {
-    color: '#526170',
+    color: colors.textSecondary,
     fontSize: 13,
     lineHeight: 18,
     fontWeight: '700',
   },
   sessionSubhead: {
-    color: '#071827',
+    color: colors.textPrimary,
     fontSize: 14,
     fontWeight: '900',
     marginBottom: 2,
@@ -11253,18 +12075,18 @@ const styles = StyleSheet.create({
   },
   sessionResumeItem: {
     borderWidth: 1,
-    borderColor: '#c7eadf',
-    borderRadius: 8,
-    backgroundColor: '#f3fbf7',
+    borderColor: colors.borderStrong,
+    borderRadius: radii.md,
+    backgroundColor: colors.surfaceRaised,
     padding: 10,
   },
   sessionResumeTitle: {
-    color: '#071827',
+    color: colors.textPrimary,
     fontSize: 14,
     fontWeight: '900',
   },
   sessionResumeMeta: {
-    color: '#526170',
+    color: colors.textSecondary,
     fontSize: 12,
     fontWeight: '700',
     marginTop: 3,
@@ -11275,19 +12097,19 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   sessionParticipantPill: {
-    borderRadius: 999,
+    borderRadius: radii.pill,
     borderWidth: 1,
-    borderColor: '#c7eadf',
-    backgroundColor: '#f3fbf7',
+    borderColor: colors.borderStrong,
+    backgroundColor: colors.surfaceRaised,
     paddingHorizontal: 10,
     paddingVertical: 7,
   },
   sessionOwnerPill: {
-    backgroundColor: '#ffd9cf',
-    borderColor: '#ff5a4f',
+    backgroundColor: colors.coralSoft,
+    borderColor: colors.coral,
   },
   sessionParticipantText: {
-    color: '#071827',
+    color: colors.textPrimary,
     fontSize: 12,
     fontWeight: '900',
   },
@@ -11304,9 +12126,9 @@ const styles = StyleSheet.create({
   },
   sessionSuggestionCard: {
     borderWidth: 1,
-    borderColor: '#eadccb',
-    borderRadius: 8,
-    backgroundColor: '#fff7ed',
+    borderColor: colors.border,
+    borderRadius: radii.md,
+    backgroundColor: colors.background,
     padding: 12,
     gap: 7,
   },
@@ -11317,7 +12139,7 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   sessionSuggestionTitle: {
-    color: '#071827',
+    color: colors.textPrimary,
     fontSize: 15,
     fontWeight: '900',
     flex: 1,
@@ -11325,9 +12147,9 @@ const styles = StyleSheet.create({
   sessionVoteCount: {
     minWidth: 32,
     minHeight: 28,
-    borderRadius: 8,
-    backgroundColor: '#071827',
-    color: '#fffaf3',
+    borderRadius: radii.md,
+    backgroundColor: colors.surfaceInteractive,
+    color: colors.textPrimary,
     textAlign: 'center',
     textAlignVertical: 'center',
     paddingTop: Platform.OS === 'ios' ? 5 : 4,
@@ -11335,51 +12157,51 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
   sessionSuggestionMeta: {
-    color: '#526170',
+    color: colors.textSecondary,
     fontSize: 12,
     lineHeight: 17,
     fontWeight: '700',
   },
   sessionFinalBox: {
     borderTopWidth: 1,
-    borderTopColor: '#c7eadf',
+    borderTopColor: colors.borderStrong,
     paddingTop: 12,
     gap: 10,
   },
   sessionRecommendationBox: {
     borderWidth: 1,
-    borderColor: '#c7eadf',
-    borderRadius: 8,
-    backgroundColor: '#f3fbf7',
+    borderColor: colors.borderStrong,
+    borderRadius: radii.md,
+    backgroundColor: colors.surfaceRaised,
     padding: 12,
     gap: 7,
   },
   sessionRecommendationLine: {
-    color: '#071827',
+    color: colors.textPrimary,
     fontSize: 14,
     fontWeight: '900',
   },
   planBox: {
-    backgroundColor: '#fffdf8',
+    backgroundColor: colors.surface,
     borderWidth: 1,
-    borderColor: '#ffc84a',
-    borderRadius: 8,
+    borderColor: colors.amber,
+    borderRadius: radii.md,
     padding: 14,
     marginBottom: 16,
   },
   visitorPlanBox: {
     borderWidth: 1,
-    borderColor: '#66c5a8',
-    borderRadius: 8,
-    backgroundColor: '#fffdf8',
+    borderColor: colors.teal,
+    borderRadius: radii.md,
+    backgroundColor: colors.surface,
     padding: 14,
     gap: 14,
   },
   betaPlanDetailCard: {
     borderWidth: 1,
-    borderColor: '#66c5a8',
-    borderRadius: 8,
-    backgroundColor: '#f8fffc',
+    borderColor: colors.teal,
+    borderRadius: radii.md,
+    backgroundColor: colors.surfaceRaised,
     padding: 12,
     gap: 12,
     marginBottom: 14,
@@ -11396,52 +12218,52 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   betaPlanEyebrow: {
-    color: '#526170',
-    fontSize: 11,
-    lineHeight: 15,
+    color: colors.textSecondary,
+    fontSize: 12,
+    lineHeight: 16,
     fontWeight: '900',
     textTransform: 'uppercase',
   },
   betaPlanTitle: {
-    color: '#071827',
+    color: colors.textPrimary,
     fontSize: 22,
     lineHeight: 27,
     fontWeight: '900',
   },
   betaSummaryLine: {
-    color: '#526170',
+    color: colors.textSecondary,
     fontSize: 13,
     lineHeight: 18,
     fontWeight: '800',
   },
   betaPlanTitleInput: {
-    minHeight: 42,
-    borderRadius: 8,
+    minHeight: controls.inputHeight,
+    borderRadius: radii.md,
     borderWidth: 1,
-    borderColor: '#eadccb',
-    backgroundColor: '#fffdf8',
-    color: '#071827',
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    color: colors.textPrimary,
     paddingHorizontal: 10,
     fontSize: 20,
     lineHeight: 24,
     fontWeight: '900',
   },
   betaStatusPill: {
-    borderRadius: 999,
-    backgroundColor: '#fff0d1',
+    borderRadius: radii.pill,
+    backgroundColor: colors.amberSoft,
     borderWidth: 1,
-    borderColor: '#ffc84a',
+    borderColor: colors.amber,
     paddingHorizontal: 10,
     paddingVertical: 6,
   },
   betaStatusPillLocked: {
-    backgroundColor: '#dff7ef',
-    borderColor: '#66c5a8',
+    backgroundColor: colors.tealSoft,
+    borderColor: colors.teal,
   },
   betaStatusText: {
-    color: '#071827',
-    fontSize: 11,
-    lineHeight: 14,
+    color: colors.textPrimary,
+    fontSize: 12,
+    lineHeight: 16,
     fontWeight: '900',
     textTransform: 'uppercase',
   },
@@ -11450,13 +12272,14 @@ const styles = StyleSheet.create({
   },
   betaDetailsBox: {
     borderWidth: 1,
-    borderColor: '#d6f2e9',
-    borderRadius: 8,
-    backgroundColor: '#f3fbf7',
+    borderColor: colors.borderStrong,
+    borderRadius: radii.md,
+    backgroundColor: colors.surfaceRaised,
     padding: 10,
     gap: 10,
   },
   betaDetailsHeader: {
+    minHeight: controls.minimumTouchTarget,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -11467,35 +12290,94 @@ const styles = StyleSheet.create({
   },
   betaFinalBox: {
     borderWidth: 1,
-    borderColor: '#eadccb',
-    borderRadius: 8,
-    backgroundColor: '#fff7ed',
+    borderColor: colors.border,
+    borderRadius: radii.md,
+    backgroundColor: colors.background,
     padding: 10,
     gap: 3,
   },
   betaFinalLabel: {
-    color: '#526170',
-    fontSize: 11,
-    lineHeight: 15,
+    color: colors.textSecondary,
+    fontSize: 12,
+    lineHeight: 16,
     fontWeight: '900',
     textTransform: 'uppercase',
   },
   betaFinalValue: {
-    color: '#071827',
+    color: colors.textPrimary,
     fontSize: 15,
     lineHeight: 20,
     fontWeight: '900',
   },
+  visitorRouteSection: {
+    borderWidth: 1,
+    borderColor: semanticTones.route.border,
+    borderRadius: radii.lg,
+    backgroundColor: semanticTones.route.soft,
+    padding: spacing.sm,
+    gap: spacing.sm,
+  },
+  visitorRouteHeading: {
+    flex: 1,
+    minWidth: 0,
+    gap: spacing.hairline,
+  },
+  visitorRouteList: {
+    gap: spacing.xs,
+  },
+  visitorRouteStop: {
+    minHeight: 64,
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+    borderRadius: radii.md,
+    backgroundColor: colors.surfaceRaised,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  visitorRouteIndex: {
+    ...typography.label,
+    width: 32,
+    height: 32,
+    borderRadius: radii.pill,
+    color: colors.textInverse,
+    textAlign: 'center',
+    lineHeight: 32,
+  },
+  visitorRouteStopText: {
+    flex: 1,
+    minWidth: 0,
+    gap: spacing.hairline,
+  },
+  visitorRouteType: {
+    ...typography.eyebrow,
+  },
+  visitorRouteTypeFood: {
+    color: semanticTones.food.accent,
+  },
+  visitorRouteTypeActivity: {
+    color: semanticTones.activity.accent,
+  },
+  visitorRouteName: {
+    color: colors.textPrimary,
+    ...typography.bodyStrong,
+  },
+  visitorRouteMeta: {
+    color: colors.textSecondary,
+    ...typography.caption,
+  },
   betaPrimaryActionBox: {
     borderWidth: 1,
-    borderColor: '#c7eadf',
-    borderRadius: 8,
-    backgroundColor: '#f3fbf7',
+    borderColor: colors.borderStrong,
+    borderRadius: radii.md,
+    backgroundColor: colors.surfaceRaised,
     padding: 12,
     gap: 10,
   },
   betaPrimaryPrompt: {
-    color: '#071827',
+    color: colors.textPrimary,
     fontSize: 18,
     lineHeight: 23,
     fontWeight: '900',
@@ -11508,8 +12390,8 @@ const styles = StyleSheet.create({
   betaSearchButton: {
     flexGrow: 1,
     minWidth: 145,
-    minHeight: 50,
-    borderRadius: 8,
+    minHeight: controls.buttonHeight,
+    borderRadius: radii.lg,
     paddingHorizontal: 12,
     paddingVertical: 12,
     flexDirection: 'row',
@@ -11518,19 +12400,19 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   betaSearchButtonFood: {
-    backgroundColor: '#178f79',
+    backgroundColor: semanticTones.food.solid,
   },
   betaSearchButtonActivity: {
-    backgroundColor: '#ffc84a',
+    backgroundColor: semanticTones.activity.solid,
   },
   betaSearchButtonText: {
-    color: '#071827',
+    color: colors.textInverse,
     fontSize: 14,
     lineHeight: 18,
     fontWeight: '900',
   },
   betaSearchButtonTextLight: {
-    color: '#fffaf3',
+    color: colors.textInverse,
   },
   betaSection: {
     gap: 8,
@@ -11547,33 +12429,33 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   rsvpButton: {
-    minHeight: 38,
-    borderRadius: 8,
+    minHeight: controls.buttonHeight,
+    borderRadius: radii.md,
     borderWidth: 1,
-    borderColor: '#eadccb',
-    backgroundColor: '#fffdf8',
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
     paddingHorizontal: 10,
     paddingVertical: 8,
     justifyContent: 'center',
   },
   rsvpButtonActive: {
-    borderColor: '#66c5a8',
-    backgroundColor: '#178f79',
+    borderColor: colors.teal,
+    backgroundColor: colors.teal,
   },
   rsvpButtonText: {
-    color: '#071827',
+    color: colors.textPrimary,
     fontSize: 12,
     lineHeight: 16,
     fontWeight: '900',
   },
   rsvpButtonTextActive: {
-    color: '#fffaf3',
+    color: colors.textPrimary,
   },
   betaSuggestionRow: {
     borderWidth: 1,
-    borderColor: '#eadccb',
-    borderRadius: 8,
-    backgroundColor: '#fffdf8',
+    borderColor: colors.border,
+    borderRadius: radii.md,
+    backgroundColor: colors.surface,
     padding: 10,
     gap: 8,
     flexDirection: 'row',
@@ -11586,20 +12468,20 @@ const styles = StyleSheet.create({
     gap: 2,
   },
   betaSuggestionTitle: {
-    color: '#071827',
+    color: colors.textPrimary,
     fontSize: 14,
     lineHeight: 18,
     fontWeight: '900',
   },
   betaSuggestionMeta: {
-    color: '#526170',
+    color: colors.textSecondary,
     fontSize: 12,
     lineHeight: 16,
     fontWeight: '800',
   },
   betaSuggestionComposer: {
     borderTopWidth: 1,
-    borderTopColor: '#e6d7c5',
+    borderTopColor: colors.divider,
     paddingTop: 10,
     gap: 8,
   },
@@ -11614,16 +12496,16 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   betaLocalOnlyText: {
-    color: '#526170',
-    fontSize: 11,
-    lineHeight: 15,
+    color: colors.textSecondary,
+    fontSize: 12,
+    lineHeight: 16,
     fontWeight: '800',
   },
   planPeopleBox: {
     borderWidth: 1,
-    borderColor: '#c7eadf',
-    borderRadius: 8,
-    backgroundColor: '#f3fbf7',
+    borderColor: colors.borderStrong,
+    borderRadius: radii.md,
+    backgroundColor: colors.surfaceRaised,
     padding: 12,
     marginBottom: 14,
     gap: 10,
@@ -11640,23 +12522,23 @@ const styles = StyleSheet.create({
     gap: 2,
   },
   planPeopleTitle: {
-    color: '#071827',
+    color: colors.textPrimary,
     fontSize: 16,
     lineHeight: 20,
     fontWeight: '900',
   },
   planPeopleSummary: {
-    color: '#526170',
+    color: colors.textSecondary,
     fontSize: 13,
     lineHeight: 18,
     fontWeight: '900',
   },
   planPeopleAddButton: {
-    minHeight: 38,
-    borderRadius: 8,
+    minHeight: controls.minimumTouchTarget,
+    borderRadius: radii.md,
     borderWidth: 1,
-    borderColor: '#66c5a8',
-    backgroundColor: '#dff7ef',
+    borderColor: colors.teal,
+    backgroundColor: colors.tealSoft,
     paddingHorizontal: 10,
     paddingVertical: 8,
     flexDirection: 'row',
@@ -11666,26 +12548,26 @@ const styles = StyleSheet.create({
     flexShrink: 0,
   },
   planPeopleAddText: {
-    color: '#071827',
+    color: colors.textPrimary,
     fontSize: 12,
     lineHeight: 16,
     fontWeight: '900',
   },
   planPeoplePicker: {
     borderTopWidth: 1,
-    borderTopColor: '#c7eadf',
+    borderTopColor: colors.borderStrong,
     paddingTop: 10,
     gap: 8,
   },
   planPeopleHint: {
-    color: '#526170',
+    color: colors.textSecondary,
     fontSize: 12,
     lineHeight: 17,
     fontWeight: '800',
   },
   lightPanel: {
-    backgroundColor: '#fffdf8',
-    borderColor: '#eadccb',
+    backgroundColor: colors.surface,
+    borderColor: colors.border,
   },
   planHeader: {
     alignItems: 'stretch',
@@ -11698,50 +12580,57 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-start',
     gap: 8,
   },
+  planStats: {
+    width: '100%',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.xs,
+  },
   planTitleBlock: {
     flex: 1,
     minWidth: 0,
     gap: 4,
   },
   planTitle: {
-    color: '#071827',
+    color: colors.textPrimary,
     fontSize: 20,
     fontWeight: '900',
     maxWidth: 210,
   },
   lockedPlanTitle: {
-    color: '#071827',
+    color: colors.textPrimary,
     fontSize: 20,
     lineHeight: 24,
     fontWeight: '900',
   },
   planTitleInput: {
     width: '100%',
-    minHeight: 40,
-    borderRadius: 8,
+    minHeight: controls.inputHeight,
+    borderRadius: radii.md,
     borderWidth: 1,
-    borderColor: '#eadccb',
-    backgroundColor: '#fffdf8',
-    color: '#071827',
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    color: colors.textPrimary,
     paddingHorizontal: 10,
     fontSize: 18,
     fontWeight: '900',
   },
   planMetaText: {
-    color: '#526170',
+    color: colors.textSecondary,
     fontSize: 12,
     lineHeight: 17,
     fontWeight: '800',
   },
   savedPlansBox: {
     borderWidth: 1,
-    borderColor: '#66c5a8',
-    borderRadius: 8,
+    borderColor: colors.teal,
+    borderRadius: radii.md,
     padding: 14,
     marginBottom: 16,
-    backgroundColor: '#fffdf8',
+    backgroundColor: colors.surface,
   },
   savedPlansHeader: {
+    minHeight: controls.minimumTouchTarget,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
@@ -11752,7 +12641,7 @@ const styles = StyleSheet.create({
     minWidth: 0,
   },
   savedPlansHint: {
-    color: '#526170',
+    color: colors.textSecondary,
     fontSize: 13,
     lineHeight: 18,
   },
@@ -11762,9 +12651,9 @@ const styles = StyleSheet.create({
   },
   savedPlanItem: {
     borderWidth: 1,
-    borderColor: '#eadccb',
-    borderRadius: 8,
-    backgroundColor: '#fff7ed',
+    borderColor: colors.border,
+    borderRadius: radii.md,
+    backgroundColor: colors.background,
     padding: 12,
     gap: 10,
   },
@@ -11772,17 +12661,17 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   savedPlanTitle: {
-    color: '#071827',
+    color: colors.textPrimary,
     fontSize: 16,
     fontWeight: '900',
   },
   savedPlanMeta: {
-    color: '#f23b35',
+    color: colors.coral,
     fontSize: 12,
     fontWeight: '800',
   },
   savedPlanStops: {
-    color: '#526170',
+    color: colors.textSecondary,
     fontSize: 13,
     lineHeight: 18,
   },
@@ -11792,7 +12681,7 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
   },
   startWithLabel: {
-    color: '#526170',
+    color: colors.textSecondary,
     fontSize: 12,
     fontWeight: '900',
     textAlign: 'center',
@@ -11808,26 +12697,22 @@ const styles = StyleSheet.create({
     flex: 1,
     minWidth: 118,
     minHeight: 86,
-    borderRadius: 8,
+    borderRadius: radii.md,
     borderWidth: 2,
     paddingHorizontal: 14,
     paddingVertical: 12,
     alignItems: 'center',
     justifyContent: 'center',
     gap: 4,
-    shadowColor: '#000',
-    shadowOpacity: 0.18,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 3,
+    ...elevations.low,
   },
   startChoiceFood: {
-    backgroundColor: '#f23b35',
-    borderColor: '#ff8a7f',
+    backgroundColor: semanticTones.food.solid,
+    borderColor: semanticTones.food.border,
   },
   startChoiceActivity: {
-    backgroundColor: '#dff7ef',
-    borderColor: '#66c5a8',
+    backgroundColor: semanticTones.activity.solid,
+    borderColor: semanticTones.activity.border,
   },
   startChoiceLabel: {
     fontSize: 18,
@@ -11836,33 +12721,34 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   startChoiceFoodLabel: {
-    color: '#fffaf3',
+    color: semanticTones.food.foreground,
   },
   startChoiceActivityLabel: {
-    color: '#071827',
+    color: semanticTones.activity.foreground,
   },
   routeImportBox: {
     marginTop: 12,
     borderWidth: 1,
-    borderColor: '#eadccb',
-    borderRadius: 8,
-    backgroundColor: '#fff7ed',
+    borderColor: colors.border,
+    borderRadius: radii.md,
+    backgroundColor: colors.background,
     padding: 12,
     gap: 8,
   },
   routeImportError: {
-    color: '#b91c1c',
+    color: colors.red,
     fontSize: 13,
     lineHeight: 18,
     fontWeight: '800',
   },
   lockedPlanCard: {
     borderWidth: 1,
-    borderColor: '#66c5a8',
-    borderRadius: 8,
-    backgroundColor: '#eefaf5',
-    padding: 10,
-    gap: 8,
+    borderColor: semanticTones.success.border,
+    borderRadius: radii.xl,
+    backgroundColor: colors.surfaceRaised,
+    padding: spacing.md,
+    gap: spacing.sm,
+    ...elevations.low,
   },
   lockedPlanCardHeader: {
     flexDirection: 'row',
@@ -11880,12 +12766,12 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   lockedPlanIconButton: {
-    width: 32,
-    height: 32,
-    borderRadius: 8,
+    width: controls.iconButtonSize,
+    height: controls.iconButtonSize,
+    borderRadius: radii.md,
     borderWidth: 1,
-    borderColor: '#d8efe7',
-    backgroundColor: '#fffdf8',
+    borderColor: colors.borderStrong,
+    backgroundColor: colors.surface,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -11896,22 +12782,29 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   lockedPlanMeta: {
-    color: '#526170',
+    color: colors.textSecondary,
     fontSize: 12,
     lineHeight: 16,
     fontWeight: '900',
   },
   lockedPlanLeave: {
-    color: '#526170',
-    fontSize: 11,
-    lineHeight: 15,
+    color: colors.textSecondary,
+    fontSize: 12,
+    lineHeight: 16,
     fontWeight: '800',
   },
   lockedPlanInvitees: {
-    color: '#526170',
-    fontSize: 11,
-    lineHeight: 15,
+    color: colors.textSecondary,
+    fontSize: 12,
+    lineHeight: 16,
     fontWeight: '800',
+  },
+  lockedPlanRsvp: {
+    marginTop: spacing.micro,
+    borderTopWidth: 1,
+    borderTopColor: colors.divider,
+    paddingTop: spacing.sm,
+    gap: spacing.xs,
   },
   lockedStopList: {
     gap: 6,
@@ -11925,11 +12818,11 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   lockedStopRow: {
-    minHeight: 34,
-    borderRadius: 8,
+    minHeight: controls.minimumTouchTarget,
+    borderRadius: radii.md,
     borderWidth: 1,
-    borderColor: '#d8efe7',
-    backgroundColor: '#fffdf8',
+    borderColor: colors.borderStrong,
+    backgroundColor: colors.surface,
     paddingHorizontal: 8,
     paddingVertical: 5,
     flexDirection: 'row',
@@ -11937,19 +12830,24 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   lockedStopIndex: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: '#f23b35',
-    color: '#fffaf3',
+    width: 28,
+    height: 28,
+    borderRadius: radii.pill,
+    color: colors.textInverse,
     textAlign: 'center',
-    lineHeight: 24,
+    lineHeight: 28,
     fontSize: 12,
     fontWeight: '900',
   },
+  stopIndexFood: {
+    backgroundColor: semanticTones.food.solid,
+  },
+  stopIndexActivity: {
+    backgroundColor: semanticTones.activity.solid,
+  },
   lockedStopTime: {
     width: 68,
-    color: '#178f79',
+    color: colors.teal,
     fontSize: 12,
     fontWeight: '900',
   },
@@ -11960,9 +12858,9 @@ const styles = StyleSheet.create({
     gap: 1,
   },
   lockedStopTravelText: {
-    color: '#526170',
-    fontSize: 9,
-    lineHeight: 11,
+    color: colors.textSecondary,
+    fontSize: 12,
+    lineHeight: 16,
     fontWeight: '900',
     textAlign: 'center',
   },
@@ -11972,7 +12870,7 @@ const styles = StyleSheet.create({
     gap: 3,
   },
   lockedStopName: {
-    color: '#071827',
+    color: colors.textPrimary,
     fontSize: 13,
     lineHeight: 17,
     fontWeight: '900',
@@ -11980,17 +12878,17 @@ const styles = StyleSheet.create({
   lockedStopCityPill: {
     alignSelf: 'flex-start',
     maxWidth: '100%',
-    borderRadius: 999,
-    backgroundColor: '#e9f8f2',
+    borderRadius: radii.pill,
+    backgroundColor: colors.tealSoft,
     borderWidth: 1,
-    borderColor: '#c9eadf',
+    borderColor: colors.borderStrong,
     paddingHorizontal: 6,
     paddingVertical: 1,
   },
   lockedStopCityText: {
-    color: '#178f79',
-    fontSize: 9,
-    lineHeight: 11,
+    color: colors.teal,
+    fontSize: 12,
+    lineHeight: 16,
     fontWeight: '900',
     textTransform: 'uppercase',
   },
@@ -12002,49 +12900,51 @@ const styles = StyleSheet.create({
   },
   stepRow: {
     flexDirection: 'row',
-    gap: 10,
+    gap: spacing.sm,
   },
   stepRail: {
-    width: 30,
+    width: 34,
     alignItems: 'center',
   },
   stepDot: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: '#f3e5d6',
+    width: 32,
+    height: 32,
+    borderRadius: radii.pill,
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+    backgroundColor: colors.surfaceMuted,
     alignItems: 'center',
     justifyContent: 'center',
   },
   stepDotActive: {
-    backgroundColor: '#f23b35',
+    backgroundColor: semanticTones.primary.solid,
   },
   stepNumber: {
-    color: '#526170',
+    color: colors.textSecondary,
     fontSize: 12,
     fontWeight: '900',
   },
   stepNumberActive: {
-    color: '#fffaf3',
+    color: colors.textPrimary,
   },
   stepLine: {
     width: 3,
     flex: 1,
     minHeight: 42,
-    backgroundColor: '#eadccb',
+    backgroundColor: colors.border,
   },
   stepCard: {
     flex: 1,
-    borderRadius: 8,
+    borderRadius: radii.lg,
     borderWidth: 1,
-    borderColor: '#eadccb',
-    backgroundColor: '#fffdf8',
-    padding: 11,
-    marginBottom: 10,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceRaised,
+    padding: spacing.md,
+    marginBottom: spacing.sm,
   },
   stepCardActive: {
-    borderColor: '#66c5a8',
-    backgroundColor: '#eefaf5',
+    borderColor: colors.teal,
+    backgroundColor: colors.surfaceRaised,
   },
   stepTopLine: {
     flexDirection: 'row',
@@ -12056,24 +12956,24 @@ const styles = StyleSheet.create({
     minWidth: 0,
   },
   stepTitle: {
-    color: '#f23b35',
+    color: colors.coral,
     fontSize: 12,
     fontWeight: '900',
     textTransform: 'uppercase',
   },
   stepValue: {
-    color: '#071827',
+    color: colors.textPrimary,
     fontSize: 15,
     fontWeight: '900',
     marginTop: 3,
   },
   stepValueActive: {
-    color: '#071827',
+    color: colors.textPrimary,
   },
   stepCityState: {
-    color: '#526170',
-    fontSize: 11,
-    lineHeight: 14,
+    color: colors.textSecondary,
+    fontSize: 12,
+    lineHeight: 16,
     fontWeight: '800',
     marginTop: 2,
   },
@@ -12081,23 +12981,23 @@ const styles = StyleSheet.create({
     minWidth: 48,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: 8,
+    borderRadius: radii.md,
     borderWidth: 1,
-    borderColor: '#c9eadf',
-    backgroundColor: '#f8fffc',
+    borderColor: colors.borderStrong,
+    backgroundColor: colors.surfaceRaised,
     paddingHorizontal: 6,
     paddingVertical: 5,
     gap: 2,
   },
   stepTravelDuration: {
-    color: '#178f79',
-    fontSize: 10,
-    lineHeight: 12,
+    color: colors.teal,
+    fontSize: 12,
+    lineHeight: 16,
     fontWeight: '900',
     textAlign: 'center',
   },
   stepDetail: {
-    color: '#526170',
+    color: colors.textSecondary,
     fontSize: 12,
     marginTop: 0,
   },
@@ -12108,10 +13008,10 @@ const styles = StyleSheet.create({
     marginTop: 3,
   },
   stepDetailActive: {
-    color: '#526170',
+    color: colors.textSecondary,
   },
   stepFeatureSummary: {
-    color: '#178f79',
+    color: colors.teal,
     fontSize: 12,
     fontWeight: '800',
     marginTop: 6,
@@ -12120,16 +13020,17 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   stepFeatureHeader: {
+    minHeight: controls.minimumTouchTarget,
     alignSelf: 'flex-start',
-    borderRadius: 8,
+    borderRadius: radii.md,
     borderWidth: 1,
-    borderColor: '#66c5a8',
-    backgroundColor: '#e9f8f2',
+    borderColor: colors.teal,
+    backgroundColor: colors.tealSoft,
     paddingHorizontal: 10,
     paddingVertical: 7,
   },
   stepFeatureHeaderText: {
-    color: '#071827',
+    color: colors.textPrimary,
     fontSize: 12,
     fontWeight: '900',
   },
@@ -12140,15 +13041,15 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   stepSelectedFeaturePill: {
-    borderRadius: 8,
-    backgroundColor: '#fff3d8',
+    borderRadius: radii.md,
+    backgroundColor: colors.amberSoft,
     borderWidth: 1,
-    borderColor: '#ffc84a',
+    borderColor: colors.amber,
     paddingHorizontal: 9,
     paddingVertical: 6,
   },
   stepSelectedFeatureText: {
-    color: '#071827',
+    color: colors.textPrimary,
     fontSize: 12,
     fontWeight: '900',
   },
@@ -12157,82 +13058,88 @@ const styles = StyleSheet.create({
     gap: 7,
   },
   stepFeatureItem: {
+    minHeight: controls.minimumTouchTarget,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    borderRadius: 8,
+    borderRadius: radii.md,
     borderWidth: 1,
-    borderColor: '#eadccb',
-    backgroundColor: '#fffdf8',
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
     paddingHorizontal: 10,
     paddingVertical: 8,
   },
   stepFeatureItemSelected: {
-    borderColor: '#66c5a8',
-    backgroundColor: '#dff7ef',
+    borderColor: colors.teal,
+    backgroundColor: colors.tealSoft,
   },
   stepFeatureCheck: {
     width: 20,
-    color: '#526170',
+    color: colors.textSecondary,
     fontSize: 14,
     fontWeight: '900',
     textAlign: 'center',
   },
   stepFeatureCheckSelected: {
-    color: '#178f79',
+    color: colors.teal,
   },
   stepFeatureText: {
     flex: 1,
-    color: '#526170',
+    color: colors.textSecondary,
     fontSize: 13,
     fontWeight: '800',
   },
   stepFeatureTextSelected: {
-    color: '#071827',
+    color: colors.textPrimary,
   },
   stepActionRow: {
     flexDirection: 'row',
-    flexWrap: 'nowrap',
-    gap: 6,
-    marginTop: 9,
+    flexWrap: 'wrap',
+    gap: spacing.xs,
+    marginTop: spacing.sm,
   },
   stepActionButton: {
-    width: 38,
-    height: 38,
-    borderRadius: 8,
+    width: controls.iconButtonSize,
+    height: controls.iconButtonSize,
+    borderRadius: radii.md,
     borderWidth: 1,
-    borderColor: '#eadccb',
-    backgroundColor: '#fffdf8',
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
     alignItems: 'center',
     justifyContent: 'center',
   },
   stepActionButtonActive: {
-    borderColor: '#66c5a8',
-    backgroundColor: '#dff7ef',
+    borderColor: colors.teal,
+    backgroundColor: colors.tealSoft,
+  },
+  stepActionButtonDanger: {
+    borderColor: semanticTones.danger.border,
+    backgroundColor: semanticTones.danger.soft,
   },
   itineraryAddRow: {
     flexDirection: 'row',
-    gap: 8,
+    flexWrap: 'wrap',
+    gap: spacing.xs,
     marginLeft: 40,
     marginBottom: 10,
   },
   timeEditor: {
-    borderRadius: 8,
+    borderRadius: radii.md,
     borderWidth: 1,
-    borderColor: '#eadccb',
-    backgroundColor: '#fffdf8',
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
     padding: 10,
     marginLeft: 40,
     marginBottom: 10,
   },
   timeEditorTitle: {
-    color: '#111827',
+    color: colors.textPrimary,
     fontSize: 13,
     fontWeight: '900',
     marginBottom: 8,
   },
   timeStepperGroupLabel: {
-    color: '#526170',
+    color: colors.textSecondary,
     fontSize: 12,
     fontWeight: '900',
     marginTop: 6,
@@ -12240,7 +13147,7 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
   },
   timeClockValue: {
-    color: '#111827',
+    color: colors.textPrimary,
     fontSize: 20,
     fontWeight: '900',
     marginBottom: 8,
@@ -12256,19 +13163,20 @@ const styles = StyleSheet.create({
   },
   arrivalTimeValue: {
     flex: 1,
-    color: '#111827',
+    color: colors.textPrimary,
     fontSize: 22,
     fontWeight: '900',
     textAlign: 'center',
   },
   arrivalButton: {
-    borderRadius: 8,
-    backgroundColor: '#fff3d8',
+    minHeight: controls.minimumTouchTarget,
+    borderRadius: radii.md,
+    backgroundColor: colors.amberSoft,
     paddingHorizontal: 12,
     paddingVertical: 11,
   },
   arrivalButtonText: {
-    color: '#111827',
+    color: colors.textPrimary,
     fontSize: 13,
     fontWeight: '900',
   },
@@ -12278,15 +13186,16 @@ const styles = StyleSheet.create({
   },
   arrivalSmallButton: {
     flex: 1,
-    borderRadius: 8,
+    minHeight: controls.minimumTouchTarget,
+    borderRadius: radii.md,
     borderWidth: 1,
-    borderColor: '#eadccb',
-    backgroundColor: '#fffdf8',
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
     paddingVertical: 10,
     alignItems: 'center',
   },
   arrivalSmallButtonText: {
-    color: '#526170',
+    color: colors.textSecondary,
     fontSize: 13,
     fontWeight: '900',
   },
@@ -12304,7 +13213,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   timeStepperLabel: {
-    color: '#526170',
+    color: colors.textSecondary,
     fontSize: 12,
     fontWeight: '800',
     marginBottom: 5,
@@ -12312,27 +13221,27 @@ const styles = StyleSheet.create({
   timeStepperControls: {
     flexDirection: 'row',
     alignItems: 'center',
-    borderRadius: 8,
+    borderRadius: radii.md,
     borderWidth: 1,
-    borderColor: '#eadccb',
-    backgroundColor: '#fffdf8',
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
     overflow: 'hidden',
   },
   timeStepperButton: {
-    width: 38,
-    height: 38,
+    width: controls.iconButtonSize,
+    height: controls.iconButtonSize,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#fff3d8',
+    backgroundColor: colors.amberSoft,
   },
   timeStepperButtonText: {
-    color: '#111827',
+    color: colors.textPrimary,
     fontSize: 18,
     fontWeight: '900',
   },
   timeStepperValue: {
     flex: 1,
-    color: '#111827',
+    color: colors.textPrimary,
     fontSize: 16,
     fontWeight: '900',
     textAlign: 'center',
@@ -12343,29 +13252,29 @@ const styles = StyleSheet.create({
   },
   bridgeBox: {
     borderWidth: 1,
-    borderColor: '#ffb6a9',
-    borderRadius: 8,
-    backgroundColor: '#fffdf8',
+    borderColor: semanticTones.food.border,
+    borderRadius: radii.md,
+    backgroundColor: colors.surface,
     marginBottom: 16,
     padding: 14,
     gap: 8,
   },
   webBridgeBox: {
-    borderColor: '#66c5a8',
-    backgroundColor: '#eefaf5',
+    borderColor: colors.teal,
+    backgroundColor: colors.tealSoft,
   },
   routeOriginBox: {
     borderTopWidth: 1,
-    borderTopColor: '#eadccb',
+    borderTopColor: colors.border,
     marginTop: 10,
     paddingTop: 12,
     gap: 8,
   },
   chargingIdeasBox: {
     borderWidth: 1,
-    borderColor: '#eadccb',
-    borderRadius: 8,
-    backgroundColor: '#fffdf8',
+    borderColor: colors.border,
+    borderRadius: radii.md,
+    backgroundColor: colors.surface,
     padding: 12,
     gap: 8,
   },
@@ -12382,13 +13291,13 @@ const styles = StyleSheet.create({
     minWidth: 0,
   },
   chargingIdeaName: {
-    color: '#071827',
+    color: colors.textPrimary,
     fontSize: 13,
     lineHeight: 18,
     fontWeight: '900',
   },
   chargingIdeaMeta: {
-    color: '#526170',
+    color: colors.textSecondary,
     fontSize: 12,
     lineHeight: 17,
     fontWeight: '700',
@@ -12410,30 +13319,31 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   dateChip: {
-    borderRadius: 8,
+    minHeight: controls.chipHeight,
+    borderRadius: radii.md,
     borderWidth: 1,
-    borderColor: '#eadccb',
-    backgroundColor: '#fffdf8',
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
     paddingHorizontal: 10,
     paddingVertical: 8,
   },
   dateChipActive: {
-    borderColor: '#66c5a8',
-    backgroundColor: '#dff7ef',
+    borderColor: colors.teal,
+    backgroundColor: colors.tealSoft,
   },
   dateChipText: {
-    color: '#071827',
+    color: colors.textPrimary,
     fontSize: 12,
     fontWeight: '900',
   },
   dateChipTextActive: {
-    color: '#178f79',
+    color: colors.teal,
   },
   customDateBox: {
     borderWidth: 1,
-    borderColor: '#eadccb',
-    borderRadius: 8,
-    backgroundColor: '#fffdf8',
+    borderColor: colors.border,
+    borderRadius: radii.md,
+    backgroundColor: colors.surface,
     padding: 10,
     gap: 8,
   },
@@ -12454,16 +13364,16 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   routeOriginHint: {
-    color: '#526170',
+    color: colors.textSecondary,
     fontSize: 12,
     lineHeight: 17,
   },
   bridgeTitle: {
-    color: '#071827',
+    color: colors.textPrimary,
     fontWeight: '900',
   },
   bridgeTitleDarkPanel: {
-    color: '#071827',
+    color: colors.textPrimary,
   },
   planLine: {
     flexDirection: 'row',
@@ -12472,15 +13382,15 @@ const styles = StyleSheet.create({
   },
   planLabel: {
     width: 96,
-    color: '#178f79',
+    color: colors.teal,
     fontWeight: '800',
   },
   planValue: {
     flex: 1,
-    color: '#071827',
+    color: colors.textPrimary,
   },
   inputLabel: {
-    color: '#071827',
+    color: colors.textPrimary,
     fontWeight: '700',
     marginTop: 12,
     marginBottom: 6,
@@ -12505,22 +13415,22 @@ const styles = StyleSheet.create({
   input: {
     flex: 1,
     minWidth: 0,
-    minHeight: 44,
-    borderRadius: 8,
+    minHeight: controls.inputHeight,
+    borderRadius: radii.md,
     borderWidth: 1,
-    borderColor: '#eadccb',
-    paddingHorizontal: 12,
-    color: '#071827',
-    backgroundColor: '#fffdf8',
+    borderColor: colors.border,
+    paddingHorizontal: spacing.md,
+    color: colors.textPrimary,
+    backgroundColor: colors.surface,
   },
   webInput: {
-    borderColor: '#b7e5d6',
-    backgroundColor: '#f8fffc',
+    borderColor: colors.borderStrong,
+    backgroundColor: colors.surfaceRaised,
   },
   darkPanelInput: {
-    borderColor: '#eadccb',
-    color: '#071827',
-    backgroundColor: '#fffdf8',
+    borderColor: colors.border,
+    color: colors.textPrimary,
+    backgroundColor: colors.surface,
   },
   buttonRow: {
     flexDirection: 'row',
@@ -12530,64 +13440,68 @@ const styles = StyleSheet.create({
     marginTop: 12,
   },
   button: {
-    minHeight: 42,
-    borderRadius: 8,
+    minHeight: controls.buttonHeight,
+    borderRadius: radii.md,
     paddingHorizontal: 13,
     paddingVertical: 10,
-    backgroundColor: '#071827',
+    backgroundColor: colors.surfaceInteractive,
     justifyContent: 'center',
     alignItems: 'center',
   },
   cardIconButton: {
     width: 44,
-    height: 42,
-    borderRadius: 8,
-    backgroundColor: '#071827',
+    height: controls.iconButtonSize,
+    borderRadius: radii.md,
+    backgroundColor: colors.surfaceInteractive,
     justifyContent: 'center',
     alignItems: 'center',
   },
   cardIconButtonActive: {
     borderWidth: 1,
-    borderColor: '#ffc84a',
+    borderColor: colors.amber,
   },
   compactButton: {
     minWidth: 76,
-    minHeight: 38,
+    minHeight: controls.minimumTouchTarget,
     paddingHorizontal: 10,
     paddingVertical: 8,
   },
   primaryButton: {
-    backgroundColor: '#f23b35',
+    backgroundColor: semanticTones.primary.solid,
   },
   successButton: {
-    backgroundColor: '#178f79',
+    backgroundColor: semanticTones.success.solid,
+  },
+  dangerButton: {
+    backgroundColor: semanticTones.danger.solid,
   },
   disabledButton: {
     opacity: 0.55,
   },
   buttonText: {
-    color: '#fffaf3',
+    color: colors.textPrimary,
     fontWeight: '800',
   },
   primaryButtonText: {
-    color: '#fffaf3',
+    color: colors.textInverse,
   },
   spinner: {
     marginTop: 10,
   },
   pairingBox: {
     borderWidth: 1,
-    borderColor: '#66c5a8',
-    borderRadius: 8,
+    borderColor: colors.teal,
+    borderRadius: radii.md,
     padding: 14,
     marginBottom: 16,
-    backgroundColor: '#e9f8f2',
+    backgroundColor: colors.tealSoft,
   },
   lightPairingBox: {
-    backgroundColor: '#e9f8f2',
-    borderColor: '#66c5a8',
+    backgroundColor: colors.tealSoft,
+    borderColor: colors.teal,
   },
   pairingHeader: {
+    minHeight: controls.minimumTouchTarget,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
@@ -12601,7 +13515,7 @@ const styles = StyleSheet.create({
     marginBottom: 2,
   },
   pairingHint: {
-    color: '#526170',
+    color: colors.textSecondary,
     fontSize: 13,
     lineHeight: 18,
     marginTop: 0,
@@ -12615,24 +13529,40 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
   },
   mapChip: {
-    borderRadius: 8,
-    backgroundColor: '#178f79',
+    minHeight: controls.minimumTouchTarget,
+    borderRadius: radii.md,
+    borderWidth: 1,
     paddingHorizontal: 11,
     paddingVertical: 9,
+    justifyContent: 'center',
+  },
+  mapChipFood: {
+    backgroundColor: semanticTones.food.soft,
+    borderColor: semanticTones.food.border,
+  },
+  mapChipActivity: {
+    backgroundColor: semanticTones.activity.soft,
+    borderColor: semanticTones.activity.border,
   },
   mapChipText: {
-    color: '#ecfeff',
     fontWeight: '800',
+  },
+  mapChipTextFood: {
+    color: semanticTones.food.accent,
+  },
+  mapChipTextActivity: {
+    color: semanticTones.activity.accent,
   },
   preferencesBox: {
     borderWidth: 1,
-    borderColor: '#ffc84a',
-    borderRadius: 8,
-    backgroundColor: '#fffdf8',
+    borderColor: colors.amber,
+    borderRadius: radii.md,
+    backgroundColor: colors.surface,
     marginBottom: 16,
     overflow: 'hidden',
   },
   preferencesHeader: {
+    minHeight: controls.minimumTouchTarget,
     padding: 14,
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -12640,31 +13570,31 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   preferenceSummary: {
-    color: '#526170',
+    color: colors.textSecondary,
     fontSize: 13,
     marginTop: -3,
   },
   lightMutedText: {
-    color: '#526170',
+    color: colors.textSecondary,
   },
   headerActionButton: {
     minWidth: 76,
-    minHeight: 38,
-    borderRadius: 8,
+    minHeight: controls.minimumTouchTarget,
+    borderRadius: radii.md,
     paddingHorizontal: 10,
     paddingVertical: 8,
-    backgroundColor: '#071827',
+    backgroundColor: colors.surfaceInteractive,
     alignItems: 'center',
     justifyContent: 'center',
     flexShrink: 0,
   },
   headerActionText: {
-    color: '#fffaf3',
+    color: colors.textPrimary,
     fontWeight: '900',
   },
   preferencesContent: {
     borderTopWidth: 1,
-    borderTopColor: '#eadccb',
+    borderTopColor: colors.border,
     padding: 14,
     paddingTop: 12,
     gap: 12,
@@ -12673,35 +13603,35 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   bottomHideButton: {
-    minHeight: 42,
-    borderRadius: 8,
+    minHeight: controls.minimumTouchTarget,
+    borderRadius: radii.md,
     borderWidth: 1,
-    borderColor: '#eadccb',
+    borderColor: colors.border,
     alignItems: 'center',
     justifyContent: 'center',
     marginTop: 8,
-    backgroundColor: '#071827',
+    backgroundColor: colors.surfaceInteractive,
   },
   bottomHideText: {
-    color: '#fffaf3',
+    color: colors.textPrimary,
     fontWeight: '900',
   },
   filterLabel: {
-    color: '#f23b35',
+    color: colors.coral,
     fontSize: 12,
     fontWeight: '900',
     textTransform: 'uppercase',
     marginTop: 4,
   },
   preferenceMoreChip: {
-    borderColor: '#66c5a8',
+    borderColor: colors.teal,
   },
   preferenceMoreText: {
     fontWeight: '900',
   },
   advancedPreferenceHeader: {
     borderTopWidth: 1,
-    borderTopColor: '#eadccb',
+    borderTopColor: colors.border,
     paddingTop: 12,
     marginTop: 2,
     flexDirection: 'row',
@@ -12713,53 +13643,127 @@ const styles = StyleSheet.create({
     marginTop: 0,
   },
   empty: {
-    color: '#526170',
+    color: colors.textSecondary,
     fontSize: 15,
     lineHeight: 21,
   },
   emptyState: {
     borderWidth: 1,
-    borderColor: '#eadccb',
-    borderRadius: 8,
+    borderColor: colors.border,
+    borderRadius: radii.md,
     padding: 14,
-    backgroundColor: '#fffdf8',
+    backgroundColor: colors.surface,
   },
   preSearchEmptyState: {
     marginBottom: 16,
   },
   emptyTitle: {
-    color: '#071827',
+    color: colors.textPrimary,
     fontSize: 18,
     fontWeight: '900',
     marginBottom: 5,
   },
   loadingResults: {
     borderWidth: 1,
-    borderColor: '#eadccb',
-    borderRadius: 8,
+    borderColor: colors.border,
+    borderRadius: radii.md,
     padding: 14,
-    backgroundColor: '#fffdf8',
+    backgroundColor: colors.surface,
     marginBottom: 12,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
   },
   loadingResultsText: {
-    color: '#071827',
+    color: colors.textPrimary,
     fontWeight: '900',
   },
   card: {
     borderWidth: 1,
-    borderColor: '#ffc84a',
-    backgroundColor: '#fffdf8',
-    borderRadius: 8,
-    padding: 14,
-    marginBottom: 12,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceRaised,
+    borderRadius: radii.lg,
+    padding: spacing.sm,
+    marginBottom: spacing.sm,
+    ...elevations.low,
+  },
+  cardFood: {
+    borderColor: semanticTones.food.border,
+  },
+  cardActivity: {
+    borderColor: semanticTones.activity.border,
   },
   cardSelected: {
     borderWidth: 2,
-    borderColor: '#178f79',
-    backgroundColor: '#e3f7f0',
+    borderColor: colors.teal,
+    backgroundColor: colors.surfaceRaised,
+  },
+  placeCardBody: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: spacing.sm,
+  },
+  placeCardMedia: {
+    width: 112,
+    minHeight: 112,
+    borderRadius: radii.md,
+    overflow: 'hidden',
+    backgroundColor: colors.surfaceMuted,
+    position: 'relative',
+  },
+  placeCardImage: {
+    width: '100%',
+    height: '100%',
+    minHeight: 112,
+  },
+  placeCardImageFallback: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.surfaceMuted,
+  },
+  placeCardAttribution: {
+    position: 'absolute',
+    left: spacing.micro,
+    right: spacing.micro,
+    bottom: spacing.micro,
+    paddingHorizontal: spacing.micro,
+    paddingVertical: spacing.hairline,
+    borderRadius: radii.xs,
+    backgroundColor: colors.scrim,
+    color: colors.textSecondary,
+    fontSize: 12,
+    lineHeight: 16,
+  },
+  placeCardContent: {
+    flex: 1,
+    minWidth: 0,
+    justifyContent: 'center',
+    gap: spacing.micro,
+  },
+  cardCategory: {
+    ...typography.eyebrow,
+  },
+  cardCategoryFood: {
+    color: semanticTones.food.accent,
+  },
+  cardCategoryActivity: {
+    color: semanticTones.activity.accent,
+  },
+  cardMetadataRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: spacing.xs,
+  },
+  cardMetadataPill: {
+    minHeight: 24,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.micro,
+  },
+  cardMetadataText: {
+    color: colors.textSecondary,
+    ...typography.caption,
   },
   cardHeaderGrid: {
     flexDirection: 'row',
@@ -12776,28 +13780,197 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   cardRank: {
-    color: '#f23b35',
+    color: colors.coral,
     fontSize: 12,
     fontWeight: '900',
     textTransform: 'uppercase',
     marginBottom: 8,
   },
   cardRankSelected: {
-    color: '#178f79',
+    color: colors.teal,
   },
   cardHours: {
-    width: 82,
-    color: '#526170',
-    fontSize: 12,
-    fontWeight: '900',
+    maxWidth: '100%',
+    color: colors.textSecondary,
+    ...typography.caption,
+  },
+  placeDetailScreen: {
+    flex: 1,
+    backgroundColor: colors.background,
+  },
+  placeDetailContent: {
+    width: '100%',
+    maxWidth: layout.contentMaxWidth,
+    alignSelf: 'center',
+    paddingHorizontal: spacing.md,
+    paddingBottom: spacing.xxl,
+    gap: spacing.md,
+  },
+  placeDetailHeader: {
+    minHeight: layout.headerMinHeight,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
+  placeDetailHeaderButton: {
+    width: controls.iconButtonSize,
+    height: controls.iconButtonSize,
+    borderRadius: radii.pill,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceRaised,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  placeDetailHeaderButtonActive: {
+    borderColor: semanticTones.food.border,
+    backgroundColor: semanticTones.food.soft,
+  },
+  placeDetailHeaderTitle: {
+    flex: 1,
+    color: colors.textPrimary,
+    ...typography.subheading,
     textAlign: 'center',
+  },
+  placeDetailHero: {
+    height: 280,
+    borderRadius: radii.xl,
+    overflow: 'hidden',
+    backgroundColor: colors.surfaceMuted,
+    position: 'relative',
+  },
+  placeDetailHeroImage: {
+    width: '100%',
+    height: '100%',
+  },
+  placeDetailHeroFallback: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.surfaceMuted,
+  },
+  placeDetailAttribution: {
+    position: 'absolute',
+    left: spacing.sm,
+    bottom: spacing.sm,
+    maxWidth: '82%',
+    paddingHorizontal: spacing.xs,
+    paddingVertical: spacing.micro,
+    borderRadius: radii.sm,
+    backgroundColor: colors.scrim,
+    color: colors.textSecondary,
+    ...typography.caption,
+  },
+  placeDetailTitleBlock: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radii.lg,
+    backgroundColor: colors.surfaceRaised,
+    padding: spacing.md,
+    gap: spacing.xs,
+  },
+  placeDetailEyebrow: {
+    ...typography.eyebrow,
+  },
+  placeDetailEyebrowFood: {
+    color: semanticTones.food.accent,
+  },
+  placeDetailEyebrowActivity: {
+    color: semanticTones.activity.accent,
+  },
+  placeDetailTitle: {
+    color: colors.textPrimary,
+    ...typography.title,
+  },
+  placeDetailMetaRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  placeDetailMetaItem: {
+    minHeight: controls.minimumTouchTarget,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.micro,
+  },
+  placeDetailMetaText: {
+    color: colors.textSecondary,
+    ...typography.bodyStrong,
+  },
+  placeDetailAddressRow: {
+    minHeight: controls.minimumTouchTarget,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.xs,
+  },
+  placeDetailAddress: {
+    flex: 1,
+    color: colors.textSecondary,
+    ...typography.body,
+  },
+  placeDetailHours: {
+    color: colors.textSecondary,
+    ...typography.body,
+  },
+  placeDetailPrimaryActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.xs,
+  },
+  placeDetailAction: {
+    flex: 1,
+    flexBasis: 136,
+    minWidth: 0,
+    minHeight: 76,
+    borderRadius: radii.lg,
+    paddingHorizontal: spacing.sm,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.xs,
+  },
+  placeDetailRouteAction: {
+    backgroundColor: semanticTones.route.solid,
+  },
+  placeDetailSaveAction: {
+    backgroundColor: semanticTones.maybe.solid,
+  },
+  placeDetailAddAction: {
+    backgroundColor: semanticTones.primary.solid,
+  },
+  placeDetailRemoveAction: {
+    backgroundColor: semanticTones.danger.solid,
+  },
+  placeDetailActionText: {
+    color: colors.textInverse,
+    ...typography.label,
+    textAlign: 'center',
+  },
+  placeDetailActionTextDark: {
+    color: colors.textInverse,
+  },
+  placeDetailSecondaryActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    gap: spacing.xs,
   },
   shareOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(7, 24, 39, 0.72)',
+    backgroundColor: colors.overlay,
     alignItems: 'center',
     justifyContent: 'center',
     padding: 20,
+  },
+  shareOverlayScroll: {
+    flex: 1,
+    backgroundColor: colors.overlay,
+  },
+  shareOverlayContent: {
+    flexGrow: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: spacing.md,
   },
   shareModalShell: {
     width: '100%',
@@ -12811,15 +13984,15 @@ const styles = StyleSheet.create({
   },
   planPreviewCard: {
     width: '100%',
-    borderRadius: 8,
-    backgroundColor: '#fffaf3',
+    borderRadius: radii.md,
+    backgroundColor: colors.surface,
     borderWidth: 1,
-    borderColor: '#eadccb',
+    borderColor: colors.border,
     padding: 18,
     gap: 10,
   },
   planPreviewTitle: {
-    color: '#071827',
+    color: colors.textPrimary,
     fontSize: 24,
     lineHeight: 29,
     fontWeight: '900',
@@ -12831,20 +14004,27 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   planPreviewMeta: {
-    color: '#526170',
+    color: colors.textSecondary,
     fontSize: 13,
     lineHeight: 18,
     fontWeight: '900',
+  },
+  planPreviewMetaPrimary: {
+    flex: 1,
+    minWidth: 0,
+  },
+  planPreviewMetaCount: {
+    flexShrink: 0,
   },
   planPreviewStopList: {
     gap: 8,
   },
   planPreviewStopRow: {
-    minHeight: 42,
-    borderRadius: 8,
+    minHeight: controls.minimumTouchTarget,
+    borderRadius: radii.md,
     borderWidth: 1,
-    borderColor: '#eadccb',
-    backgroundColor: '#fffdf8',
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
     paddingHorizontal: 10,
     paddingVertical: 7,
     flexDirection: 'row',
@@ -12854,36 +14034,45 @@ const styles = StyleSheet.create({
   planPreviewStopIndex: {
     width: 28,
     height: 28,
-    borderRadius: 14,
-    backgroundColor: '#f23b35',
-    color: '#fffaf3',
+    borderRadius: radii.lg,
+    color: colors.textInverse,
     textAlign: 'center',
     lineHeight: 28,
     fontSize: 13,
     fontWeight: '900',
   },
   planPreviewStopTime: {
-    width: 76,
-    color: '#178f79',
+    color: colors.teal,
     fontSize: 13,
     fontWeight: '900',
   },
+  planPreviewStopContent: {
+    flex: 1,
+    minWidth: 0,
+    gap: spacing.micro,
+  },
+  planPreviewStopMetadata: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: spacing.xs,
+  },
   planPreviewTravelBlock: {
-    width: 44,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 1,
+    gap: spacing.micro,
   },
   planPreviewTravelText: {
-    color: '#526170',
-    fontSize: 9,
-    lineHeight: 11,
+    color: colors.textSecondary,
+    fontSize: 12,
+    lineHeight: 16,
     fontWeight: '900',
     textAlign: 'center',
   },
   planPreviewStopName: {
     flex: 1,
-    color: '#071827',
+    color: colors.textPrimary,
     fontSize: 15,
     lineHeight: 19,
     fontWeight: '900',
@@ -12891,42 +14080,42 @@ const styles = StyleSheet.create({
   shareCard: {
     width: '100%',
     maxWidth: 420,
-    borderRadius: 8,
-    backgroundColor: '#fffaf3',
+    borderRadius: radii.md,
+    backgroundColor: colors.surface,
     padding: 18,
   },
   shareControlPanel: {
     width: '100%',
     maxWidth: 420,
-    borderRadius: 8,
-    backgroundColor: '#fffaf3',
+    borderRadius: radii.md,
+    backgroundColor: colors.surface,
     borderWidth: 1,
-    borderColor: '#eadccb',
+    borderColor: colors.border,
     padding: 12,
   },
   quickShareCard: {
     width: '100%',
     maxWidth: 420,
-    borderRadius: 8,
-    backgroundColor: '#fffaf3',
+    borderRadius: radii.md,
+    backgroundColor: colors.surface,
     padding: 18,
     borderWidth: 1,
-    borderColor: '#eadccb',
+    borderColor: colors.border,
   },
   quickShareTitle: {
-    color: '#071827',
+    color: colors.textPrimary,
     fontSize: 22,
     fontWeight: '900',
   },
   quickSharePlace: {
-    color: '#f23b35',
+    color: colors.coral,
     fontSize: 16,
     fontWeight: '900',
     marginTop: 6,
     marginBottom: 14,
   },
   peopleGroupsModalSubtitle: {
-    color: '#526170',
+    color: colors.textSecondary,
     fontSize: 14,
     lineHeight: 20,
     fontWeight: '800',
@@ -12934,10 +14123,10 @@ const styles = StyleSheet.create({
     marginBottom: 14,
   },
   peopleGroupsComingSoonBox: {
-    borderRadius: 8,
+    borderRadius: radii.md,
     borderWidth: 1,
-    borderColor: '#c7eadf',
-    backgroundColor: '#f3fbf7',
+    borderColor: colors.borderStrong,
+    backgroundColor: colors.surfaceRaised,
     padding: 12,
     flexDirection: 'row',
     alignItems: 'flex-start',
@@ -12945,19 +14134,19 @@ const styles = StyleSheet.create({
     marginBottom: 14,
   },
   peopleGroupsComingSoonTitle: {
-    color: '#071827',
+    color: colors.textPrimary,
     fontSize: 15,
     lineHeight: 19,
     fontWeight: '900',
   },
   peopleGroupsComingSoonText: {
-    color: '#526170',
+    color: colors.textSecondary,
     fontSize: 13,
     lineHeight: 18,
     fontWeight: '800',
   },
   quickShareHint: {
-    color: '#526170',
+    color: colors.textSecondary,
     fontSize: 12,
     fontWeight: '900',
     textTransform: 'uppercase',
@@ -12970,23 +14159,24 @@ const styles = StyleSheet.create({
     marginBottom: 14,
   },
   quickShareUserButton: {
-    borderRadius: 8,
-    backgroundColor: '#dff7ef',
+    minHeight: controls.minimumTouchTarget,
+    borderRadius: radii.md,
+    backgroundColor: colors.tealSoft,
     borderWidth: 1,
-    borderColor: '#66c5a8',
+    borderColor: colors.teal,
     paddingHorizontal: 12,
     paddingVertical: 10,
   },
   quickShareUserButtonSelected: {
-    backgroundColor: '#ffd9cf',
-    borderColor: '#ff5a4f',
+    backgroundColor: colors.coralSoft,
+    borderColor: colors.coral,
   },
   quickShareUserText: {
-    color: '#071827',
+    color: colors.textPrimary,
     fontWeight: '900',
   },
   routeOptionHint: {
-    color: '#526170',
+    color: colors.textSecondary,
     fontSize: 13,
     lineHeight: 18,
     fontWeight: '800',
@@ -12998,10 +14188,10 @@ const styles = StyleSheet.create({
   },
   routeOptionButton: {
     minHeight: 48,
-    borderRadius: 8,
+    borderRadius: radii.md,
     borderWidth: 1,
-    borderColor: '#66c5a8',
-    backgroundColor: '#dff7ef',
+    borderColor: colors.teal,
+    backgroundColor: colors.tealSoft,
     paddingHorizontal: 12,
     paddingVertical: 10,
     flexDirection: 'row',
@@ -13009,7 +14199,7 @@ const styles = StyleSheet.create({
     gap: 9,
   },
   routeOptionButtonText: {
-    color: '#071827',
+    color: colors.textPrimary,
     fontSize: 15,
     fontWeight: '900',
     flexShrink: 1,
@@ -13017,42 +14207,42 @@ const styles = StyleSheet.create({
   shareHeader: {
     alignItems: 'center',
     borderBottomWidth: 1,
-    borderBottomColor: '#eadccb',
+    borderBottomColor: colors.border,
     paddingBottom: 12,
     marginBottom: 14,
   },
   shareBrand: {
-    color: '#071827',
+    color: colors.textPrimary,
     fontSize: 31,
     fontWeight: '900',
   },
   shareTagline: {
-    color: '#526170',
-    fontSize: 11,
+    color: colors.textSecondary,
+    fontSize: 12,
     fontWeight: '900',
     marginTop: 3,
   },
   shareTitle: {
-    color: '#071827',
+    color: colors.textPrimary,
     fontSize: 20,
     fontWeight: '900',
     marginBottom: 10,
   },
   shareMetaLine: {
-    color: '#526170',
+    color: colors.textSecondary,
     fontSize: 12,
     fontWeight: '900',
     marginTop: -4,
     marginBottom: 10,
   },
   shareLeaveTime: {
-    color: '#071827',
+    color: colors.textPrimary,
     fontSize: 14,
     fontWeight: '900',
-    backgroundColor: '#fff3d8',
+    backgroundColor: colors.amberSoft,
     borderWidth: 1,
-    borderColor: '#ffc84a',
-    borderRadius: 8,
+    borderColor: colors.amber,
+    borderRadius: radii.md,
     paddingHorizontal: 10,
     paddingVertical: 9,
     marginBottom: 12,
@@ -13065,32 +14255,42 @@ const styles = StyleSheet.create({
   shareStopNumber: {
     width: 28,
     height: 28,
-    borderRadius: 14,
-    backgroundColor: '#f23b35',
+    borderRadius: radii.lg,
     alignItems: 'center',
     justifyContent: 'center',
   },
+  shareStopNumberFood: {
+    backgroundColor: semanticTones.food.solid,
+  },
+  shareStopNumberActivity: {
+    backgroundColor: semanticTones.activity.solid,
+  },
   shareStopNumberText: {
-    color: '#fffaf3',
+    color: colors.textInverse,
     fontWeight: '900',
   },
   shareStopBody: {
     flex: 1,
   },
   shareStopType: {
-    color: '#178f79',
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: '900',
     textTransform: 'uppercase',
   },
+  shareStopTypeFood: {
+    color: semanticTones.food.accent,
+  },
+  shareStopTypeActivity: {
+    color: semanticTones.activity.accent,
+  },
   shareStopName: {
-    color: '#071827',
+    color: colors.textPrimary,
     fontSize: 16,
     fontWeight: '900',
     marginTop: 2,
   },
   shareStopTime: {
-    color: '#526170',
+    color: colors.textSecondary,
     fontSize: 12,
     fontWeight: '700',
     marginTop: 2,
@@ -13100,11 +14300,11 @@ const styles = StyleSheet.create({
     marginBottom: 14,
   },
   shareLockedStopRow: {
-    minHeight: 34,
-    borderRadius: 8,
+    minHeight: controls.minimumTouchTarget,
+    borderRadius: radii.md,
     borderWidth: 1,
-    borderColor: '#eadccb',
-    backgroundColor: '#fffdf8',
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
     paddingHorizontal: 8,
     paddingVertical: 5,
     flexDirection: 'row',
@@ -13114,9 +14314,8 @@ const styles = StyleSheet.create({
   shareLockedStopIndex: {
     width: 24,
     height: 24,
-    borderRadius: 12,
-    backgroundColor: '#f23b35',
-    color: '#fffaf3',
+    borderRadius: radii.lg,
+    color: colors.textInverse,
     textAlign: 'center',
     lineHeight: 24,
     fontSize: 12,
@@ -13124,7 +14323,7 @@ const styles = StyleSheet.create({
   },
   shareLockedStopTime: {
     width: 68,
-    color: '#178f79',
+    color: colors.teal,
     fontSize: 12,
     fontWeight: '900',
   },
@@ -13135,21 +14334,21 @@ const styles = StyleSheet.create({
     gap: 1,
   },
   shareLockedTravelText: {
-    color: '#526170',
-    fontSize: 9,
-    lineHeight: 11,
+    color: colors.textSecondary,
+    fontSize: 12,
+    lineHeight: 16,
     fontWeight: '900',
     textAlign: 'center',
   },
   shareLockedStopName: {
     flex: 1,
-    color: '#071827',
+    color: colors.textPrimary,
     fontSize: 13,
     lineHeight: 17,
     fontWeight: '900',
   },
   shareFooter: {
-    color: '#526170',
+    color: colors.textSecondary,
     fontSize: 12,
     fontWeight: '800',
     marginTop: 4,
@@ -13157,57 +14356,58 @@ const styles = StyleSheet.create({
   },
   shareActions: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     justifyContent: 'flex-end',
     gap: 8,
     marginTop: 4,
   },
   cardTitle: {
     flex: 1,
-    color: '#071827',
+    color: colors.textPrimary,
     fontSize: 19,
     fontWeight: '900',
   },
   cardTitleSelected: {
-    color: '#071827',
+    color: colors.textPrimary,
   },
   cardSubtitle: {
-    color: '#178f79',
+    color: colors.teal,
     fontWeight: '700',
     marginTop: 5,
   },
   cardDistance: {
-    color: '#526170',
+    color: colors.textSecondary,
     marginTop: 6,
     fontSize: 12,
     fontWeight: '900',
   },
   address: {
-    color: '#526170',
+    color: colors.textSecondary,
     marginTop: 7,
   },
   hoursDetail: {
-    color: '#526170',
+    color: colors.textSecondary,
     marginTop: 8,
     fontWeight: '700',
     lineHeight: 18,
   },
   hours: {
-    color: '#526170',
+    color: colors.textSecondary,
     marginTop: 7,
     fontWeight: '800',
   },
   open: {
-    color: '#178f79',
+    color: colors.green,
   },
   closed: {
-    color: '#f23b35',
+    color: colors.red,
   },
   utilityBox: {
     marginTop: 4,
     marginBottom: 18,
   },
   muted: {
-    color: '#526170',
+    color: colors.textSecondary,
     marginBottom: 8,
   },
   filterSpacer: {
