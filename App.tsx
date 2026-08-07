@@ -9693,43 +9693,38 @@ function NomNomGoApp() {
               isDarkMode && styles.darkCard,
               (isSelected || isSuggested) && styles.cardSelected,
             ]}>
-              <View style={styles.placeCardBody}>
-                <View style={styles.placeCardMedia}>
-                  <TouchableOpacity
-                    style={styles.placeCardMediaTap}
-                    onPress={() => setPlaceDetailCard(card)}
-                    accessibilityRole="button"
-                    accessibilityLabel={`Open details for ${card.title}`}
-                  >
-                    {imageUri ? (
-                      <Image source={{ uri: imageUri }} style={styles.placeCardImage} resizeMode="cover" />
-                    ) : (
-                      <View style={[styles.placeCardImage, styles.placeCardImageFallback]}>
-                        <Ionicons
-                          name={card.kind === 'event' ? 'ticket-outline' : resultMode === 'food' ? 'restaurant-outline' : 'sparkles-outline'}
-                          size={30}
-                          color={resultMode === 'food' ? colors.coral : colors.amber}
-                        />
-                      </View>
-                    )}
-                    {card.photoAttribution ? (
-                      <Text style={styles.placeCardAttribution} numberOfLines={1}>Photo: {card.photoAttribution}</Text>
-                    ) : null}
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.placeCardFavoriteButton, isFavorite && styles.placeCardFavoriteButtonActive]}
-                    onPress={() => void toggleFavorite(card)}
-                    accessibilityRole="button"
-                    accessibilityLabel={isFavorite ? `Remove ${card.title} from saved places` : `Save ${card.title}`}
-                    accessibilityState={{ selected: isFavorite }}
-                  >
-                    <Ionicons
-                      name={isFavorite ? 'star' : 'star-outline'}
-                      size={20}
-                      color={isFavorite ? colors.amber : colors.textPrimary}
-                    />
-                  </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.placeCardInfoTouchTarget}
+                onPress={() => setPlaceDetailCard(card)}
+                accessibilityRole="button"
+                accessibilityLabel={`Show information for ${card.title}`}
+              >
+                <View style={styles.placeCardInfoButton}>
+                  <Ionicons name="information-circle-outline" size={17} color={colors.textPrimary} />
                 </View>
+              </TouchableOpacity>
+              <View style={styles.placeCardBody}>
+                <TouchableOpacity
+                  style={styles.placeCardMedia}
+                  onPress={() => setPlaceDetailCard(card)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Open details for ${card.title}`}
+                >
+                  {imageUri ? (
+                    <Image source={{ uri: imageUri }} style={styles.placeCardImage} resizeMode="cover" />
+                  ) : (
+                    <View style={[styles.placeCardImage, styles.placeCardImageFallback]}>
+                      <Ionicons
+                        name={card.kind === 'event' ? 'ticket-outline' : resultMode === 'food' ? 'restaurant-outline' : 'sparkles-outline'}
+                        size={30}
+                        color={resultMode === 'food' ? colors.coral : colors.amber}
+                      />
+                    </View>
+                  )}
+                  {card.photoAttribution ? (
+                    <Text style={styles.placeCardAttribution} numberOfLines={1}>Photo: {card.photoAttribution}</Text>
+                  ) : null}
+                </TouchableOpacity>
                 <View style={styles.placeCardContent}>
                   <View style={styles.cardHeaderGrid}>
                     <View style={styles.cardHeaderMain}>
@@ -9778,7 +9773,12 @@ function NomNomGoApp() {
                   success={nowDiscovering ? true : !isSelected && !isSuggested}
                   disabled={nowDiscovering && nowPlanCreating}
                 />
-                <CardIconButton label="Details" icon="information-circle-outline" onPress={() => setPlaceDetailCard(card)} />
+                <CardIconButton
+                  label={isFavorite ? `Unstar ${card.title}` : `Star ${card.title}`}
+                  icon={isFavorite ? 'star' : 'star-outline'}
+                  onPress={() => toggleFavorite(card)}
+                  active={isFavorite}
+                />
                 {card.kind === 'event' && card.eventUrl ? (
                   <CardIconButton label="Open event" icon="ticket-outline" onPress={() => openCardEvent(card)} />
                 ) : null}
@@ -13696,6 +13696,7 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
   card: {
+    position: 'relative',
     borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.surfaceRaised,
@@ -13728,11 +13729,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surfaceMuted,
     position: 'relative',
   },
-  placeCardMediaTap: {
-    flex: 1,
-    width: '100%',
-    position: 'relative',
-  },
   placeCardImage: {
     width: '100%',
     height: '100%',
@@ -13756,23 +13752,25 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 16,
   },
-  placeCardFavoriteButton: {
+  placeCardInfoTouchTarget: {
     position: 'absolute',
     top: spacing.xs,
     right: spacing.xs,
-    zIndex: 2,
+    zIndex: 3,
     width: controls.minimumTouchTarget,
     height: controls.minimumTouchTarget,
-    borderRadius: radii.pill,
-    borderWidth: 1,
-    borderColor: colors.borderStrong,
-    backgroundColor: colors.scrim,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  placeCardFavoriteButtonActive: {
-    borderColor: colors.amber,
-    backgroundColor: colors.amberSoft,
+  placeCardInfoButton: {
+    width: 32,
+    height: 32,
+    borderRadius: radii.pill,
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+    backgroundColor: colors.surfaceInteractive,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   placeCardContent: {
     flex: 1,
