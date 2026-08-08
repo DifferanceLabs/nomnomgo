@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  GestureResponderEvent,
   Keyboard,
   KeyboardAvoidingView,
   Image,
@@ -23,6 +22,8 @@ import { StatusBar } from 'expo-status-bar';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
+import Sortable, { type DropIndicatorComponentProps, type SortableFlexDragEndParams } from 'react-native-sortables';
+import Animated, { useAnimatedRef, useAnimatedStyle } from 'react-native-reanimated';
 import {
   GOOGLE_MAPS_ROUTE_IMPORT_ERROR,
   parseGoogleMapsRouteUrl,
@@ -38,8 +39,16 @@ import {
 } from './routeHandoff';
 import { foodTimePreferenceScore, hoursLineForDate, placeOpenDuringWindow, timePreferenceForWindow } from './planningHours';
 import { BETA_FEATURES } from './src/config/features';
+import {
+  calculateItineraryTimeline,
+  defaultItineraryStopDurationMinutes,
+  inferItineraryStopKind,
+  snapStopDurationMinutes,
+  type ItineraryStopKind,
+} from './src/domain/itinerary';
 import { colors, controls, elevations, iconSizes, layout, radii, semanticTones, spacing, typography } from './src/ui/theme';
 import { ActionButton, AppHeader, BottomNavigation, EmptyState, PersonRow, RsvpControl, Stat } from './src/ui/primitives';
+import { ItineraryStopRow } from './src/ui/ItineraryStopRow';
 import {
   DIFFERANCE_NOMNOMGO_LAUNCH_URL,
   LAUNCH_TOKEN_PARAM,
@@ -132,6 +141,8 @@ type PlaceCard = {
   hoursText?: string;
   eventDateText?: string;
   eventStartMs?: number;
+  eventEndMs?: number;
+  durationMinutes?: number;
   eventUrl?: string;
   source?: string;
   todayHours?: string;
@@ -147,6 +158,8 @@ type ItineraryStop = {
   key: string;
   slot: PlanSlot;
   item: PlaceCard | string;
+  visualType?: ItineraryStopKind;
+  durationMinutes?: number;
   travelMode?: StopTravelMode;
   featureOptions?: string[];
   selectedFeatures?: string[];
@@ -393,6 +406,11 @@ const RSVP_OPTIONS: Array<{ status: RsvpStatus; label: string }> = [
   { status: 'going', label: 'Going' },
   { status: 'maybe', label: 'Maybe' },
   { status: 'cant_make_it', label: "Can't make it" },
+];
+const COMPACT_RSVP_OPTIONS: { status: RsvpStatus; label: string }[] = [
+  { status: 'going', label: 'Going' },
+  { status: 'maybe', label: 'Maybe' },
+  { status: 'cant_make_it', label: "Can't go" },
 ];
 const LOCAL_TEST_LOCATIONS: Record<string, LatLon> = {
   'franklin tn': { latitude: 35.9251, longitude: -86.8689, label: 'Franklin, TN' },
@@ -991,6 +1009,7 @@ function ticketmasterEventToCard(event: any): PlaceCard | undefined {
   const lng = Number(venue?.location?.longitude);
   const eventDateText = formatEventDateText(event);
   const eventStartMs = new Date(event?.dates?.start?.dateTime || `${event?.dates?.start?.localDate || ''}T${event?.dates?.start?.localTime || '00:00:00'}`).getTime();
+  const eventEndMs = new Date(event?.dates?.end?.dateTime || `${event?.dates?.end?.localDate || ''}T${event?.dates?.end?.localTime || ''}`).getTime();
   const eventImages = Array.isArray(event?.images) ? event.images : [];
   const eventImage = eventImages.find((image: any) => image?.ratio === '16_9' && Number(image?.width) >= 640)
     || eventImages.find((image: any) => image?.ratio === '16_9')
@@ -1007,6 +1026,7 @@ function ticketmasterEventToCard(event: any): PlaceCard | undefined {
     hoursText: eventDateText,
     eventDateText,
     eventStartMs: Number.isFinite(eventStartMs) ? eventStartMs : undefined,
+    eventEndMs: Number.isFinite(eventEndMs) ? eventEndMs : undefined,
     eventUrl: typeof event?.url === 'string' ? event.url : undefined,
     source: 'Ticketmaster',
     mapsUri: venueName ? mapsSearchUrl(`${venueName} ${address || ''}`.trim()) : mapsSearchUrl(title),
@@ -2082,20 +2102,32 @@ function estimateTravelMinutes(from: LatLon | undefined, to: PlaceCard | string,
 
 function defaultStopDurationMinutes(stop: ItineraryStop) {
   const item = stop.item;
-  const types = typeof item === 'string' ? [] : item.types || [];
-  const title = (cardToName(item) || '').toLowerCase();
-  const typeText = types.join(' ').toLowerCase();
+  return defaultItineraryStopDurationMinutes({
+    explicitKind: stop.visualType,
+    slot: stop.slot,
+    title: cardToName(item),
+    types: typeof item === 'string' ? [] : item.types,
+    providerDurationMinutes: typeof item === 'string' ? undefined : item.durationMinutes,
+    eventStartMs: typeof item === 'string' ? undefined : item.eventStartMs,
+    eventEndMs: typeof item === 'string' ? undefined : item.eventEndMs,
+  });
+}
 
-  if (stop.slot === 'food') {
-    if (typeText.includes('cafe') || typeText.includes('coffee') || typeText.includes('bakery') || typeText.includes('dessert')) return 35;
-    return 75;
-  }
+function itineraryKindForStop(stop: ItineraryStop): ItineraryStopKind {
+  return inferItineraryStopKind({
+    explicitKind: stop.visualType,
+    slot: stop.slot,
+    title: cardToName(stop.item),
+    types: typeof stop.item === 'string' ? [] : stop.item.types,
+    manual: typeof stop.item === 'string' && stop.visualType === 'idea',
+  });
+}
 
-  if (typeText.includes('movie_theater') || title.includes('movie') || title.includes('theater')) return 150;
-  if (typeText.includes('bowling') || typeText.includes('amusement') || title.includes('arcade')) return 90;
-  if (typeText.includes('shopping') || typeText.includes('museum') || typeText.includes('park')) return 75;
-  if (typeText.includes('cafe') || typeText.includes('coffee') || typeText.includes('bakery') || typeText.includes('dessert')) return 35;
-  return 90;
+function itineraryKindLabel(kind: ItineraryStopKind) {
+  if (kind === 'food') return 'Food';
+  if (kind === 'activity') return 'Activity';
+  if (kind === 'dessert') return 'Dessert';
+  return 'Idea';
 }
 
 function startOfLocalDay(date: Date) {
@@ -2839,8 +2871,15 @@ function AlphaAccessGate({ children }: { children: React.ReactNode }) {
   );
 }
 
+function ItineraryInsertionIndicator({ activeAnimationProgress, style }: DropIndicatorComponentProps) {
+  const animatedStyle = useAnimatedStyle(() => ({
+    opacity: activeAnimationProgress.value,
+  }));
+  return <Animated.View style={[style, styles.itineraryInsertionIndicator, animatedStyle]} />;
+}
+
 function NomNomGoApp() {
-  const scrollRef = useRef<ScrollView | null>(null);
+  const scrollRef = useAnimatedRef<React.ComponentRef<typeof Animated.ScrollView>>();
   const manualSearchRef = useRef<TextInput | null>(null);
   const resultsYRef = useRef(0);
   const planBoxYRef = useRef(0);
@@ -2889,12 +2928,13 @@ function NomNomGoApp() {
   const [planTimes, setPlanTimes] = useState<Record<string, StopTime | undefined>>({});
   const [arrivalTimes, setArrivalTimes] = useState<Record<string, StopTime | undefined>>({});
   const [timeEditorKey, setTimeEditorKey] = useState<string | null>(null);
-  const [draftArrivalTime, setDraftArrivalTime] = useState<StopTime>({ hours: 0, minutes: 0 });
-  const [draftTime, setDraftTime] = useState<StopTime>({ hours: 0, minutes: 0 });
-  const [arrivalDraftDirty, setArrivalDraftDirty] = useState(false);
-  const [durationDraftDirty, setDurationDraftDirty] = useState(false);
-  const [pendingInsertIndex, setPendingInsertIndex] = useState<number | null>(null);
-  const [selectedStopKey, setSelectedStopKey] = useState<string | null>(null);
+  const [expandedStopKey, setExpandedStopKey] = useState<string | null>(null);
+  const [addStopMenuOpen, setAddStopMenuOpen] = useState(false);
+  const [itineraryListWidth, setItineraryListWidth] = useState<number>();
+  const [ideaDraft, setIdeaDraft] = useState('');
+  const [pendingVisualType, setPendingVisualType] = useState<ItineraryStopKind | undefined>();
+  const [searchVisualType, setSearchVisualType] = useState<ItineraryStopKind | undefined>();
+  const [recentlyAddedStopKey, setRecentlyAddedStopKey] = useState<string | null>(null);
   const [resultMode, setResultMode] = useState<PlanSlot>('food');
   const [resultFilter, setResultFilter] = useState<ResultFilter>('all');
   const [preferencesOpen, setPreferencesOpen] = useState(false);
@@ -3155,50 +3195,40 @@ function NomNomGoApp() {
     return stops.join(' - ') || 'No stops';
   };
 
-  const durationForStop = (stop: ItineraryStop) =>
-    (planTimes[stop.key]?.hours || 0) * 60 + (planTimes[stop.key]?.minutes || 0) || defaultStopDurationMinutes(stop);
+  const durationForStop = (stop: ItineraryStop) => {
+    const storedMinutes = typeof stop.durationMinutes === 'number' && stop.durationMinutes > 0
+      ? stop.durationMinutes
+      : (planTimes[stop.key]?.hours || 0) * 60 + (planTimes[stop.key]?.minutes || 0);
+    return snapStopDurationMinutes(storedMinutes || defaultStopDurationMinutes(stop));
+  };
 
   const effectiveTravelModeForStop = (stop: ItineraryStop, index: number): StopTravelMode => {
     return effectivePlanStopTravelMode(plan.stops, index);
   };
 
-  const travelOriginForStop = (index: number) =>
-    index > 0 ? stopCoords(plan.stops[index - 1].item) : routeStartLocation;
-
-  const travelMinutesForStop = (stop: ItineraryStop, index: number) =>
-    estimateTravelMinutes(travelOriginForStop(index), stop.item, effectiveTravelModeForStop(stop, index));
-
-  const arrivalOverrideForStop = (stop: ItineraryStop) => {
-    const override = arrivalTimes[stop.key];
-    return override ? minutesUntilClockTime(override, activePlanTimelineBaseMs) : undefined;
-  };
-
-  const itineraryArrivalMinutes = (targetIndex: number) => {
-    let elapsed = 0;
+  const itineraryTimelineInputs = (() => {
     let from = routeStartLocation;
-    let previousArrival: number | undefined;
     let previousCoords: LatLon | undefined;
 
-    for (let index = 0; index <= targetIndex; index += 1) {
-      const stop = plan.stops[index];
+    return plan.stops.map((stop, index) => {
       const travelMode = effectiveTravelModeForStop(stop, index);
       const walkableAfterTesla = travelMode === 'walk' && isWalkableAfterTeslaStop(plan.stops[index - 1], stop);
-      const estimatedArrival = walkableAfterTesla && typeof previousArrival === 'number'
-        ? previousArrival
-        : elapsed + estimateTravelMinutes(from, stop.item, travelMode);
-      const arrival = arrivalOverrideForStop(stop) ?? estimatedArrival;
-      if (index === targetIndex) return arrival;
-      elapsed = walkableAfterTesla
-        ? Math.max(elapsed, arrival + durationForStop(stop))
-        : arrival + durationForStop(stop);
-      previousArrival = arrival;
+      const travelMinutes = estimateTravelMinutes(from, stop.item, travelMode);
       const currentCoords = stopCoords(stop.item);
       from = walkableAfterTesla && previousCoords ? previousCoords : currentCoords;
       previousCoords = currentCoords;
-    }
-
-    return elapsed;
-  };
+      return {
+        durationMinutes: durationForStop(stop),
+        overlapsPreviousArrival: walkableAfterTesla,
+        travelMinutes,
+      };
+    });
+  })();
+  const itineraryTimeline = calculateItineraryTimeline(itineraryTimelineInputs);
+  const travelMinutesForStop = (_stop: ItineraryStop, index: number) =>
+    itineraryTimeline.stops[index]?.travelMinutes ?? 0;
+  const itineraryArrivalMinutes = (targetIndex: number) =>
+    itineraryTimeline.stops[targetIndex]?.arrivalMinutes ?? 0;
 
   const stepDetail = (stop: ItineraryStop, index: number) => {
     const arrival = formatClockAfterMinutes(itineraryArrivalMinutes(index), activePlanTimelineBaseMs);
@@ -3227,9 +3257,10 @@ function NomNomGoApp() {
   };
   const resultRouteBias = lastStopDistanceAnchor ? searchRouteBiasForAnchorIndex(plan.stops.length - 1) : undefined;
   const displayedArrivalTimeForStop = (stop: ItineraryStop, index: number) =>
-    arrivalTimes[stop.key] ||
     (plan.status === 'locked' ? plan.lockedArrivalTimes?.[stop.key] : undefined) ||
-    clockTimeFromOffsetMinutes(itineraryArrivalMinutes(index), activePlanTimelineBaseMs);
+    clockTimeFromMinutes(
+      clockMinutes(clockTimeFromDate(new Date(activePlanTimelineBaseMs))) + itineraryArrivalMinutes(index),
+    );
   const currentDisplayedArrivalTimes = () => {
     const next: Record<string, StopTime | undefined> = {};
     plan.stops.forEach((stop, index) => {
@@ -3244,15 +3275,33 @@ function NomNomGoApp() {
     ? `Leave around ${formatClockAfterMinutes(Math.max(0, firstStopArrivalMinutes - firstStopTravelMinutes), activePlanTimelineBaseMs)} from ${startingLocationLabel}`
     : undefined;
   const finalStop = plan.stops[plan.stops.length - 1];
-  const planTotalMinutes = finalStop
-    ? itineraryArrivalMinutes(plan.stops.length - 1) + durationForStop(finalStop)
-    : 0;
+  const planTotalMinutes = finalStop ? itineraryTimeline.totalMinutes : 0;
   const planTotalTimeLabel = finalStop
     ? formatStopTime(stopTimeFromMinutes(planTotalMinutes)) || 'Under 1 min'
     : 'Not set';
   const planFinishTimeLabel = finalStop
     ? formatClockAfterMinutes(planTotalMinutes, activePlanTimelineBaseMs)
     : 'Not set';
+  const planStartTimeLabel = finalStop
+    ? formatClockAfterMinutes(0, activePlanTimelineBaseMs)
+    : 'Not set';
+  const parsedPlanTarget = activePlanTimeWindow ? parsePlanningTimeWindow(activePlanTimeWindow) : undefined;
+  const targetDeltaMinutes = parsedPlanTarget
+    ? parsedPlanTarget.end - parsedPlanTarget.start - planTotalMinutes
+    : undefined;
+  const targetStatus = typeof targetDeltaMinutes !== 'number'
+    ? undefined
+    : targetDeltaMinutes === 0
+      ? { label: `Meets target ${formatClockTime(clockTimeFromMinutes(parsedPlanTarget!.end))}`, tone: 'near' as const }
+      : targetDeltaMinutes > 0
+        ? {
+            label: `${targetDeltaMinutes} min before target ${formatClockTime(clockTimeFromMinutes(parsedPlanTarget!.end))}`,
+            tone: targetDeltaMinutes <= 15 ? 'near' as const : 'under' as const,
+          }
+        : {
+            label: `${Math.abs(targetDeltaMinutes)} min over target ${formatClockTime(clockTimeFromMinutes(parsedPlanTarget!.end))}`,
+            tone: 'over' as const,
+          };
   const activePlanDateTimeLabel = firstStop
     ? `${activePlanDateLabel} | First stop ${formatClockTime(displayedArrivalTimeForStop(firstStop, 0))}`
     : activePlanDateLabel;
@@ -3554,8 +3603,6 @@ function NomNomGoApp() {
     setPlan(EMPTY_PLAN);
     setPlanTimes({});
     setArrivalTimes({});
-    setPendingInsertIndex(null);
-    setSelectedStopKey(null);
     setTimeEditorKey(null);
     setCards([]);
     setVisibleCount(PAGE_SIZE);
@@ -3790,8 +3837,6 @@ function NomNomGoApp() {
       });
       setPlanTimes({});
       setArrivalTimes({});
-      setPendingInsertIndex(null);
-      setSelectedStopKey(null);
       setTimeEditorKey(null);
       setCards([]);
       setVisibleCount(PAGE_SIZE);
@@ -3908,10 +3953,6 @@ function NomNomGoApp() {
     addLog('Home action: people and groups');
   };
 
-  const markStopSelected = (key?: string) => {
-    if (key) setSelectedStopKey(key);
-  };
-
   useEffect(() => {
     addLog(`Google Places key loaded: ${keyLoaded}`);
     addLog(`Ticketmaster key loaded: ${Boolean(TICKETMASTER_API_KEY)}`);
@@ -3976,7 +4017,16 @@ function NomNomGoApp() {
               planDateStart: saved.planDateStart,
               planDateEnd: saved.planDateEnd,
               timeWindow: saved.timeWindow,
-              stops: saved.stops.map((stop) => ({ slot: stop.slot, item: cardToId(stop.item) })),
+              stops: saved.stops.map((stop) => ({
+                slot: stop.slot,
+                item: cardToId(stop.item),
+                visualType: stop.visualType,
+                durationMinutes: stop.durationMinutes ?? (saved.planTimes?.[stop.key]
+                  ? clockMinutes(saved.planTimes[stop.key]!)
+                  : undefined),
+                travelMode: stop.travelMode,
+                selectedFeatures: stop.selectedFeatures || [],
+              })),
             });
             if (seenSavedPlans.has(contentKey)) return false;
             seenSavedPlans.add(contentKey);
@@ -5279,13 +5329,16 @@ function NomNomGoApp() {
     addLog(`Backfilled favorite cards: ${missingFavorites.length}`);
   };
 
-  const searchFromPlan = async (slot: PlanSlot) => {
-    const selectedIndex = selectedStopKey ? plan.stops.findIndex((stop) => stop.key === selectedStopKey) : -1;
-    const anchorIndex = selectedIndex >= 0 ? selectedIndex : plan.stops.length - 1;
-    setPendingInsertIndex(anchorIndex >= 0 ? anchorIndex : null);
+  const searchFromPlan = async (slot: PlanSlot, visualType: ItineraryStopKind = slot) => {
+    const anchorIndex = plan.stops.length - 1;
+    setPendingVisualType(undefined);
+    setSearchVisualType(visualType);
+    setAddStopMenuOpen(false);
     setResultMode(slot);
-    const preferenceOverride: SearchPreferenceOverride = slot === 'food'
-      ? { foodSelections: [...DEFAULT_FOOD_SELECTIONS] }
+    const preferenceOverride: SearchPreferenceOverride = visualType === 'dessert'
+      ? { foodSelections: ['Dessert'] }
+      : slot === 'food'
+        ? { foodSelections: [...DEFAULT_FOOD_SELECTIONS] }
       : { activitySelections: [...DEFAULT_ACTIVITY_SELECTIONS] };
     if (slot === 'food') {
       setSelectedFoods(preferenceOverride.foodSelections || [...DEFAULT_FOOD_SELECTIONS]);
@@ -5302,76 +5355,6 @@ function NomNomGoApp() {
       preferenceOverride,
       searchRouteBiasForAnchorIndex(anchorIndex),
     );
-  };
-
-  const addStopAfter = async (slot: PlanSlot, index: number) => {
-    if (isPlanLocked) return;
-    markStopSelected(plan.stops[index]?.key);
-    setPendingInsertIndex(index);
-    setResultMode(slot);
-    const preferenceOverride: SearchPreferenceOverride = slot === 'food'
-      ? { foodSelections: [...DEFAULT_FOOD_SELECTIONS] }
-      : { activitySelections: [...DEFAULT_ACTIVITY_SELECTIONS] };
-    if (slot === 'food') {
-      setSelectedFoods(preferenceOverride.foodSelections || [...DEFAULT_FOOD_SELECTIONS]);
-    } else {
-      setSelectedActivities(preferenceOverride.activitySelections || [...DEFAULT_ACTIVITY_SELECTIONS]);
-    }
-    setPreferencesOpen(false);
-    scrollToResults();
-    await searchForSlot(slot, true, false, stopSearchCenter(plan.stops[index]), preferenceOverride, searchRouteBiasForAnchorIndex(index));
-  };
-
-  const openTimeEditor = (key: string, index: number) => {
-    if (isPlanLocked) return;
-    const stop = plan.stops.find((item) => item.key === key);
-    const existingArrival = stop ? arrivalTimes[stop.key] : arrivalTimes[key];
-    setTimeEditorKey(key);
-    setDraftArrivalTime(existingArrival || clockTimeFromOffsetMinutes(itineraryArrivalMinutes(index), activePlanTimelineBaseMs));
-    setDraftTime(planTimes[key] || stopTimeFromMinutes(stop ? defaultStopDurationMinutes(stop) : 60));
-    setArrivalDraftDirty(false);
-    setDurationDraftDirty(false);
-  };
-
-  const adjustDraftTime = (field: keyof StopTime, delta: number) => {
-    setDurationDraftDirty(true);
-    setDraftTime((prev) => {
-      const total = prev.hours * 60 + prev.minutes + (field === 'hours' ? delta * 60 : delta);
-      return stopTimeFromMinutes(total);
-    });
-  };
-
-  const adjustDraftArrivalTime = (field: keyof StopTime, delta: number) => {
-    setArrivalDraftDirty(true);
-    setDraftArrivalTime((prev) => {
-      const snappedCurrent = Math.round((prev.hours * 60 + prev.minutes) / 15) * 15;
-      const total = snappedCurrent + (field === 'hours' ? delta * 60 : delta);
-      const normalized = ((total % (24 * 60)) + 24 * 60) % (24 * 60);
-      return {
-        hours: Math.floor(normalized / 60),
-        minutes: normalized % 60,
-      };
-    });
-  };
-
-  const saveDraftTime = () => {
-    if (isPlanLocked) return;
-    if (!timeEditorKey) return;
-    if (!arrivalDraftDirty && !durationDraftDirty) {
-      setTimeEditorKey(null);
-      return;
-    }
-    if (arrivalDraftDirty) {
-      setArrivalTimes((prev) => ({ ...prev, [timeEditorKey]: draftArrivalTime }));
-    }
-    if (durationDraftDirty) {
-      setPlanTimes((prev) => ({ ...prev, [timeEditorKey]: draftTime }));
-    }
-    if (arrivalDraftDirty || durationDraftDirty) {
-      setPlan((prev) => ({ ...prev, savedPlanId: undefined }));
-    }
-    addLog(`Itinerary time set: ${arrivalDraftDirty ? `arrival ${formatClockTime(draftArrivalTime)}` : 'arrival unchanged'}, ${durationDraftDirty ? `duration ${formatStopTime(draftTime)}` : 'duration unchanged'}`);
-    setTimeEditorKey(null);
   };
 
   const refreshFromPreferences = async () => {
@@ -5662,7 +5645,6 @@ function NomNomGoApp() {
       suggestions: [suggestion, ...session.suggestions],
     }));
     addLog(`Planning suggestion added: ${cardToName(item) || slot}`);
-    showToast('Suggestion added');
     return true;
   };
 
@@ -5737,8 +5719,6 @@ function NomNomGoApp() {
     });
     setPlanTimes({});
     setArrivalTimes({});
-    setPendingInsertIndex(null);
-    setSelectedStopKey(finalStops[finalStops.length - 1]?.key || null);
     setTimeEditorKey(null);
     setHasInitiatedSearch(false);
     setCards([]);
@@ -5753,7 +5733,6 @@ function NomNomGoApp() {
     }));
     setTimeout(() => scrollRef.current?.scrollTo({ y: 0, animated: true }), 100);
     addLog('Planning session locked into itinerary');
-    showToast('Final plan added to itinerary');
   };
 
   const loadFinalSessionPlan = () => {
@@ -5767,7 +5746,6 @@ function NomNomGoApp() {
     });
     setPlanTimes({});
     setArrivalTimes({});
-    setSelectedStopKey(loadedStops[loadedStops.length - 1]?.key || null);
     loadedStops.forEach((stop) => {
       void refreshStopFeatures(stop.key, stop.slot, stop.item);
     });
@@ -5906,8 +5884,6 @@ function NomNomGoApp() {
       });
       setPlanTimes({});
       setArrivalTimes({});
-      setPendingInsertIndex(null);
-      setSelectedStopKey(nextStops[nextStops.length - 1]?.key || null);
       setTimeEditorKey(null);
       setPreferencesOpen(false);
       setHasInitiatedSearch(false);
@@ -5975,78 +5951,38 @@ function NomNomGoApp() {
     }
   };
 
-  const searchActivitiesNearFood = async (food: PlaceCard) => {
-    if (!food.lat || !food.lng) {
-      addLog('Selected food has no coordinates; activity search needs manual Maps fallback');
-      return;
-    }
-
-    setLoading(true);
-    try {
-      const types = typesForSelection(selectedActivities, ACTIVITY_TYPE_MAP, DEFAULT_ACTIVITY_TYPES);
-      const anchorIndex = plan.stops.findIndex((stop) => cardToId(stop.item) === food.id);
-      addLog(`Activity pairing types: ${types.join(', ')}`);
-      await runPlacesSearch(
-        'activity',
-        { latitude: food.lat, longitude: food.lng, label: food.title },
-        types,
-        selectedActivities.includes('Movies') ? DEFAULT_ACTIVITY_RADIUS_METERS : PAIRING_RADIUS_METERS,
-        false,
-        selectedFoods,
-        searchRequestIdRef.current,
-        selectedDietary,
-        selectedActivities,
-        searchRouteBiasForAnchorIndex(anchorIndex),
-      );
-    } catch (err) {
-      addLog(`Activity pairing failed: ${compactError(err)}`);
-      Alert.alert('Could not search activities nearby', compactError(err));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const insertStopIntoPlan = (slot: PlanSlot, item: PlaceCard | string) => {
+  const insertStopIntoPlan = (
+    slot: PlanSlot,
+    item: PlaceCard | string,
+    requestedVisualType?: ItineraryStopKind,
+  ) => {
     if (isPlanLocked) {
       showToast('Unlock the plan to edit it');
       return undefined;
     }
     const existingStop = plan.stops.find((stop) => stop.slot === slot && cardToId(stop.item) === cardToId(item));
     if (existingStop) {
-      setPlan((prev) => {
-        const nextStops = prev.stops.filter((stop) => stop.key !== existingStop.key);
-        return {
-          ...prev,
-          ...currentPlanContext(nextStops),
-          stops: nextStops,
-          lockedArrivalTimes: undefined,
-          savedPlanId: undefined,
-        };
-      });
-      setPlanTimes((times) => ({ ...times, [existingStop.key]: undefined }));
-      setArrivalTimes((times) => ({ ...times, [existingStop.key]: undefined }));
-      setSelectedStopKey((current) => current === existingStop.key ? null : current);
-      setPendingInsertIndex(null);
       return undefined;
     }
 
+    const visualType = inferItineraryStopKind({
+      explicitKind: requestedVisualType,
+      slot,
+      title: cardToName(item),
+      types: typeof item === 'string' ? [] : item.types,
+    });
     const nextStop: ItineraryStop = {
       key: makeStopKey(slot, item),
       slot,
       item,
+      visualType,
       featureOptions: [],
       selectedFeatures: [],
       featuresExpanded: false,
     };
+    nextStop.durationMinutes = defaultStopDurationMinutes(nextStop);
     setPlan((prev) => {
-      const selectedIndex = selectedStopKey ? prev.stops.findIndex((stop) => stop.key === selectedStopKey) : -1;
-      const insertAfterIndex = pendingInsertIndex !== null ? pendingInsertIndex : selectedIndex;
-      const insertAt = insertAfterIndex < 0 ? prev.stops.length : Math.min(insertAfterIndex + 1, prev.stops.length);
-      const nextStops = [
-        ...prev.stops.slice(0, insertAt),
-        nextStop,
-        ...prev.stops.slice(insertAt),
-      ];
+      const nextStops = [...prev.stops, nextStop];
       return {
         ...prev,
         ...currentPlanContext(nextStops),
@@ -6055,10 +5991,56 @@ function NomNomGoApp() {
         savedPlanId: undefined,
       };
     });
-    setPendingInsertIndex(null);
-    setSelectedStopKey(nextStop.key);
+    setRecentlyAddedStopKey(nextStop.key);
+    setTimeout(() => setRecentlyAddedStopKey((current) => current === nextStop.key ? null : current), 320);
     void refreshStopFeatures(nextStop.key, slot, item);
     return nextStop;
+  };
+
+  const addIdeaStop = () => {
+    const value = ideaDraft.trim();
+    if (!value || isPlanLocked) return;
+    const insertedStop = insertStopIntoPlan('activity', value, 'idea');
+    setIdeaDraft('');
+    setPendingVisualType(undefined);
+    setAddStopMenuOpen(false);
+    if (insertedStop) scrollToPlanStop(insertedStop.key);
+  };
+
+  const toggleExpandedStop = (key: string) => {
+    setExpandedStopKey((current) => {
+      const next = current === key ? null : key;
+      if (next !== key || timeEditorKey !== key) setTimeEditorKey(null);
+      return next;
+    });
+  };
+
+  const updateStopDuration = (key: string, durationMinutes: number) => {
+    if (isPlanLocked) return;
+    const nextDuration = Math.max(15, Math.round(durationMinutes / 15) * 15);
+    setPlan((prev) => ({
+      ...prev,
+      stops: prev.stops.map((stop) => stop.key === key ? { ...stop, durationMinutes: nextDuration } : stop),
+      lockedArrivalTimes: undefined,
+      savedPlanId: undefined,
+    }));
+    setPlanTimes((prev) => ({ ...prev, [key]: stopTimeFromMinutes(nextDuration) }));
+  };
+
+  const reorderPlanStops = ({ order, fromIndex, toIndex }: SortableFlexDragEndParams) => {
+    if (isPlanLocked || fromIndex === toIndex) return;
+    setPlan((prev) => {
+      const stops = order(prev.stops);
+      return {
+        ...prev,
+        ...currentPlanContext(stops),
+        stops,
+        lockedArrivalTimes: undefined,
+        savedPlanId: undefined,
+      };
+    });
+    setArrivalTimes({});
+    addLog(`Plan stop moved from ${fromIndex + 1} to ${toIndex + 1}`);
   };
 
   const selectNowDestination = async (slot: PlanSlot, item: PlaceCard | string) => {
@@ -6093,19 +6075,14 @@ function NomNomGoApp() {
     }
 
     const alreadySelected = plan.stops.some((stop) => stop.slot === resultMode && cardToId(stop.item) === card.id);
-    const insertedStop = insertStopIntoPlan(resultMode, card);
-    addLog(alreadySelected ? `Removed ${resultMode} choice: ${card.title}` : `Added ${resultMode} choice: ${card.title}`);
+    const resultVisualType = searchVisualType === 'dessert' && resultMode === 'food' && !selectedFoods.includes('Dessert')
+      ? 'food'
+      : searchVisualType;
+    const insertedStop = insertStopIntoPlan(resultMode, card, resultVisualType);
+    addLog(alreadySelected ? `Already in plan: ${card.title}` : `Added ${resultMode} choice: ${card.title}`);
     if (insertedStop) scrollToPlanStop(insertedStop.key);
     setManualSearch('');
     setManualSearchSubmitted(false);
-
-    if (resultMode === 'food') {
-      if (!alreadySelected && pendingInsertIndex === null) {
-        setResultMode('activity');
-        await searchActivitiesNearFood(card);
-      }
-      return;
-    }
   };
 
   const openCardMaps = async (card: PlaceCard) => {
@@ -6140,7 +6117,7 @@ function NomNomGoApp() {
 
   const quickShareTitle = (target: QuickShareTarget) => {
     if (target.kind === 'card') return target.card.title;
-    return cardToName(target.stop.item) || `${target.stop.slot === 'food' ? 'Food' : 'Activity'} stop`;
+    return cardToName(target.stop.item) || `${itineraryKindLabel(itineraryKindForStop(target.stop))} stop`;
   };
 
   const titleForPlanStops = (stops: ItineraryStop[]) => {
@@ -6203,7 +6180,6 @@ function NomNomGoApp() {
   const planTitle = plan.title || activeBetaPlan?.title || titleForPlanStops(plan.stops);
   const isPlanLocked = plan.status === 'locked';
   const isImportedGoogleMapsPlan = plan.routeProvider === 'google_maps';
-  const isImportedGoogleMapsDraft = isImportedGoogleMapsPlan && plan.status === 'draft';
   const planInvitees = plan.invitees || [];
   const currentContextSignature = currentPlanContext();
   const savedPlanContentSignature = (saved: SavedPlan) => JSON.stringify({
@@ -6211,14 +6187,30 @@ function NomNomGoApp() {
     planDateStart: dateRangeForSavedPlan(saved).start,
     planDateEnd: dateRangeForSavedPlan(saved).end,
     timeWindow: saved.timeWindow || '',
-    stops: saved.stops.map((stop) => ({ slot: stop.slot, itemId: cardToId(stop.item) })),
+    stops: saved.stops.map((stop) => ({
+      slot: stop.slot,
+      itemId: cardToId(stop.item),
+      visualType: stop.visualType,
+      durationMinutes: stop.durationMinutes ?? (saved.planTimes?.[stop.key]
+        ? clockMinutes(saved.planTimes[stop.key]!)
+        : defaultStopDurationMinutes(stop)),
+      travelMode: stop.travelMode,
+      selectedFeatures: stop.selectedFeatures || [],
+    })),
   });
   const currentPlanContentSignature = JSON.stringify({
     title: planTitle,
     planDateStart: currentContextSignature.planDateStart,
     planDateEnd: currentContextSignature.planDateEnd,
     timeWindow: currentContextSignature.timeWindow || '',
-    stops: plan.stops.map((stop) => ({ slot: stop.slot, itemId: cardToId(stop.item) })),
+    stops: plan.stops.map((stop) => ({
+      slot: stop.slot,
+      itemId: cardToId(stop.item),
+      visualType: stop.visualType,
+      durationMinutes: durationForStop(stop),
+      travelMode: stop.travelMode,
+      selectedFeatures: stop.selectedFeatures || [],
+    })),
   });
   const isCurrentPlanSaved = Boolean(plan.savedPlanId) ||
     visibleSavedPlans.some((saved) =>
@@ -6364,8 +6356,6 @@ function NomNomGoApp() {
       });
       setPlanTimes({});
       setArrivalTimes({});
-      setPendingInsertIndex(null);
-      setSelectedStopKey(nextStop.key);
       setTimeEditorKey(null);
       setNowMode('closed');
       setPlanSetupOpen(false);
@@ -6380,7 +6370,6 @@ function NomNomGoApp() {
       void refreshStopFeatures(nextStop.key, slot, item);
       scrollToPlan();
       addLog(`NOW plan created: ${nextTitle}`);
-      showToast('Added to current plan');
     } catch (err) {
       addLog(`NOW plan creation failed: ${compactError(err)}`);
       Alert.alert('Could not create plan', compactError(err));
@@ -6440,8 +6429,9 @@ function NomNomGoApp() {
 
       const stops = [...prev.stops];
       [stops[index], stops[targetIndex]] = [stops[targetIndex], stops[index]];
-      return { ...prev, stops, savedPlanId: undefined };
+      return { ...prev, ...currentPlanContext(stops), stops, lockedArrivalTimes: undefined, savedPlanId: undefined };
     });
+    setArrivalTimes({});
     addLog(`Plan stop moved ${direction < 0 ? 'up' : 'down'}`);
   };
 
@@ -6469,13 +6459,18 @@ function NomNomGoApp() {
     }, ...current.filter((record) => record.id !== nextRecord.id)]);
     if (activeBetaPlanId !== nextRecord.id) await saveActiveBetaPlan(nextRecord.id);
     setTimeEditorKey(null);
+    setExpandedStopKey(null);
+    setAddStopMenuOpen(false);
+    setIdeaDraft('');
+    setPendingVisualType(undefined);
+    setSearchVisualType(undefined);
+    setRecentlyAddedStopKey(null);
     setLocationOverrideOpen(false);
     setSearchLocationOverrideOpen(false);
     setCustomDateOpen(false);
     setPreferencesOpen(false);
     setRouteImportOpen(false);
     addLog('Plan locked');
-    showToast('Plan finalized');
   };
 
   const unlockPlan = () => {
@@ -6484,7 +6479,6 @@ function NomNomGoApp() {
       void patchBetaPlan(activeBetaPlanId, (record) => ({ ...record, status: 'planning' }));
     }
     addLog('Plan unlocked');
-    showToast('Plan ready to edit');
   };
 
   const importGoogleMapsRoute = async () => {
@@ -6543,15 +6537,12 @@ function NomNomGoApp() {
       });
       setPlanTimes({});
       setArrivalTimes({});
-      setPendingInsertIndex(null);
-      setSelectedStopKey(importedStops[importedStops.length - 1]?.key || null);
       setTimeEditorKey(null);
       setHasInitiatedSearch(false);
       setCards([]);
       setRouteImportOpen(false);
       setRouteImportUrl('');
       addLog(`Google Maps route imported: ${routeImport.stops.length} stops`);
-      showToast('Route imported as draft');
       setTimeout(() => scrollRef.current?.scrollTo({ y: 0, animated: true }), 100);
     } catch (err) {
       const message = err instanceof Error && err.message === GOOGLE_MAPS_ROUTE_IMPORT_ERROR
@@ -6682,7 +6673,6 @@ function NomNomGoApp() {
       savedPlanId: saved.id,
     }));
     addLog(`Plan saved: ${saved.title}`);
-    showToast('Plan saved');
   };
 
   const loadSavedPlan = (saved: SavedPlan) => {
@@ -6770,9 +6760,13 @@ function NomNomGoApp() {
     });
     setPlanTimes(loadedPlanTimes);
     setArrivalTimes(loadedArrivalOverrides);
-    setPendingInsertIndex(null);
-    setSelectedStopKey(loadedStops[loadedStops.length - 1]?.key || null);
     setTimeEditorKey(null);
+    setExpandedStopKey(null);
+    setAddStopMenuOpen(false);
+    setIdeaDraft('');
+    setPendingVisualType(undefined);
+    setSearchVisualType(undefined);
+    setRecentlyAddedStopKey(null);
     setHasInitiatedSearch(false);
     setCards([]);
     setNowMode('closed');
@@ -6805,11 +6799,16 @@ function NomNomGoApp() {
     setPlan(EMPTY_PLAN);
     setPlanTimes({});
     setArrivalTimes({});
-    setSelectedStopKey(null);
+    setTimeEditorKey(null);
+    setExpandedStopKey(null);
+    setAddStopMenuOpen(false);
+    setIdeaDraft('');
+    setPendingVisualType(undefined);
+    setSearchVisualType(undefined);
+    setRecentlyAddedStopKey(null);
     setHasInitiatedSearch(false);
     setCards([]);
     addLog('Plan cleared');
-    showToast('Plan cleared');
   };
 
   const requestClearCurrentPlan = () => {
@@ -6911,15 +6910,16 @@ function NomNomGoApp() {
       if (nowDiscovering) {
         await selectNowDestination(slot, value);
         addLog(`Manual NOW ${slot} added without Places lookup: ${value}`);
-        notifyGooglePlacesMissing('Manual lookup skipped: Google Places key missing', 'Added to current plan. Places details need a Google key.');
         return;
       }
-      const insertedStop = insertStopIntoPlan(slot, value);
+      const manualVisualType = searchVisualType === 'dessert' && slot === 'food' && selectedFoods.includes('Dessert')
+        ? 'dessert'
+        : searchVisualType === slot ? searchVisualType : undefined;
+      const insertedStop = insertStopIntoPlan(slot, value, manualVisualType);
       if (insertedStop) scrollToPlanStop(insertedStop.key);
       setManualSearch('');
       setManualSearchSubmitted(false);
       addLog(`Manual ${slot} used without Places lookup: ${value}`);
-      notifyGooglePlacesMissing('Manual lookup skipped: Google Places key missing', 'Added manually. Places details need a Google key.');
       return;
     }
 
@@ -6966,19 +6966,9 @@ function NomNomGoApp() {
     });
     setPlanTimes((prev) => ({ ...prev, [stop.key]: undefined }));
     setArrivalTimes((prev) => ({ ...prev, [stop.key]: undefined }));
-    setSelectedStopKey((current) => current === stop.key ? null : current);
     if (timeEditorKey === stop.key) setTimeEditorKey(null);
+    if (expandedStopKey === stop.key) setExpandedStopKey(null);
     addLog(`Removed ${stop.slot}: ${cardToName(stop.item)}`);
-  };
-
-  const toggleStopFeaturesOpen = (key: string) => {
-    if (isPlanLocked) return;
-    setPlan((prev) => ({
-      ...prev,
-      stops: prev.stops.map((stop) =>
-        stop.key === key ? { ...stop, featuresExpanded: !stop.featuresExpanded } : stop,
-      ),
-    }));
   };
 
   const toggleStopFeature = (key: string, feature: string) => {
@@ -7075,7 +7065,6 @@ function NomNomGoApp() {
         [currentTesterName]: status,
       },
     }));
-    showToast(`RSVP: ${rsvpStatusLabel(status)}`);
   };
 
   const addActiveBetaSuggestion = async (slot: PlanSlot) => {
@@ -7107,7 +7096,6 @@ function NomNomGoApp() {
       participantSuggestions: [suggestion, ...(prev.participantSuggestions || [])],
     }));
     setBetaSuggestionInput('');
-    showToast('Suggestion added');
   };
 
   const addSuggestionToCurrentPlan = (suggestion: PlanningSuggestion) => {
@@ -7115,7 +7103,6 @@ function NomNomGoApp() {
     const insertedStop = insertStopIntoPlan(suggestion.slot, suggestion.item);
     if (insertedStop) {
       scrollToPlanStop(insertedStop.key);
-      showToast('Suggestion added to current plan');
     }
   };
 
@@ -7202,7 +7189,6 @@ function NomNomGoApp() {
       suggestions: [suggestion, ...record.suggestions.filter((item) => !samePlanningSuggestion(item, slot, value))],
     }));
     setBetaSuggestionInput('');
-    showToast('Suggestion added');
   };
 
   const shareVisitorBetaPlan = async () => {
@@ -7411,11 +7397,6 @@ function NomNomGoApp() {
   const betaPlanSuggestions = activeBetaPlan?.suggestions || plan.participantSuggestions || [];
   const betaPlanRsvpSummary = rsvpSummaryText(betaPlanRsvps);
   const currentBetaRsvp = betaPlanRsvps[currentTesterName];
-  const activeBetaPlanOwner = activeBetaPlan?.owner || plan.owner || currentTesterName;
-  const canFinalizeActiveBetaPlan = activeBetaPlanOwner === currentTesterName;
-  const activeBetaPlanFinalLabel = activeBetaPlan ? betaPlanFinalLabel(activeBetaPlan) : plan.stops.map((stop) => cardToName(stop.item)).filter(Boolean).join(' + ');
-  const selectedDraftFinalLabel = plan.stops.map((stop) => cardToName(stop.item)).filter(Boolean).join(' + ');
-  const showBetaPlanDetail = Boolean((activeBetaPlan || plan.sharedPlanId || !homeOpen) && !nowExperienceActive && !hasAnyActiveStop && !isPlanLocked);
   const showDiscoveryTools = !savedPlansLandingOpen && !isPlanLocked && (!nowExperienceActive || nowDiscovering);
   const showPlanningTools = !savedPlansLandingOpen && !isPlanLocked && !nowExperienceActive;
   const activeNavigationKey: MainNavigationKey | undefined = accountSettingsOpen
@@ -7434,14 +7415,6 @@ function NomNomGoApp() {
   const planPeopleSummary = activePlanPeopleSummary;
   const planSetupPeopleSummary = planSetupInvitees.length ? unique([currentTesterName, ...planSetupInvitees]).join(', ') : 'Just me';
   const nowPeopleSummary = nowSelectedPeople.length ? unique([currentTesterName, ...nowSelectedPeople]).join(', ') : 'Just me';
-  const activePlanIntentLabel = planningIntentLabel(plan.intent || activeBetaPlan?.intent || 'both');
-  const activePlanGoingCount = rsvpCountsFor(betaPlanRsvps).going;
-  const activePlanSummaryLine = [
-    activePlanContextLabel,
-    searchLocationLabel,
-    activePlanIntentLabel,
-    `${activePlanGoingCount} Going`,
-  ].filter(Boolean).join(' | ');
   const placeDetailIsSelected = Boolean(placeDetailCard && !nowDiscovering && plan.stops.some(
     (stop) => stop.slot === resultMode && cardToId(stop.item) === placeDetailCard.id,
   ));
@@ -7571,6 +7544,8 @@ function NomNomGoApp() {
                   <View style={styles.visitorRouteList}>
                     {visitorBetaPlan.stops.map((stop, index) => {
                       const stopLocation = cityStateLabel(cityStateForPlace(stop.item));
+                      const stopKind = itineraryKindForStop(stop);
+                      const stopTone = semanticTones[stopKind];
                       return (
                         <TouchableOpacity
                           key={`visitor-route-${stop.key}`}
@@ -7579,15 +7554,9 @@ function NomNomGoApp() {
                           accessibilityRole="button"
                           accessibilityLabel={`Open route to stop ${index + 1}, ${cardToName(stop.item) || 'Stop'}`}
                         >
-                          <Text style={[
-                            styles.visitorRouteIndex,
-                            stop.slot === 'food' ? styles.stopIndexFood : styles.stopIndexActivity,
-                          ]}>{index + 1}</Text>
+                          <Text style={[styles.visitorRouteIndex, { backgroundColor: stopTone.solid, color: stopTone.foreground }]}>{index + 1}</Text>
                           <View style={styles.visitorRouteStopText}>
-                            <Text style={[
-                              styles.visitorRouteType,
-                              stop.slot === 'food' ? styles.visitorRouteTypeFood : styles.visitorRouteTypeActivity,
-                            ]}>{stop.slot === 'food' ? 'Food' : 'Activity'}</Text>
+                            <Text style={[styles.visitorRouteType, { color: stopTone.accent }]}>{itineraryKindLabel(stopKind)}</Text>
                             <Text style={styles.visitorRouteName} numberOfLines={1}>{cardToName(stop.item) || 'Stop'}</Text>
                             {stopLocation ? <Text style={styles.visitorRouteMeta} numberOfLines={1}>{stopLocation}</Text> : null}
                           </View>
@@ -7753,7 +7722,7 @@ function NomNomGoApp() {
       keyboardVerticalOffset={0}
     >
     <View style={styles.appShell}>
-    <ScrollView
+    <Animated.ScrollView
       ref={scrollRef}
       style={[styles.screen, isLightMode && styles.lightScreen, isDarkMode && styles.darkScreen]}
       contentContainerStyle={styles.content}
@@ -8537,11 +8506,14 @@ function NomNomGoApp() {
 
             {activePlanningSession.status === 'finalized' && activePlanningSession.finalPlan.length ? (
               <View style={styles.sessionRecommendationBox}>
-                {activePlanningSession.finalPlan.map((stop, index) => (
-                  <Text key={stop.key} style={[styles.sessionRecommendationLine, isDarkMode && styles.darkText]}>
-                    {index + 1}. {stop.slot === 'food' ? 'Food' : 'Activity'}: {cardToName(stop.item) || 'Stop'}
-                  </Text>
-                ))}
+                {activePlanningSession.finalPlan.map((stop, index) => {
+                  const stopKind = itineraryKindForStop(stop);
+                  return (
+                    <Text key={stop.key} style={[styles.sessionRecommendationLine, isDarkMode && styles.darkText]}>
+                      {index + 1}. {itineraryKindLabel(stopKind)}: {cardToName(stop.item) || 'Stop'}
+                    </Text>
+                  );
+                })}
                 <View style={styles.buttonRow}>
                   <Button label="Load final plan" onPress={loadFinalSessionPlan} compact />
                 </View>
@@ -8556,349 +8528,466 @@ function NomNomGoApp() {
         style={[styles.planBox, isDarkMode && styles.darkPanel]}
         onLayout={(event) => { planBoxYRef.current = event.nativeEvent.layout.y; }}
       >
-        {showBetaPlanDetail ? (
-          <View style={[styles.betaPlanDetailCard, isDarkMode && styles.darkCard]}>
-            <View style={styles.betaPlanHeader}>
-              <View style={styles.betaPlanTitleBlock}>
-                <Text style={[styles.betaPlanTitle, isDarkMode && styles.darkText]} numberOfLines={2}>
-                  {planTitle}
-                </Text>
-                <Text style={[styles.betaSummaryLine, isDarkMode && styles.darkMutedText]} numberOfLines={2}>
-                  {activePlanSummaryLine}
-                </Text>
-              </View>
-              <View style={[styles.betaStatusPill, isPlanLocked && styles.betaStatusPillLocked]}>
-                <Text style={styles.betaStatusText}>{isPlanLocked ? 'Finalized' : 'Planning'}</Text>
-              </View>
-            </View>
-
-            {isPlanLocked || activeBetaPlanFinalLabel || selectedDraftFinalLabel ? (
-              <View style={styles.betaFinalBox}>
-                <Text style={styles.betaFinalLabel}>{isPlanLocked ? 'Final plan' : 'Selected option'}</Text>
-                <Text style={styles.betaFinalValue}>
-                  {isPlanLocked
-                    ? activeBetaPlanFinalLabel || selectedDraftFinalLabel || 'Final option selected'
-                    : selectedDraftFinalLabel || 'Ready when everyone is.'}
-                </Text>
-              </View>
-            ) : (
-              <View style={[styles.betaPrimaryActionBox, isDarkMode && styles.darkChip]}>
-                <Text style={[styles.betaPrimaryPrompt, isDarkMode && styles.darkText]}>What should we do?</Text>
-                <View style={styles.betaSearchActions}>
-                  <TouchableOpacity
-                    style={[styles.betaSearchButton, styles.betaSearchButtonFood]}
-                    onPress={() => searchFromPlan('food')}
-                    accessibilityRole="button"
-                    accessibilityLabel="Search Food"
-                  >
-                    <Ionicons name="restaurant-outline" size={20} color={semanticTones.food.foreground} />
-                    <Text style={[styles.betaSearchButtonText, styles.betaSearchButtonTextLight]}>Search Food</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.betaSearchButton, styles.betaSearchButtonActivity]}
-                    onPress={() => searchFromPlan('activity')}
-                    accessibilityRole="button"
-                    accessibilityLabel="Search Activities"
-                  >
-                    <Ionicons name="sparkles-outline" size={20} color={colors.textInverse} />
-                    <Text style={styles.betaSearchButtonText}>Search Activities</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            )}
-
-            <View style={styles.betaSection}>
-              <View style={styles.betaSectionHeader}>
-                <Text style={[styles.sessionSubhead, isDarkMode && styles.darkText]}>Suggestions</Text>
-                <Text style={[styles.betaSuggestionMeta, isDarkMode && styles.darkMutedText]}>
-                  {betaPlanSuggestions.length ? `${betaPlanSuggestions.length} option${betaPlanSuggestions.length === 1 ? '' : 's'}` : 'Add an idea'}
-                </Text>
-              </View>
-              {betaPlanSuggestions.length ? betaPlanSuggestions.map((suggestion) => (
-                <View key={suggestion.id} style={[styles.betaSuggestionRow, isDarkMode && styles.darkCard]}>
-                  <View style={styles.betaSuggestionTextBlock}>
-                    <Text style={[styles.betaSuggestionTitle, isDarkMode && styles.darkText]}>{cardToName(suggestion.item) || 'Suggestion'}</Text>
-                    <Text style={[styles.betaSuggestionMeta, isDarkMode && styles.darkMutedText]}>
-                      {suggestion.slot === 'food' ? 'Food' : 'Activity'} by {suggestion.addedBy}
-                    </Text>
-                  </View>
-                  {!isPlanLocked ? (
-                    <Button label="Add Stop" onPress={() => addSuggestionToCurrentPlan(suggestion)} primary compact />
-                  ) : null}
-                </View>
-              )) : (
-                <Text style={[styles.empty, isDarkMode && styles.darkMutedText]}>Suggestions will appear here.</Text>
-              )}
-              {!isPlanLocked ? (
-                <View style={styles.betaSuggestionComposer}>
-                  <TextInput
-                    style={[styles.input, isDarkMode && styles.darkPanelInput, Platform.OS === 'web' && styles.webInput]}
-                    value={betaSuggestionInput}
-                    onChangeText={setBetaSuggestionInput}
-                    accessibilityLabel="Plan suggestion"
-                    placeholder="Place or idea"
-                    placeholderTextColor={isLightMode ? colors.textTertiary : colors.textSecondary}
-                    returnKeyType="done"
-                    onSubmitEditing={() => addActiveBetaSuggestion(resultMode)}
-                  />
-                  <View style={styles.betaSuggestionComposerActions}>
-                    <Button label="Food" onPress={() => addActiveBetaSuggestion('food')} compact />
-                    <Button label="Activity" onPress={() => addActiveBetaSuggestion('activity')} compact />
-                  </View>
-                </View>
-              ) : null}
-            </View>
-
-            <View style={styles.betaSection}>
-              <Text style={[styles.sessionSubhead, isDarkMode && styles.darkText]}>Share</Text>
-              <View style={styles.betaActions}>
-                <Button label="Share Plan" onPress={shareActiveBetaPlan} primary compact />
-                <Button
-                  label={isPlanLocked ? 'Finalized' : 'Finalize Plan'}
-                  onPress={lockPlan}
-                  compact
-                  disabled={isPlanLocked || !canFinalizeActiveBetaPlan || !plan.stops.length}
-                />
-                {!isPlanLocked && hasAnyActiveStop && !isCurrentPlanSaved ? (
-                  <Button label="Save" onPress={saveCurrentPlan} compact />
-                ) : null}
-                {hasAnyActiveStop ? (
-                  <Button label={isImportedGoogleMapsPlan && plan.sourceUrl ? 'Open route' : 'Route'} onPress={openRouteOptions} compact />
-                ) : null}
-                {isPlanLocked ? (
-                  <Button label="Add to Calendar" onPress={addActiveBetaPlanToCalendar} success compact />
-                ) : null}
-              </View>
-            </View>
-
-            <View style={styles.betaSection}>
-              <View style={styles.betaSectionHeader}>
-                <Text style={[styles.sessionSubhead, isDarkMode && styles.darkText]}>Your RSVP</Text>
-                {currentBetaRsvp ? (
-                  <Text style={[styles.betaSuggestionMeta, isDarkMode && styles.darkMutedText]}>{rsvpStatusLabel(currentBetaRsvp)}</Text>
-                ) : null}
-              </View>
-              <RsvpControl value={currentBetaRsvp} onChange={setActiveBetaRsvp} />
-            </View>
-
-            <View style={[styles.betaDetailsBox, isDarkMode && styles.darkChip]}>
-              <TouchableOpacity
-                style={styles.betaDetailsHeader}
-                onPress={() => setPlanSettingsOpen((prev) => !prev)}
-                accessibilityRole="button"
-                accessibilityLabel={`${planSettingsOpen ? 'Hide' : 'Show'} details`}
-                accessibilityState={{ expanded: planSettingsOpen }}
-              >
-                <View style={styles.betaSuggestionTextBlock}>
-                  <Text style={[styles.sessionSubhead, isDarkMode && styles.darkText]}>Details</Text>
-                  <Text style={[styles.betaSuggestionMeta, isDarkMode && styles.darkMutedText]} numberOfLines={1}>
-                    Date, location, people, and title
-                  </Text>
-                </View>
-                <HeaderAction label={planSettingsOpen ? 'Hide' : 'Show'} />
-              </TouchableOpacity>
-              {planSettingsOpen ? (
-                <View style={styles.betaDetailsBody}>
-                  {!isPlanLocked ? (
-                    <View style={styles.setupField}>
-                      <Text style={[styles.setupLabel, isDarkMode && styles.darkMutedText]}>Plan name</Text>
-                      <TextInput
-                        style={[styles.betaPlanTitleInput, isDarkMode && styles.darkPanelInput]}
-                        value={plan.title ?? planTitle}
-                        onChangeText={renamePlan}
-                        accessibilityLabel="Plan name"
-                        placeholder={activeBetaPlan?.title || 'Plan title'}
-                        placeholderTextColor={isLightMode ? colors.textTertiary : colors.textSecondary}
-                      />
-                    </View>
-                  ) : null}
-                  <View style={styles.betaDetailGrid}>
-                    <PlanLine label="When" value={`${activePlanDateLabel} | ${activePlanTimeWindow || 'Time TBD'}`} />
-                    <PlanLine label="Where" value={searchLocationLabel} />
-                    <PlanLine label="Start" value={startingLocationLabel} />
-                    <PlanLine label="Looking for" value={activePlanIntentLabel} />
-                    <PlanLine label="RSVP" value={betaPlanRsvpSummary} />
-                  </View>
-                </View>
-              ) : null}
-            </View>
-          </View>
-        ) : null}
-
         {!isPlanLocked ? (
-          <View style={[styles.planPeopleBox, isDarkMode && styles.darkChip]}>
-            <View style={styles.planPeopleHeader}>
-              <View style={styles.planPeopleTextBlock}>
-                <Text style={[styles.planPeopleTitle, isDarkMode && styles.darkText]}>Who’s going?</Text>
-                <Text style={[styles.planPeopleSummary, isDarkMode && styles.darkMutedText]} numberOfLines={1}>
-                  {planPeopleSummary}
-                </Text>
-              </View>
-              <TouchableOpacity
-                style={styles.planPeopleAddButton}
-                onPress={() => setPlanPeopleOpen((prev) => !prev)}
-                accessibilityRole="button"
-                accessibilityLabel={planPeopleOpen ? 'Done adding people' : 'Add people to this plan'}
-              >
-                <Ionicons name={planPeopleOpen ? 'checkmark-outline' : 'add-outline'} size={17} color={colors.teal} />
-                <Text style={styles.planPeopleAddText}>{planPeopleOpen ? 'Done' : '+ Add People'}</Text>
-              </TouchableOpacity>
-            </View>
-            {planPeopleOpen ? (
-              <View style={styles.planPeoplePicker}>
-                <View style={styles.quickShareUserList}>
-                  {quickShareUsers.map((user) => {
-                    const selected = planInvitees.includes(user);
-                    return (
-                      <TouchableOpacity
-                        key={`now-person-${user}`}
-                        style={[styles.quickShareUserButton, selected && styles.quickShareUserButtonSelected]}
-                        onPress={() => togglePlanInvitee(user)}
-                      >
-                        <Text style={styles.quickShareUserText}>{user}</Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
-                <Text style={[styles.planPeopleHint, isDarkMode && styles.darkMutedText]}>
-                  Full people and group planning is coming soon.
-                </Text>
-              </View>
-            ) : null}
-          </View>
-        ) : null}
-
-        {hasAnyActiveStop && !isPlanLocked && !showBetaPlanDetail ? (
-          <View style={styles.planHeader}>
-            <View style={styles.planTitleBlock}>
-              <Text style={[styles.startWithLabel, isDarkMode && styles.darkMutedText]}>Current Plan</Text>
+          <View style={styles.itineraryBuilder}>
+            <View style={styles.itineraryPlanHeader}>
               <TextInput
-                style={[styles.planTitleInput, isDarkMode && styles.darkPanelInput]}
+                style={styles.itineraryPlanTitleInput}
                 value={plan.title ?? planTitle}
                 onChangeText={renamePlan}
                 accessibilityLabel="Plan name"
                 placeholder="Plan title"
                 placeholderTextColor={colors.textTertiary}
+                numberOfLines={1}
               />
-              <Text style={[styles.planMetaText, isDarkMode && styles.darkMutedText]} numberOfLines={2}>
-                {planHeaderMeta}
+              <Text style={styles.itineraryPlanMeta} numberOfLines={1}>
+                {planHeaderMeta || 'Build a plan one stop at a time'}
               </Text>
             </View>
-            <View style={styles.planHeaderActions}>
-              <Button label="Finalize Plan" onPress={lockPlan} primary compact />
-              {!isCurrentPlanSaved ? <Button label="Save" onPress={saveCurrentPlan} compact /> : null}
-              <Button label="Share Plan" onPress={() => setSharePreviewOpen(true)} compact />
-              <Button label={isImportedGoogleMapsPlan && plan.sourceUrl ? 'Open route' : 'Route'} onPress={openRouteOptions} compact />
-            </View>
-            <View style={styles.planStats}>
-              <Stat label="Stops" value={plan.stops.length} tone="primary" />
-              <Stat label="Total time" value={planTotalTimeLabel} tone="route" />
-              <Stat label="Est. finish" value={planFinishTimeLabel} tone="success" />
-            </View>
-          </View>
-        ) : null}
 
-        {hasAnyActiveStop && !isPlanLocked && !showBetaPlanDetail ? (
-          <View style={[styles.betaPrimaryActionBox, isDarkMode && styles.darkChip]}>
-            <View style={styles.betaSectionHeader}>
-              <View style={styles.betaSuggestionTextBlock}>
-                <Text style={[styles.sessionSubhead, isDarkMode && styles.darkText]}>Build</Text>
-                <Text style={[styles.betaSuggestionMeta, isDarkMode && styles.darkMutedText]} numberOfLines={1}>
-                  Search or add ideas without locking the plan.
-                </Text>
-              </View>
-              <Text style={[styles.betaSuggestionMeta, isDarkMode && styles.darkMutedText]}>{activePlanContextLabel}</Text>
-            </View>
-            <View style={styles.betaSearchActions}>
-              <TouchableOpacity
-                style={[styles.betaSearchButton, styles.betaSearchButtonFood]}
-                onPress={() => searchFromPlan('food')}
-                accessibilityRole="button"
-                accessibilityLabel="Search Food"
-              >
-                <Ionicons name="restaurant-outline" size={20} color={semanticTones.food.foreground} />
-                <Text style={[styles.betaSearchButtonText, styles.betaSearchButtonTextLight]}>Search Food</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.betaSearchButton, styles.betaSearchButtonActivity]}
-                onPress={() => searchFromPlan('activity')}
-                accessibilityRole="button"
-                accessibilityLabel="Search Activities"
-              >
-                <Ionicons name="sparkles-outline" size={20} color={colors.textInverse} />
-                <Text style={styles.betaSearchButtonText}>Search Activities</Text>
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.betaSection}>
-              <View style={styles.betaSectionHeader}>
-                <Text style={[styles.sessionSubhead, isDarkMode && styles.darkText]}>Suggestions</Text>
-                <Text style={[styles.betaSuggestionMeta, isDarkMode && styles.darkMutedText]}>
-                  {betaPlanSuggestions.length ? `${betaPlanSuggestions.length} idea${betaPlanSuggestions.length === 1 ? '' : 's'}` : 'Add idea'}
-                </Text>
-              </View>
-              {betaPlanSuggestions.length ? betaPlanSuggestions.map((suggestion) => {
-                const suggestionInPlan = plan.stops.some((stop) => stop.slot === suggestion.slot && cardToId(stop.item) === cardToId(suggestion.item));
-                return (
-                  <View key={`builder-${suggestion.id}`} style={[styles.betaSuggestionRow, isDarkMode && styles.darkCard]}>
-                    <View style={styles.betaSuggestionTextBlock}>
-                      <Text style={[styles.betaSuggestionTitle, isDarkMode && styles.darkText]}>{cardToName(suggestion.item) || 'Suggestion'}</Text>
-                      <Text style={[styles.betaSuggestionMeta, isDarkMode && styles.darkMutedText]}>
-                        {suggestion.slot === 'food' ? 'Food' : 'Activity'} by {suggestion.addedBy}
-                      </Text>
-                    </View>
-                    <Button
-                      label={suggestionInPlan ? 'In Plan' : 'Add Stop'}
-                      onPress={() => addSuggestionToCurrentPlan(suggestion)}
-                      primary={!suggestionInPlan}
-                      compact
-                      disabled={suggestionInPlan}
-                    />
+            {activeBetaPlan || plan.sharedPlanId ? (
+              <View style={styles.itineraryCollaborationStrip}>
+                <View style={styles.itineraryCollaborationHeader}>
+                  <View style={styles.itineraryCollaborationLabel}>
+                    <Ionicons name="people-outline" size={iconSizes.sm} color={colors.cyan} />
+                    <Text style={styles.itineraryCollaborationTitle}>RSVP</Text>
                   </View>
-                );
-              }) : (
-                <Text style={[styles.empty, isDarkMode && styles.darkMutedText]}>No candidate ideas yet.</Text>
-              )}
-              <View style={styles.betaSuggestionComposer}>
-                <Text style={[styles.setupLabel, isDarkMode && styles.darkMutedText]}>Add idea</Text>
-                <TextInput
-                  style={[styles.input, isDarkMode && styles.darkPanelInput, Platform.OS === 'web' && styles.webInput]}
-                  value={betaSuggestionInput}
-                  onChangeText={setBetaSuggestionInput}
-                  accessibilityLabel="Add a plan idea"
-                  placeholder="Place or idea"
-                  placeholderTextColor={isLightMode ? colors.textTertiary : colors.textSecondary}
-                  returnKeyType="done"
-                  onSubmitEditing={() => addActiveBetaSuggestion(resultMode)}
-                />
-                <View style={styles.betaSuggestionComposerActions}>
-                  <Button label="Food" onPress={() => addActiveBetaSuggestion('food')} compact />
-                  <Button label="Activity" onPress={() => addActiveBetaSuggestion('activity')} compact />
+                  <Text
+                    style={styles.itineraryCollaborationSummary}
+                    numberOfLines={1}
+                    accessibilityLabel={`Shared plan RSVP. ${betaPlanRsvpSummary}`}
+                  >
+                    {betaPlanRsvpSummary}
+                  </Text>
+                </View>
+                <View style={styles.itineraryRsvpActions}>
+                  {COMPACT_RSVP_OPTIONS.map((option) => {
+                    const selected = currentBetaRsvp === option.status;
+                    return (
+                      <TouchableOpacity
+                        key={option.status}
+                        activeOpacity={0.72}
+                        accessibilityLabel={`RSVP ${option.label}`}
+                        accessibilityRole="button"
+                        accessibilityState={{ selected }}
+                        onPress={() => { void setActiveBetaRsvp(option.status); }}
+                        style={[styles.itineraryRsvpButton, selected && styles.itineraryRsvpButtonSelected]}
+                      >
+                        {selected ? (
+                          <Ionicons name="checkmark" size={14} color={colors.cyan} />
+                        ) : null}
+                        <Text style={[styles.itineraryRsvpButtonText, selected && styles.itineraryRsvpButtonTextSelected]} numberOfLines={1}>
+                          {option.label}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
                 </View>
               </View>
-            </View>
-          </View>
-        ) : null}
+            ) : null}
 
-        {!hasAnyActiveStop && !showBetaPlanDetail ? (
-          <View>
-            <Text style={[styles.startWithLabel, isDarkMode && styles.darkMutedText]}>Plan</Text>
-            <View style={styles.startChooser}>
+            <View style={styles.itinerarySectionHeader}>
+              <View style={styles.itinerarySectionCopy}>
+                <Text style={styles.itinerarySectionTitle}>Plan stops</Text>
+                <Text style={styles.itinerarySectionHint}>Drag the handle to reorder · Tap a stop to expand</Text>
+              </View>
               <TouchableOpacity
-                style={[styles.startChoice, styles.startChoiceFood]}
-                onPress={() => searchFromPlan('food')}
+                activeOpacity={0.72}
+                accessibilityLabel={addStopMenuOpen ? 'Close add stop options' : 'Add stop'}
+                accessibilityRole="button"
+                accessibilityState={{ expanded: addStopMenuOpen }}
+                onPress={() => {
+                  setAddStopMenuOpen((current) => !current);
+                  if (addStopMenuOpen) setPendingVisualType(undefined);
+                }}
+                style={[styles.itineraryAddStopButton, addStopMenuOpen && styles.itineraryAddStopButtonActive]}
               >
-                <Ionicons name="restaurant-outline" size={22} color={semanticTones.food.foreground} />
-                <Text style={[styles.startChoiceLabel, styles.startChoiceFoodLabel]}>Food</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.startChoice, styles.startChoiceActivity]}
-                onPress={() => searchFromPlan('activity')}
-              >
-                <Ionicons name="sparkles-outline" size={22} color={colors.textInverse} />
-                <Text style={[styles.startChoiceLabel, styles.startChoiceActivityLabel]}>Activity</Text>
+                <Ionicons name={addStopMenuOpen ? 'close' : 'add'} size={iconSizes.sm} color={colors.coral} />
+                <Text style={styles.itineraryAddStopText}>Add stop</Text>
               </TouchableOpacity>
             </View>
+
+            {addStopMenuOpen ? (
+              <View style={styles.itineraryAddMenu}>
+                <View style={styles.itineraryTypeGrid}>
+                  <TouchableOpacity
+                    activeOpacity={0.72}
+                    accessibilityLabel="Search for a food stop"
+                    accessibilityRole="button"
+                    onPress={() => searchFromPlan('food', 'food')}
+                    style={[styles.itineraryTypeButton, styles.itineraryTypeButtonFood]}
+                  >
+                    <Ionicons name="restaurant-outline" size={iconSizes.md} color={semanticTones.food.accent} />
+                    <Text style={[styles.itineraryTypeText, { color: semanticTones.food.accent }]}>Food</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    activeOpacity={0.72}
+                    accessibilityLabel="Search for an activity stop"
+                    accessibilityRole="button"
+                    onPress={() => searchFromPlan('activity', 'activity')}
+                    style={[styles.itineraryTypeButton, styles.itineraryTypeButtonActivity]}
+                  >
+                    <Ionicons name="walk-outline" size={iconSizes.md} color={semanticTones.activity.accent} />
+                    <Text style={[styles.itineraryTypeText, { color: semanticTones.activity.accent }]}>Activity</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    activeOpacity={0.72}
+                    accessibilityLabel="Search for a dessert stop"
+                    accessibilityRole="button"
+                    onPress={() => searchFromPlan('food', 'dessert')}
+                    style={[styles.itineraryTypeButton, styles.itineraryTypeButtonDessert]}
+                  >
+                    <Ionicons name="ice-cream-outline" size={iconSizes.md} color={semanticTones.dessert.accent} />
+                    <Text style={[styles.itineraryTypeText, { color: semanticTones.dessert.accent }]}>Dessert</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    activeOpacity={0.72}
+                    accessibilityLabel="Add an idea or other stop"
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: pendingVisualType === 'idea' }}
+                    onPress={() => setPendingVisualType((current) => current === 'idea' ? undefined : 'idea')}
+                    style={[
+                      styles.itineraryTypeButton,
+                      styles.itineraryTypeButtonIdea,
+                      pendingVisualType === 'idea' && styles.itineraryTypeButtonSelected,
+                    ]}
+                  >
+                    <Ionicons name="bulb-outline" size={iconSizes.md} color={semanticTones.idea.accent} />
+                    <Text style={[styles.itineraryTypeText, { color: semanticTones.idea.accent }]}>Idea / Other</Text>
+                  </TouchableOpacity>
+                </View>
+
+                {pendingVisualType === 'idea' ? (
+                  <View style={styles.itineraryIdeaComposer}>
+                    <TextInput
+                      style={styles.itineraryIdeaInput}
+                      value={ideaDraft}
+                      onChangeText={setIdeaDraft}
+                      accessibilityLabel="Idea or other stop name"
+                      placeholder="Place or idea"
+                      placeholderTextColor={colors.textTertiary}
+                      returnKeyType="done"
+                      onSubmitEditing={addIdeaStop}
+                    />
+                    <TouchableOpacity
+                      activeOpacity={0.72}
+                      accessibilityLabel="Add idea to the end of the plan"
+                      accessibilityRole="button"
+                      accessibilityState={{ disabled: !ideaDraft.trim() }}
+                      disabled={!ideaDraft.trim()}
+                      onPress={addIdeaStop}
+                      style={[styles.itineraryIdeaAddButton, !ideaDraft.trim() && styles.itineraryControlDisabled]}
+                    >
+                      <Ionicons name="arrow-forward" size={iconSizes.sm} color={colors.textInverse} />
+                      <Text style={styles.itineraryIdeaAddText}>Add</Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : null}
+
+                {betaPlanSuggestions.length ? (
+                  <View style={styles.itineraryCandidateList}>
+                    <Text style={styles.itineraryCandidateHeading}>Suggestions</Text>
+                    {betaPlanSuggestions.map((suggestion) => {
+                      const suggestionInPlan = plan.stops.some((stop) =>
+                        stop.slot === suggestion.slot && cardToId(stop.item) === cardToId(suggestion.item),
+                      );
+                      return (
+                        <View key={`builder-${suggestion.id}`} style={styles.itineraryCandidateRow}>
+                          <View style={styles.itineraryCandidateCopy}>
+                            <Text style={styles.itineraryCandidateName} numberOfLines={1}>
+                              {cardToName(suggestion.item) || 'Suggestion'}
+                            </Text>
+                            <Text style={styles.itineraryCandidateMeta} numberOfLines={1}>
+                              {suggestion.slot === 'food' ? 'Food' : 'Activity'} · {suggestion.addedBy}
+                            </Text>
+                          </View>
+                          <TouchableOpacity
+                            activeOpacity={0.72}
+                            accessibilityLabel={suggestionInPlan ? 'Already in plan' : `Add ${cardToName(suggestion.item) || 'suggestion'}`}
+                            accessibilityRole="button"
+                            accessibilityState={{ disabled: suggestionInPlan }}
+                            disabled={suggestionInPlan}
+                            onPress={() => addSuggestionToCurrentPlan(suggestion)}
+                            style={[styles.itineraryCandidateAdd, suggestionInPlan && styles.itineraryControlDisabled]}
+                          >
+                            <Text style={styles.itineraryCandidateAddText}>{suggestionInPlan ? 'In plan' : 'Add'}</Text>
+                          </TouchableOpacity>
+                        </View>
+                      );
+                    })}
+                  </View>
+                ) : null}
+
+                <View style={styles.itineraryGroupSuggestion}>
+                  <Text style={styles.itineraryCandidateHeading}>Suggest to the group</Text>
+                  <TextInput
+                    style={styles.itineraryIdeaInput}
+                    value={betaSuggestionInput}
+                    onChangeText={setBetaSuggestionInput}
+                    accessibilityLabel="Plan suggestion"
+                    placeholder="Place or idea"
+                    placeholderTextColor={colors.textTertiary}
+                    returnKeyType="done"
+                    onSubmitEditing={() => addActiveBetaSuggestion(resultMode)}
+                  />
+                  <View style={styles.itinerarySuggestionActions}>
+                    <TouchableOpacity
+                      activeOpacity={0.72}
+                      accessibilityLabel="Suggest as food"
+                      accessibilityRole="button"
+                      accessibilityState={{ disabled: !betaSuggestionInput.trim() }}
+                      disabled={!betaSuggestionInput.trim()}
+                      onPress={() => addActiveBetaSuggestion('food')}
+                      style={[styles.itinerarySuggestionButton, !betaSuggestionInput.trim() && styles.itineraryControlDisabled]}
+                    >
+                      <Ionicons name="restaurant-outline" size={iconSizes.xs} color={semanticTones.food.accent} />
+                      <Text style={styles.itinerarySuggestionButtonText}>Food</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      activeOpacity={0.72}
+                      accessibilityLabel="Suggest as an activity"
+                      accessibilityRole="button"
+                      accessibilityState={{ disabled: !betaSuggestionInput.trim() }}
+                      disabled={!betaSuggestionInput.trim()}
+                      onPress={() => addActiveBetaSuggestion('activity')}
+                      style={[styles.itinerarySuggestionButton, !betaSuggestionInput.trim() && styles.itineraryControlDisabled]}
+                    >
+                      <Ionicons name="walk-outline" size={iconSizes.xs} color={semanticTones.activity.accent} />
+                      <Text style={styles.itinerarySuggestionButtonText}>Activity</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              </View>
+            ) : null}
+
+            <View
+              style={styles.itineraryList}
+              onLayout={(event) => {
+                const { width, y } = event.nativeEvent.layout;
+                timelineYRef.current = y;
+                setItineraryListWidth((current) => (
+                  current !== undefined && Math.abs(current - width) < 1 ? current : width
+                ));
+              }}
+            >
+              {plan.stops.length ? (
+                <Sortable.Flex
+                  activeItemOpacity={1}
+                  activeItemScale={1}
+                  activeItemShadowOpacity={0.22}
+                  alignItems="flex-start"
+                  autoScrollActivationOffset={[96, 132]}
+                  autoScrollMaxVelocity={900}
+                  customHandle
+                  dragActivationDelay={0}
+                  dragActivationFailOffset={10}
+                  DropIndicatorComponent={ItineraryInsertionIndicator}
+                  dropIndicatorStyle={{}}
+                  flexDirection="column"
+                  flexWrap="nowrap"
+                  inactiveItemOpacity={1}
+                  itemEntering={null}
+                  onDragEnd={reorderPlanStops}
+                  overDrag="vertical"
+                  rowGap={spacing.xs}
+                  scrollableRef={scrollRef}
+                  showDropIndicator
+                  strategy="insert"
+                  width={itineraryListWidth}
+                >
+                  {plan.stops.map((stop, index) => {
+                    const nextStop = plan.stops[index + 1];
+                    const nextTravelMeta = nextStop ? travelMetaForStop(nextStop, index + 1) : undefined;
+                    const stopLocation = typeof stop.item === 'string'
+                      ? undefined
+                      : stop.item.address || stop.item.subtitle || cityStateLabel(cityStateForPlace(stop.item));
+                    const kind = itineraryKindForStop(stop);
+                    return (
+                      <View
+                        key={stop.key}
+                        onLayout={(event) => { stopLayoutYRef.current[stop.key] = event.nativeEvent.layout.y; }}
+                        style={[
+                          styles.itinerarySortableItem,
+                          itineraryListWidth !== undefined && { width: itineraryListWidth },
+                        ]}
+                      >
+                        <ItineraryStopRow
+                          animateEntrance={recentlyAddedStopKey === stop.key}
+                          arrivalTime={formatClockAfterMinutes(itineraryArrivalMinutes(index), activePlanTimelineBaseMs)}
+                          durationEditorExpanded={timeEditorKey === stop.key}
+                          durationMinutes={durationForStop(stop)}
+                          expanded={expandedStopKey === stop.key}
+                          featureOptions={stop.featureOptions || []}
+                          kind={kind}
+                          location={stopLocation}
+                          name={cardToName(stop.item) || `${kind === 'idea' ? 'Idea' : kind} stop`}
+                          number={index + 1}
+                          onDeletePress={() => removeStop(stop)}
+                          onDurationChange={(minutes) => updateStopDuration(stop.key, minutes)}
+                          onDurationEditorExpandedChange={(expanded) => {
+                            setExpandedStopKey(stop.key);
+                            setTimeEditorKey(expanded ? stop.key : null);
+                          }}
+                          onMapPress={() => openStopMaps(stop)}
+                          onMoveDown={index < plan.stops.length - 1 ? () => moveStop(stop.key, 1) : undefined}
+                          onMoveUp={index > 0 ? () => moveStop(stop.key, -1) : undefined}
+                          onSharePress={() => openQuickShare({ kind: 'stop', stop, index })}
+                          onToggleExpanded={() => toggleExpandedStop(stop.key)}
+                          onToggleFeature={(feature) => toggleStopFeature(stop.key, feature)}
+                          onTravelModeChange={nextStop ? (mode) => setStopTravelMode(nextStop.key, mode) : undefined}
+                          onWebsitePress={canOpenPlaceWebsite(stop.item) ? () => openStopWebsite(stop) : undefined}
+                          selectedFeatures={stop.selectedFeatures || []}
+                          testID={`itinerary-stop-${stop.key}`}
+                          travelMode={nextTravelMeta?.mode}
+                          travelToNext={nextStop && nextTravelMeta ? {
+                            durationMinutes: travelMinutesForStop(nextStop, index + 1),
+                            label: nextTravelMeta.label.toLowerCase(),
+                            mode: nextTravelMeta.mode,
+                          } : null}
+                        />
+                      </View>
+                    );
+                  })}
+                </Sortable.Flex>
+              ) : (
+                <View style={styles.itineraryEmptyState}>
+                  <Ionicons name="list-outline" size={iconSizes.lg} color={colors.textTertiary} />
+                  <Text style={styles.itineraryEmptyTitle}>No stops yet</Text>
+                  <Text style={styles.itineraryEmptyCopy}>Add food, an activity, dessert, or an idea. New stops go to the end.</Text>
+                </View>
+              )}
+            </View>
+
+            {plan.stops.length ? (
+              <>
+                <View style={styles.itinerarySummary}>
+                  <View style={styles.itinerarySummaryValues}>
+                    <View style={styles.itinerarySummaryColumn}>
+                      <Text style={styles.itinerarySummaryLabel}>Est. start</Text>
+                      <Text style={styles.itinerarySummaryValue}>{planStartTimeLabel}</Text>
+                    </View>
+                    <View style={styles.itinerarySummaryDivider} />
+                    <View style={styles.itinerarySummaryColumn}>
+                      <Text style={styles.itinerarySummaryLabel}>Total time</Text>
+                      <Text style={styles.itinerarySummaryValue}>{planTotalTimeLabel}</Text>
+                    </View>
+                    <View style={styles.itinerarySummaryDivider} />
+                    <View style={styles.itinerarySummaryColumn}>
+                      <Text style={styles.itinerarySummaryLabel}>Est. finish</Text>
+                      <Text style={styles.itinerarySummaryValue}>{planFinishTimeLabel}</Text>
+                    </View>
+                  </View>
+                  {targetStatus ? (
+                    <View style={styles.itineraryTargetStatus}>
+                      <Ionicons
+                        name={targetStatus.tone === 'over' ? 'alert-circle-outline' : 'checkmark-circle-outline'}
+                        size={iconSizes.xs}
+                        color={targetStatus.tone === 'over' ? colors.red : targetStatus.tone === 'near' ? colors.amber : colors.green}
+                      />
+                      <Text style={[
+                        styles.itineraryTargetStatusText,
+                        targetStatus.tone === 'over'
+                          ? styles.itineraryTargetStatusOver
+                          : targetStatus.tone === 'near'
+                            ? styles.itineraryTargetStatusNear
+                            : styles.itineraryTargetStatusUnder,
+                      ]}>
+                        {targetStatus.label}
+                      </Text>
+                    </View>
+                  ) : null}
+                </View>
+
+                <View style={styles.itineraryFooterActions}>
+                  <TouchableOpacity
+                    activeOpacity={0.72}
+                    accessibilityLabel="Invite people"
+                    accessibilityRole="button"
+                    accessibilityState={{ expanded: planPeopleOpen }}
+                    onPress={() => setPlanPeopleOpen((current) => !current)}
+                    style={[styles.itinerarySecondaryAction, planPeopleOpen && styles.itinerarySecondaryActionActive]}
+                  >
+                    <Ionicons name="person-add-outline" size={iconSizes.sm} color={colors.textPrimary} />
+                    <Text style={styles.itinerarySecondaryActionText}>Invite</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    activeOpacity={0.72}
+                    accessibilityLabel={isCurrentPlanSaved ? 'Plan saved' : 'Save plan'}
+                    accessibilityRole="button"
+                    accessibilityState={{ disabled: isCurrentPlanSaved }}
+                    disabled={isCurrentPlanSaved}
+                    onPress={saveCurrentPlan}
+                    style={[styles.itinerarySecondaryAction, isCurrentPlanSaved && styles.itineraryControlDisabled]}
+                  >
+                    <Ionicons name={isCurrentPlanSaved ? 'checkmark-outline' : 'bookmark-outline'} size={iconSizes.sm} color={colors.textPrimary} />
+                    <Text style={styles.itinerarySecondaryActionText}>{isCurrentPlanSaved ? 'Saved' : 'Save'}</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    activeOpacity={0.82}
+                    accessibilityLabel="Review and finalize plan"
+                    accessibilityRole="button"
+                    onPress={lockPlan}
+                    style={styles.itineraryPrimaryAction}
+                  >
+                    <Text style={styles.itineraryPrimaryActionText}>Review plan</Text>
+                    <Ionicons name="arrow-forward" size={iconSizes.sm} color={colors.textInverse} />
+                  </TouchableOpacity>
+                </View>
+
+                {planPeopleOpen ? (
+                  <View style={styles.itineraryInvitePanel}>
+                    <Text style={styles.itineraryCandidateHeading}>Invite people</Text>
+                    <View style={styles.quickShareUserList}>
+                      {quickShareUsers.map((user) => {
+                        const selected = planInvitees.includes(user);
+                        return (
+                          <TouchableOpacity
+                            key={`plan-person-${user}`}
+                            accessibilityLabel={`${selected ? 'Remove' : 'Invite'} ${user}`}
+                            accessibilityRole="button"
+                            accessibilityState={{ selected }}
+                            style={[styles.quickShareUserButton, selected && styles.quickShareUserButtonSelected]}
+                            onPress={() => togglePlanInvitee(user)}
+                          >
+                            <Text style={styles.quickShareUserText}>{user}</Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+                  </View>
+                ) : null}
+
+                <View style={styles.itineraryUtilityActions}>
+                  <TouchableOpacity
+                    accessibilityLabel="Share plan"
+                    accessibilityRole="button"
+                    onPress={() => setSharePreviewOpen(true)}
+                    style={styles.itineraryUtilityButton}
+                  >
+                    <Ionicons name="share-outline" size={iconSizes.xs} color={colors.textSecondary} />
+                    <Text style={styles.itineraryUtilityText}>Share</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    accessibilityLabel={isImportedGoogleMapsPlan && plan.sourceUrl ? 'Open route' : 'Route options'}
+                    accessibilityRole="button"
+                    onPress={openRouteOptions}
+                    style={styles.itineraryUtilityButton}
+                  >
+                    <Ionicons name="map-outline" size={iconSizes.xs} color={colors.textSecondary} />
+                    <Text style={styles.itineraryUtilityText}>{isImportedGoogleMapsPlan && plan.sourceUrl ? 'Open route' : 'Route'}</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    accessibilityLabel="Clear plan"
+                    accessibilityRole="button"
+                    onPress={requestClearCurrentPlan}
+                    style={styles.itineraryUtilityButton}
+                  >
+                    <Ionicons name="trash-outline" size={iconSizes.xs} color={colors.textTertiary} />
+                    <Text style={styles.itineraryUtilityText}>Clear plan</Text>
+                  </TouchableOpacity>
+                </View>
+              </>
+            ) : null}
           </View>
         ) : null}
 
@@ -8951,12 +9040,10 @@ function NomNomGoApp() {
                 const stopCityState = cityStateLabel(cityStateForPlace(stop.item));
                 const travelMeta = travelMetaForStop(stop, index);
                 const walkableAfterTesla = travelMeta.mode === 'walk' && isWalkableAfterTeslaStop(plan.stops[index - 1], stop);
+                const stopTone = semanticTones[itineraryKindForStop(stop)];
                 return (
                   <TouchableOpacity key={`locked-${stop.key}`} style={styles.lockedStopRow} onPress={() => openStopMaps(stop)}>
-                    <Text style={[
-                      styles.lockedStopIndex,
-                      stop.slot === 'food' ? styles.stopIndexFood : styles.stopIndexActivity,
-                    ]}>{index + 1}</Text>
+                    <Text style={[styles.lockedStopIndex, { backgroundColor: stopTone.solid, color: stopTone.foreground }]}>{index + 1}</Text>
                     <View style={styles.lockedStopTravelBlock}>
                       <Ionicons name={travelMeta.icon} size={16} color={colors.teal} />
                       <Text style={styles.lockedStopTravelText} numberOfLines={1}>{travelMeta.duration}</Text>
@@ -8986,104 +9073,6 @@ function NomNomGoApp() {
             <Button label="Unlock/Edit" onPress={unlockPlan} compact />
           </View>
           </>
-        ) : null}
-
-        {hasAnyActiveStop && !isPlanLocked ? (
-        <View
-          style={styles.timeline}
-          onLayout={(event) => { timelineYRef.current = event.nativeEvent.layout.y; }}
-        >
-          {plan.stops.map((stop, index) => (
-            <View
-              key={stop.key}
-              style={styles.timelineStopGroup}
-              onLayout={(event) => { stopLayoutYRef.current[stop.key] = event.nativeEvent.layout.y; }}
-            >
-              <PlanStep
-                number={`${index + 1}`}
-                tone={stop.slot}
-                title={isImportedGoogleMapsDraft ? 'Stop' : stop.slot === 'food' ? 'Food' : 'Activity'}
-                value={cardToName(stop.item) || (stop.slot === 'food' ? 'Food stop' : 'Activity stop')}
-                detail={stepDetail(stop, index)}
-                cityState={cityStateLabel(cityStateForPlace(stop.item))}
-                travelMeta={travelMetaForStop(stop, index)}
-                walkable={travelMetaForStop(stop, index).mode === 'walk' && isWalkableAfterTeslaStop(plan.stops[index - 1], stop)}
-                onTravelModePress={(travelMode) => setStopTravelMode(stop.key, travelMode)}
-                featureOptions={stop.featureOptions || []}
-                selectedFeatures={stop.selectedFeatures || []}
-                featuresExpanded={Boolean(stop.featuresExpanded)}
-                onToggleFeaturesOpen={() => toggleStopFeaturesOpen(stop.key)}
-                onToggleFeature={(feature) => toggleStopFeature(stop.key, feature)}
-                active
-                last={index === plan.stops.length - 1}
-                onPress={() => {
-                  markStopSelected(stop.key);
-                  void addStopAfter(stop.slot, index);
-                }}
-                actionLabel="Adjust time"
-                onActionPress={() => {
-                  markStopSelected(stop.key);
-                  openTimeEditor(stop.key, index);
-                }}
-                mapLabel="Map"
-                onMapPress={() => openStopMaps(stop)}
-                websiteLabel={canOpenPlaceWebsite(stop.item) ? 'Website' : undefined}
-                onWebsitePress={canOpenPlaceWebsite(stop.item) ? () => openStopWebsite(stop) : undefined}
-                shareLabel="Share"
-                onSharePress={() => openQuickShare({ kind: 'stop', stop, index })}
-                moveUpLabel={index > 0 ? 'Up' : undefined}
-                onMoveUpPress={index > 0 ? () => moveStop(stop.key, -1) : undefined}
-                moveDownLabel={index < plan.stops.length - 1 ? 'Down' : undefined}
-                onMoveDownPress={index < plan.stops.length - 1 ? () => moveStop(stop.key, 1) : undefined}
-                removeLabel="Remove"
-                onRemovePress={() => removeStop(stop)}
-              />
-              {timeEditorKey === stop.key ? (
-                <View style={styles.timeEditor}>
-                  <Text style={styles.timeEditorTitle}>{stop.slot === 'food' ? 'Food time' : 'Activity time'}</Text>
-                  <Text style={styles.timeStepperGroupLabel}>Arrival time</Text>
-                  <ArrivalTimeControl
-                    value={formatClockTime(draftArrivalTime)}
-                    onHourMinus={() => adjustDraftArrivalTime('hours', -1)}
-                    onHourPlus={() => adjustDraftArrivalTime('hours', 1)}
-                    onMinuteMinus={() => adjustDraftArrivalTime('minutes', -15)}
-                    onMinutePlus={() => adjustDraftArrivalTime('minutes', 15)}
-                  />
-                  <Text style={styles.timeStepperGroupLabel}>Stop duration</Text>
-                  <View style={styles.timeControls}>
-                    <TimeStepper label="Hours" value={draftTime.hours} onMinus={() => adjustDraftTime('hours', -1)} onPlus={() => adjustDraftTime('hours', 1)} />
-                    <TimeStepper label="Minutes" value={draftTime.minutes} onMinus={() => adjustDraftTime('minutes', -5)} onPlus={() => adjustDraftTime('minutes', 5)} />
-                  </View>
-                  <View style={styles.timeEditorActions}>
-                    <Button label="Clear" onPress={() => {
-                      setPlanTimes((prev) => ({ ...prev, [stop.key]: undefined }));
-                      setArrivalTimes((prev) => ({ ...prev, [stop.key]: undefined }));
-                      setPlan((prev) => ({ ...prev, savedPlanId: undefined }));
-                      setArrivalDraftDirty(false);
-                      setDurationDraftDirty(false);
-                      setTimeEditorKey(null);
-                    }} compact />
-                    <Button label="Save time" onPress={saveDraftTime} primary compact />
-                  </View>
-                </View>
-              ) : null}
-              <View style={styles.itineraryAddRow}>
-                <Button label="Add food" onPress={() => addStopAfter('food', index)} compact />
-                <Button label="Add activity" onPress={() => addStopAfter('activity', index)} compact />
-              </View>
-            </View>
-          ))}
-        </View>
-        ) : null}
-
-        {(hasFood || hasActivity) && !isPlanLocked ? (
-          <View style={styles.planActions}>
-            <Button
-              label="Clear plan"
-              onPress={requestClearCurrentPlan}
-              compact
-            />
-          </View>
         ) : null}
 
         {!isPlanLocked ? (
@@ -9674,7 +9663,7 @@ function NomNomGoApp() {
                   ? 'Suggested'
                   : 'Suggest'
                 : isSelected
-                  ? 'Deselect'
+                  ? 'In plan'
                   : 'Add';
             const resultActionIcon: React.ComponentProps<typeof Ionicons>['name'] = nowDiscovering
               ? 'navigate-outline'
@@ -9683,7 +9672,7 @@ function NomNomGoApp() {
                   ? 'checkmark-done-outline'
                   : 'chatbubble-ellipses-outline'
                 : isSelected
-                  ? 'remove-circle-outline'
+                  ? 'checkmark-circle-outline'
                   : 'add-outline';
             const imageUri = cardImageUri(card);
             return (
@@ -9770,7 +9759,7 @@ function NomNomGoApp() {
                   icon={resultActionIcon}
                   onPress={() => selectCard(card)}
                   success={nowDiscovering ? true : !isSelected && !isSuggested}
-                  disabled={nowDiscovering && nowPlanCreating}
+                  disabled={(nowDiscovering && nowPlanCreating) || isSelected || isSuggested}
                 />
                 <CardIconButton
                   label={isFavorite ? `Unstar ${card.title}` : `Star ${card.title}`}
@@ -10126,12 +10115,11 @@ function NomNomGoApp() {
                 </Text>
               ) : null}
               <View style={styles.planPreviewStopList}>
-                {plan.stops.map((stop, index) => (
+                {plan.stops.map((stop, index) => {
+                  const stopTone = semanticTones[itineraryKindForStop(stop)];
+                  return (
                   <View key={`preview-${stop.key}`} style={styles.planPreviewStopRow}>
-                    <Text style={[
-                      styles.planPreviewStopIndex,
-                      stop.slot === 'food' ? styles.stopIndexFood : styles.stopIndexActivity,
-                    ]}>{index + 1}</Text>
+                    <Text style={[styles.planPreviewStopIndex, { backgroundColor: stopTone.solid, color: stopTone.foreground }]}>{index + 1}</Text>
                     <View style={styles.planPreviewStopContent}>
                       <Text style={styles.planPreviewStopName} numberOfLines={2}>{cardToName(stop.item) || 'Stop'}</Text>
                       <View style={styles.planPreviewStopMetadata}>
@@ -10143,7 +10131,8 @@ function NomNomGoApp() {
                       </View>
                     </View>
                   </View>
-                ))}
+                  );
+                })}
               </View>
             </View>
             <View style={[styles.shareControlPanel, isDarkMode && styles.darkModalCard]}>
@@ -10183,12 +10172,11 @@ function NomNomGoApp() {
             ) : null}
             {isPlanLocked ? (
               <View style={styles.shareLockedStopList}>
-                {plan.stops.map((stop, index) => (
+                {plan.stops.map((stop, index) => {
+                  const stopTone = semanticTones[itineraryKindForStop(stop)];
+                  return (
                   <View key={`share-locked-${stop.key}`} style={styles.shareLockedStopRow}>
-                    <Text style={[
-                      styles.shareLockedStopIndex,
-                      stop.slot === 'food' ? styles.stopIndexFood : styles.stopIndexActivity,
-                    ]}>{index + 1}</Text>
+                    <Text style={[styles.shareLockedStopIndex, { backgroundColor: stopTone.solid, color: stopTone.foreground }]}>{index + 1}</Text>
                     <View style={styles.shareLockedTravelBlock}>
                       <Ionicons name={travelMetaForStop(stop, index).icon} size={15} color={colors.teal} />
                       <Text style={styles.shareLockedTravelText} numberOfLines={1}>{travelMetaForStop(stop, index).duration}</Text>
@@ -10196,22 +10184,20 @@ function NomNomGoApp() {
                     <Text style={styles.shareLockedStopTime}>{formatClockTime(displayedArrivalTimeForStop(stop, index))}</Text>
                     <Text style={styles.shareLockedStopName} numberOfLines={1}>{cardToName(stop.item) || 'Stop'}</Text>
                   </View>
-                ))}
+                  );
+                })}
               </View>
             ) : (
-              plan.stops.map((stop, index) => (
+              plan.stops.map((stop, index) => {
+                const stopKind = itineraryKindForStop(stop);
+                const stopTone = semanticTones[stopKind];
+                return (
                 <View key={`share-${stop.key}`} style={styles.shareStop}>
-                  <View style={[
-                    styles.shareStopNumber,
-                    stop.slot === 'food' ? styles.shareStopNumberFood : styles.shareStopNumberActivity,
-                  ]}>
-                    <Text style={styles.shareStopNumberText}>{index + 1}</Text>
+                  <View style={[styles.shareStopNumber, { backgroundColor: stopTone.solid }]}>
+                    <Text style={[styles.shareStopNumberText, { color: stopTone.foreground }]}>{index + 1}</Text>
                   </View>
                   <View style={styles.shareStopBody}>
-                    <Text style={[
-                      styles.shareStopType,
-                      stop.slot === 'food' ? styles.shareStopTypeFood : styles.shareStopTypeActivity,
-                    ]}>{stop.slot === 'food' ? 'Food' : 'Activity'}</Text>
+                    <Text style={[styles.shareStopType, { color: stopTone.accent }]}>{itineraryKindLabel(stopKind)}</Text>
                     <Text style={[styles.shareStopName, isDarkMode && styles.darkText]}>{cardToName(stop.item) || 'Stop'}</Text>
                     <Text style={[styles.shareStopTime, isDarkMode && styles.darkMutedText]}>{stepDetail(stop, index)}</Text>
                     {stop.selectedFeatures?.length ? (
@@ -10219,7 +10205,8 @@ function NomNomGoApp() {
                     ) : null}
                   </View>
                 </View>
-              ))
+                );
+              })
             )}
             {planInvitees.length ? (
               <Text style={[styles.shareMetaLine, isDarkMode && styles.darkMutedText]} numberOfLines={1}>
@@ -10314,7 +10301,7 @@ function NomNomGoApp() {
         </View>
       </Modal>
 
-    </ScrollView>
+    </Animated.ScrollView>
     <BottomNavigation<MainNavigationKey>
       style={styles.bottomNavigation}
       activeKey={activeNavigationKey}
@@ -10567,309 +10554,6 @@ function PlanningSuggestionCard({
         {onOpenMap ? <CardIconButton label="Map" icon="map-outline" onPress={onOpenMap} /> : null}
         {onOpenWebsite ? <CardIconButton label="Website" icon="globe-outline" onPress={onOpenWebsite} /> : null}
         {canRemove ? <CardIconButton label="Remove" icon="trash-outline" onPress={onRemove} danger /> : null}
-      </View>
-    </View>
-  );
-}
-
-function stepActionIconForLabel(label: string): React.ComponentProps<typeof Ionicons>['name'] {
-  switch (label) {
-    case 'Adjust time':
-      return 'time-outline';
-    case 'Map':
-      return 'map-outline';
-    case 'Website':
-      return 'globe-outline';
-    case 'Share':
-      return 'share-outline';
-    case 'Up':
-      return 'arrow-up-outline';
-    case 'Down':
-      return 'arrow-down-outline';
-    case 'Remove':
-      return 'trash-outline';
-    default:
-      return 'ellipse-outline';
-  }
-}
-
-function PlanStep({
-  number,
-  tone,
-  title,
-  value,
-  detail,
-  cityState,
-  travelMeta,
-  walkable,
-  onTravelModePress,
-  featureOptions,
-  selectedFeatures,
-  featuresExpanded,
-  onToggleFeaturesOpen,
-  onToggleFeature,
-  active,
-  last,
-  onPress,
-  actionLabel,
-  onActionPress,
-  mapLabel,
-  onMapPress,
-  websiteLabel,
-  onWebsitePress,
-  shareLabel,
-  onSharePress,
-  moveUpLabel,
-  onMoveUpPress,
-  moveDownLabel,
-  onMoveDownPress,
-  removeLabel,
-  onRemovePress,
-}: {
-  number: string;
-  tone: PlanSlot;
-  title: string;
-  value: string;
-  detail: string;
-  cityState?: string;
-  travelMeta?: { mode: StopTravelMode; icon: React.ComponentProps<typeof Ionicons>['name']; label: string; duration: string };
-  walkable?: boolean;
-  onTravelModePress?: (mode: StopTravelMode) => void;
-  featureOptions?: string[];
-  selectedFeatures?: string[];
-  featuresExpanded?: boolean;
-  onToggleFeaturesOpen?: () => void;
-  onToggleFeature?: (feature: string) => void;
-  active: boolean;
-  last?: boolean;
-  onPress?: () => void;
-  actionLabel?: string;
-  onActionPress?: () => void;
-  mapLabel?: string;
-  onMapPress?: () => void;
-  websiteLabel?: string;
-  onWebsitePress?: () => void;
-  shareLabel?: string;
-  onSharePress?: () => void;
-  moveUpLabel?: string;
-  onMoveUpPress?: () => void;
-  moveDownLabel?: string;
-  onMoveDownPress?: () => void;
-  removeLabel?: string;
-  onRemovePress?: () => void;
-}) {
-  const isDarkMode = true;
-  const tonePalette = semanticTones[tone];
-  const ignoreNextCardPressRef = useRef(false);
-  const nextTravelMode = travelMeta?.mode === 'walk' ? 'car' : 'walk';
-  const blockNextCardPress = () => {
-    ignoreNextCardPressRef.current = true;
-    setTimeout(() => {
-      ignoreNextCardPressRef.current = false;
-    }, 0);
-  };
-  const handleCardPress = () => {
-    if (ignoreNextCardPressRef.current) {
-      ignoreNextCardPressRef.current = false;
-      return;
-    }
-    onPress?.();
-  };
-  const renderStepAction = (label?: string, onStepAction?: () => void, highlighted = false) => {
-    if (!label || !onStepAction) return null;
-    const destructive = label === 'Remove';
-    return (
-      <TouchableOpacity
-        style={[
-          styles.stepActionButton,
-          highlighted && styles.stepActionButtonActive,
-          highlighted && { borderColor: tonePalette.border, backgroundColor: tonePalette.soft },
-          destructive && styles.stepActionButtonDanger,
-        ]}
-        onPress={(event: GestureResponderEvent) => {
-          event.stopPropagation();
-          Keyboard.dismiss();
-          onStepAction();
-        }}
-        accessibilityRole="button"
-        accessibilityLabel={label}
-      >
-        <Ionicons
-          name={stepActionIconForLabel(label)}
-          size={17}
-          color={destructive ? colors.red : highlighted ? tonePalette.accent : colors.textSecondary}
-        />
-      </TouchableOpacity>
-    );
-  };
-  return (
-    <View style={styles.stepRow}>
-      <View style={styles.stepRail}>
-        <View style={[styles.stepDot, active && styles.stepDotActive, active && { backgroundColor: tonePalette.solid, borderColor: tonePalette.border }]}>
-          <Text style={[styles.stepNumber, active && styles.stepNumberActive, active && { color: tonePalette.foreground }]}>{number}</Text>
-        </View>
-        {!last ? <View style={styles.stepLine} /> : null}
-      </View>
-      <TouchableOpacity
-        style={[styles.stepCard, isDarkMode && styles.darkCard, active && styles.stepCardActive, active && { borderColor: tonePalette.border }]}
-        onPress={handleCardPress}
-      >
-        <View style={styles.stepTopLine}>
-          <View style={styles.stepTextBlock}>
-            <Text style={[styles.stepTitle, { color: tonePalette.accent }]}>{title}</Text>
-            <Text style={[styles.stepValue, isDarkMode && !active && styles.darkText, active && styles.stepValueActive]}>{value}</Text>
-            {cityState ? (
-              <Text style={[styles.stepCityState, isDarkMode && !active && styles.darkMutedText]} numberOfLines={1}>{cityState}</Text>
-            ) : null}
-          </View>
-          {travelMeta ? (
-            <TouchableOpacity
-              style={styles.stepTravelBadge}
-              onPressIn={(event: GestureResponderEvent) => {
-                event.stopPropagation();
-                blockNextCardPress();
-              }}
-              onPress={(event: GestureResponderEvent) => {
-                event.stopPropagation();
-                blockNextCardPress();
-                Keyboard.dismiss();
-                onTravelModePress?.(nextTravelMode);
-              }}
-              disabled={!onTravelModePress}
-              accessibilityRole={onTravelModePress ? 'button' : undefined}
-              accessibilityLabel={onTravelModePress
-                ? `${travelMeta.label}, ${travelMeta.duration}. Switch to ${travelModeLabel(nextTravelMode)}.`
-                : `${travelMeta.label}, ${travelMeta.duration}`}
-            >
-              <Ionicons name={travelMeta.icon} size={18} color={colors.teal} />
-              <Text style={styles.stepTravelDuration} numberOfLines={1}>{travelMeta.duration}</Text>
-            </TouchableOpacity>
-          ) : null}
-        </View>
-        <View style={styles.stepDetailRow}>
-          {walkable ? (
-            <Ionicons name="walk-outline" size={13} color={isDarkMode && !active ? colors.textPrimary : colors.teal} />
-          ) : null}
-          <Text style={[styles.stepDetail, isDarkMode && !active && styles.darkMutedText, active && styles.stepDetailActive]}>{detail}</Text>
-        </View>
-        {featureOptions && featureOptions.length > 1 && onToggleFeaturesOpen ? (
-          <View style={styles.stepFeatureBox}>
-            <TouchableOpacity
-              style={styles.stepFeatureHeader}
-              onPress={(event: GestureResponderEvent) => {
-                event.stopPropagation();
-                onToggleFeaturesOpen();
-              }}
-            >
-              <Text style={styles.stepFeatureHeaderText}>
-                {featuresExpanded && selectedFeatures?.length ? 'Select things here' : featuresExpanded ? 'Hide things here' : `${featureOptions.length} things here`}
-              </Text>
-            </TouchableOpacity>
-            {!featuresExpanded && selectedFeatures?.length ? (
-              <View style={styles.stepSelectedFeatureList}>
-                {selectedFeatures.map((feature) => (
-                  <View key={`selected-${feature}`} style={styles.stepSelectedFeaturePill}>
-                    <Text style={styles.stepSelectedFeatureText}>✓ {feature}</Text>
-                  </View>
-                ))}
-              </View>
-            ) : null}
-            {featuresExpanded ? (
-              <View style={styles.stepFeatureList}>
-                {featureOptions.map((feature) => {
-                  const selected = selectedFeatures?.includes(feature);
-                  return (
-                    <TouchableOpacity
-                      key={feature}
-                      style={[styles.stepFeatureItem, selected && styles.stepFeatureItemSelected]}
-                      onPress={(event: GestureResponderEvent) => {
-                        event.stopPropagation();
-                        onToggleFeature?.(feature);
-                      }}
-                    >
-                      <Text style={[styles.stepFeatureCheck, selected && styles.stepFeatureCheckSelected]}>{selected ? '✓' : '+'}</Text>
-                      <Text style={[styles.stepFeatureText, selected && styles.stepFeatureTextSelected]}>{feature}</Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-            ) : null}
-          </View>
-        ) : null}
-        {actionLabel && onActionPress || mapLabel && onMapPress || websiteLabel && onWebsitePress || shareLabel && onSharePress || moveUpLabel && onMoveUpPress || moveDownLabel && onMoveDownPress || removeLabel && onRemovePress ? (
-          <View style={styles.stepActionRow}>
-            {renderStepAction(actionLabel, onActionPress, active)}
-            {renderStepAction(mapLabel, onMapPress)}
-            {renderStepAction(websiteLabel, onWebsitePress)}
-            {renderStepAction(shareLabel, onSharePress)}
-            {renderStepAction(moveUpLabel, onMoveUpPress)}
-            {renderStepAction(moveDownLabel, onMoveDownPress)}
-            {renderStepAction(removeLabel, onRemovePress)}
-          </View>
-        ) : null}
-      </TouchableOpacity>
-    </View>
-  );
-}
-
-function ArrivalTimeControl({
-  value,
-  onHourMinus,
-  onHourPlus,
-  onMinuteMinus,
-  onMinutePlus,
-}: {
-  value: string;
-  onHourMinus: () => void;
-  onHourPlus: () => void;
-  onMinuteMinus: () => void;
-  onMinutePlus: () => void;
-}) {
-  return (
-    <View style={styles.arrivalControl}>
-      <View style={styles.arrivalTimeRow}>
-        <TouchableOpacity style={styles.arrivalButton} onPress={onHourMinus} accessibilityRole="button" accessibilityLabel="Subtract one hour">
-          <Text style={styles.arrivalButtonText}>-1 hr</Text>
-        </TouchableOpacity>
-        <Text style={styles.arrivalTimeValue}>{value}</Text>
-        <TouchableOpacity style={styles.arrivalButton} onPress={onHourPlus} accessibilityRole="button" accessibilityLabel="Add one hour">
-          <Text style={styles.arrivalButtonText}>+1 hr</Text>
-        </TouchableOpacity>
-      </View>
-      <View style={styles.arrivalMinuteRow}>
-        <TouchableOpacity style={styles.arrivalSmallButton} onPress={onMinuteMinus} accessibilityRole="button" accessibilityLabel="Subtract fifteen minutes">
-          <Text style={styles.arrivalSmallButtonText}>-15 min</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.arrivalSmallButton} onPress={onMinutePlus} accessibilityRole="button" accessibilityLabel="Add fifteen minutes">
-          <Text style={styles.arrivalSmallButtonText}>+15 min</Text>
-        </TouchableOpacity>
-      </View>
-    </View>
-  );
-}
-
-function TimeStepper({
-  label,
-  value,
-  onMinus,
-  onPlus,
-}: {
-  label: string;
-  value: number | string;
-  onMinus: () => void;
-  onPlus: () => void;
-}) {
-  return (
-    <View style={styles.timeStepper}>
-      <Text style={styles.timeStepperLabel}>{label}</Text>
-      <View style={styles.timeStepperControls}>
-        <TouchableOpacity style={styles.timeStepperButton} onPress={onMinus} accessibilityRole="button" accessibilityLabel={`Decrease ${label}`}>
-          <Text style={styles.timeStepperButtonText}>-</Text>
-        </TouchableOpacity>
-        <Text style={styles.timeStepperValue}>{value}</Text>
-        <TouchableOpacity style={styles.timeStepperButton} onPress={onPlus} accessibilityRole="button" accessibilityLabel={`Increase ${label}`}>
-          <Text style={styles.timeStepperButtonText}>+</Text>
-        </TouchableOpacity>
       </View>
     </View>
   );
@@ -12192,9 +11876,9 @@ const styles = StyleSheet.create({
   planBox: {
     backgroundColor: colors.surface,
     borderWidth: 1,
-    borderColor: colors.amber,
+    borderColor: colors.borderStrong,
     borderRadius: radii.md,
-    padding: 14,
+    padding: spacing.sm,
     marginBottom: 16,
   },
   visitorPlanBox: {
@@ -12577,6 +12261,450 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderColor: colors.border,
   },
+  itineraryBuilder: {
+    gap: spacing.sm,
+  },
+  itineraryPlanHeader: {
+    gap: spacing.micro,
+  },
+  itineraryPlanTitleInput: {
+    ...typography.subheading,
+    backgroundColor: colors.backgroundRaised,
+    borderColor: colors.border,
+    borderRadius: radii.sm,
+    borderWidth: 1,
+    color: colors.textPrimary,
+    minHeight: controls.minimumTouchTarget,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    width: '100%',
+  },
+  itineraryPlanMeta: {
+    ...typography.caption,
+    color: colors.textTertiary,
+    paddingHorizontal: spacing.micro,
+  },
+  itineraryCollaborationStrip: {
+    backgroundColor: colors.cyanSoft,
+    borderColor: semanticTones.travel.border,
+    borderRadius: radii.sm,
+    borderWidth: 1,
+    gap: spacing.xs,
+    padding: spacing.xs,
+  },
+  itineraryCollaborationHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: spacing.xs,
+    minWidth: 0,
+  },
+  itineraryCollaborationLabel: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: spacing.micro,
+    flexShrink: 0,
+  },
+  itineraryCollaborationTitle: {
+    ...typography.label,
+    color: colors.textPrimary,
+  },
+  itineraryCollaborationSummary: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    flex: 1,
+    minWidth: 0,
+    textAlign: 'right',
+  },
+  itineraryRsvpActions: {
+    flexDirection: 'row',
+    gap: spacing.micro,
+    width: '100%',
+  },
+  itineraryRsvpButton: {
+    alignItems: 'center',
+    backgroundColor: colors.backgroundRaised,
+    borderColor: colors.borderStrong,
+    borderRadius: radii.sm,
+    borderWidth: 1,
+    flex: 1,
+    flexDirection: 'row',
+    gap: spacing.micro,
+    justifyContent: 'center',
+    minHeight: controls.minimumTouchTarget,
+    minWidth: 0,
+    paddingHorizontal: spacing.micro,
+  },
+  itineraryRsvpButtonSelected: {
+    backgroundColor: colors.surfaceInteractive,
+    borderColor: colors.cyan,
+  },
+  itineraryRsvpButtonText: {
+    ...typography.buttonCompact,
+    color: colors.textSecondary,
+    flexShrink: 1,
+  },
+  itineraryRsvpButtonTextSelected: {
+    color: colors.textPrimary,
+  },
+  itinerarySectionHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: spacing.xs,
+    justifyContent: 'space-between',
+  },
+  itinerarySectionCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  itinerarySectionTitle: {
+    ...typography.subheading,
+    color: colors.textPrimary,
+  },
+  itinerarySectionHint: {
+    ...typography.caption,
+    color: colors.textTertiary,
+  },
+  itineraryAddStopButton: {
+    alignItems: 'center',
+    backgroundColor: colors.backgroundRaised,
+    borderColor: semanticTones.food.border,
+    borderRadius: radii.sm,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: spacing.micro,
+    justifyContent: 'center',
+    minHeight: controls.minimumTouchTarget,
+    paddingHorizontal: spacing.sm,
+  },
+  itineraryAddStopButtonActive: {
+    backgroundColor: colors.coralSoft,
+    borderColor: colors.coral,
+  },
+  itineraryAddStopText: {
+    ...typography.buttonCompact,
+    color: colors.textPrimary,
+  },
+  itineraryAddMenu: {
+    backgroundColor: colors.backgroundRaised,
+    borderColor: colors.border,
+    borderRadius: radii.md,
+    borderWidth: 1,
+    gap: spacing.xs,
+    padding: spacing.xs,
+  },
+  itineraryTypeGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.xs,
+  },
+  itineraryTypeButton: {
+    alignItems: 'center',
+    borderRadius: radii.sm,
+    borderWidth: 1,
+    flexBasis: '47%',
+    flexDirection: 'row',
+    flexGrow: 1,
+    gap: spacing.xs,
+    minHeight: controls.buttonHeight,
+    minWidth: 92,
+    paddingHorizontal: spacing.sm,
+  },
+  itineraryTypeButtonFood: {
+    backgroundColor: colors.coralSoft,
+    borderColor: semanticTones.food.border,
+  },
+  itineraryTypeButtonActivity: {
+    backgroundColor: colors.amberSoft,
+    borderColor: semanticTones.activity.border,
+  },
+  itineraryTypeButtonDessert: {
+    backgroundColor: colors.tealSoft,
+    borderColor: semanticTones.dessert.border,
+  },
+  itineraryTypeButtonIdea: {
+    backgroundColor: colors.violetSoft,
+    borderColor: semanticTones.idea.border,
+  },
+  itineraryTypeButtonSelected: {
+    borderColor: colors.violet,
+  },
+  itineraryTypeText: {
+    ...typography.label,
+  },
+  itineraryIdeaComposer: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: spacing.xs,
+  },
+  itineraryIdeaInput: {
+    ...typography.body,
+    backgroundColor: colors.surface,
+    borderColor: colors.borderStrong,
+    borderRadius: radii.sm,
+    borderWidth: 1,
+    color: colors.textPrimary,
+    flex: 1,
+    minHeight: controls.inputHeight,
+    minWidth: 0,
+    paddingHorizontal: spacing.sm,
+  },
+  itineraryIdeaAddButton: {
+    alignItems: 'center',
+    backgroundColor: colors.violet,
+    borderRadius: radii.sm,
+    flexDirection: 'row',
+    gap: spacing.micro,
+    justifyContent: 'center',
+    minHeight: controls.minimumTouchTarget,
+    paddingHorizontal: spacing.sm,
+  },
+  itineraryIdeaAddText: {
+    ...typography.buttonCompact,
+    color: colors.textInverse,
+  },
+  itineraryCandidateList: {
+    borderTopColor: colors.divider,
+    borderTopWidth: 1,
+    gap: spacing.micro,
+    paddingTop: spacing.xs,
+  },
+  itineraryCandidateHeading: {
+    ...typography.caption,
+    color: colors.textSecondary,
+  },
+  itineraryCandidateRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: spacing.xs,
+    minHeight: controls.minimumTouchTarget,
+  },
+  itineraryCandidateCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  itineraryCandidateName: {
+    ...typography.label,
+    color: colors.textPrimary,
+  },
+  itineraryCandidateMeta: {
+    ...typography.caption,
+    color: colors.textTertiary,
+  },
+  itineraryCandidateAdd: {
+    alignItems: 'center',
+    borderColor: colors.borderStrong,
+    borderRadius: radii.sm,
+    borderWidth: 1,
+    justifyContent: 'center',
+    minHeight: controls.minimumTouchTarget,
+    minWidth: controls.minimumTouchTarget,
+    paddingHorizontal: spacing.xs,
+  },
+  itineraryCandidateAddText: {
+    ...typography.buttonCompact,
+    color: colors.textPrimary,
+  },
+  itineraryGroupSuggestion: {
+    borderTopColor: colors.divider,
+    borderTopWidth: 1,
+    gap: spacing.xs,
+    paddingTop: spacing.xs,
+  },
+  itinerarySuggestionActions: {
+    flexDirection: 'row',
+    gap: spacing.xs,
+  },
+  itinerarySuggestionButton: {
+    alignItems: 'center',
+    backgroundColor: colors.surface,
+    borderColor: colors.borderStrong,
+    borderRadius: radii.sm,
+    borderWidth: 1,
+    flex: 1,
+    flexDirection: 'row',
+    gap: spacing.micro,
+    justifyContent: 'center',
+    minHeight: controls.minimumTouchTarget,
+    paddingHorizontal: spacing.xs,
+  },
+  itinerarySuggestionButtonText: {
+    ...typography.buttonCompact,
+    color: colors.textPrimary,
+  },
+  itineraryList: {
+    marginHorizontal: -spacing.sm,
+    minHeight: controls.minimumTouchTarget,
+  },
+  itinerarySortableItem: {
+    width: '100%',
+  },
+  itineraryInsertionIndicator: {
+    backgroundColor: colors.cyan,
+    borderRadius: radii.pill,
+    height: 3,
+    left: controls.minimumTouchTarget,
+    position: 'absolute',
+    right: 0,
+    shadowColor: colors.cyan,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.55,
+    shadowRadius: 6,
+    top: -5,
+  },
+  itineraryEmptyState: {
+    alignItems: 'center',
+    backgroundColor: colors.backgroundRaised,
+    borderColor: colors.border,
+    borderRadius: radii.md,
+    borderStyle: 'dashed',
+    borderWidth: 1,
+    gap: spacing.micro,
+    justifyContent: 'center',
+    minHeight: 132,
+    padding: spacing.sm,
+  },
+  itineraryEmptyTitle: {
+    ...typography.bodyStrong,
+    color: colors.textPrimary,
+  },
+  itineraryEmptyCopy: {
+    ...typography.caption,
+    color: colors.textTertiary,
+    maxWidth: 320,
+    textAlign: 'center',
+  },
+  itinerarySummary: {
+    backgroundColor: colors.backgroundRaised,
+    borderColor: colors.border,
+    borderRadius: radii.md,
+    borderWidth: 1,
+    overflow: 'hidden',
+  },
+  itinerarySummaryValues: {
+    alignItems: 'stretch',
+    flexDirection: 'row',
+    minHeight: 68,
+    paddingVertical: spacing.xs,
+  },
+  itinerarySummaryColumn: {
+    alignItems: 'center',
+    flex: 1,
+    justifyContent: 'center',
+    minWidth: 0,
+    paddingHorizontal: spacing.micro,
+  },
+  itinerarySummaryDivider: {
+    alignSelf: 'stretch',
+    backgroundColor: colors.divider,
+    width: 1,
+  },
+  itinerarySummaryLabel: {
+    ...typography.caption,
+    color: colors.textTertiary,
+  },
+  itinerarySummaryValue: {
+    ...typography.bodyStrong,
+    color: colors.textPrimary,
+    textAlign: 'center',
+  },
+  itineraryTargetStatus: {
+    alignItems: 'center',
+    borderTopColor: colors.divider,
+    borderTopWidth: 1,
+    flexDirection: 'row',
+    gap: spacing.micro,
+    justifyContent: 'center',
+    minHeight: controls.minimumTouchTarget,
+    paddingHorizontal: spacing.xs,
+  },
+  itineraryTargetStatusText: {
+    ...typography.caption,
+    flexShrink: 1,
+    textAlign: 'center',
+  },
+  itineraryTargetStatusUnder: {
+    color: colors.green,
+  },
+  itineraryTargetStatusNear: {
+    color: colors.amber,
+  },
+  itineraryTargetStatusOver: {
+    color: colors.red,
+  },
+  itineraryFooterActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.xs,
+  },
+  itinerarySecondaryAction: {
+    alignItems: 'center',
+    backgroundColor: colors.backgroundRaised,
+    borderColor: colors.border,
+    borderRadius: radii.sm,
+    borderWidth: 1,
+    flexBasis: 68,
+    flexGrow: 1,
+    flexDirection: 'row',
+    gap: spacing.micro,
+    justifyContent: 'center',
+    minHeight: controls.minimumTouchTarget,
+    minWidth: 0,
+    paddingHorizontal: spacing.xs,
+  },
+  itinerarySecondaryActionActive: {
+    borderColor: colors.teal,
+  },
+  itinerarySecondaryActionText: {
+    ...typography.buttonCompact,
+    color: colors.textPrimary,
+  },
+  itineraryPrimaryAction: {
+    alignItems: 'center',
+    backgroundColor: colors.coral,
+    borderRadius: radii.sm,
+    flexBasis: 124,
+    flexGrow: 1.6,
+    flexDirection: 'row',
+    gap: spacing.micro,
+    justifyContent: 'center',
+    minHeight: controls.minimumTouchTarget,
+    minWidth: 0,
+    paddingHorizontal: spacing.xs,
+  },
+  itineraryPrimaryActionText: {
+    ...typography.buttonCompact,
+    color: colors.textInverse,
+  },
+  itineraryInvitePanel: {
+    backgroundColor: colors.backgroundRaised,
+    borderColor: colors.border,
+    borderRadius: radii.sm,
+    borderWidth: 1,
+    gap: spacing.xs,
+    padding: spacing.xs,
+  },
+  itineraryUtilityActions: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.xs,
+    justifyContent: 'flex-end',
+  },
+  itineraryUtilityButton: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: spacing.micro,
+    justifyContent: 'center',
+    minHeight: controls.minimumTouchTarget,
+    paddingHorizontal: spacing.xs,
+  },
+  itineraryUtilityText: {
+    ...typography.caption,
+    color: colors.textSecondary,
+  },
+  itineraryControlDisabled: {
+    opacity: 0.4,
+  },
   planHeader: {
     alignItems: 'stretch',
     gap: 12,
@@ -12899,364 +13027,6 @@ const styles = StyleSheet.create({
     lineHeight: 16,
     fontWeight: '900',
     textTransform: 'uppercase',
-  },
-  timeline: {
-    gap: 0,
-  },
-  timelineStopGroup: {
-    gap: 0,
-  },
-  stepRow: {
-    flexDirection: 'row',
-    gap: spacing.sm,
-  },
-  stepRail: {
-    width: 34,
-    alignItems: 'center',
-  },
-  stepDot: {
-    width: 32,
-    height: 32,
-    borderRadius: radii.pill,
-    borderWidth: 1,
-    borderColor: colors.borderStrong,
-    backgroundColor: colors.surfaceMuted,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  stepDotActive: {
-    backgroundColor: semanticTones.primary.solid,
-  },
-  stepNumber: {
-    color: colors.textSecondary,
-    fontSize: 12,
-    fontWeight: '900',
-  },
-  stepNumberActive: {
-    color: colors.textPrimary,
-  },
-  stepLine: {
-    width: 3,
-    flex: 1,
-    minHeight: 42,
-    backgroundColor: colors.border,
-  },
-  stepCard: {
-    flex: 1,
-    borderRadius: radii.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surfaceRaised,
-    padding: spacing.md,
-    marginBottom: spacing.sm,
-  },
-  stepCardActive: {
-    borderColor: colors.teal,
-    backgroundColor: colors.surfaceRaised,
-  },
-  stepTopLine: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 10,
-  },
-  stepTextBlock: {
-    flex: 1,
-    minWidth: 0,
-  },
-  stepTitle: {
-    color: colors.coral,
-    fontSize: 12,
-    fontWeight: '900',
-    textTransform: 'uppercase',
-  },
-  stepValue: {
-    color: colors.textPrimary,
-    fontSize: 15,
-    fontWeight: '900',
-    marginTop: 3,
-  },
-  stepValueActive: {
-    color: colors.textPrimary,
-  },
-  stepCityState: {
-    color: colors.textSecondary,
-    fontSize: 12,
-    lineHeight: 16,
-    fontWeight: '800',
-    marginTop: 2,
-  },
-  stepTravelBadge: {
-    minWidth: 48,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: radii.md,
-    borderWidth: 1,
-    borderColor: colors.borderStrong,
-    backgroundColor: colors.surfaceRaised,
-    paddingHorizontal: 6,
-    paddingVertical: 5,
-    gap: 2,
-  },
-  stepTravelDuration: {
-    color: colors.teal,
-    fontSize: 12,
-    lineHeight: 16,
-    fontWeight: '900',
-    textAlign: 'center',
-  },
-  stepDetail: {
-    color: colors.textSecondary,
-    fontSize: 12,
-    marginTop: 0,
-  },
-  stepDetailRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    marginTop: 3,
-  },
-  stepDetailActive: {
-    color: colors.textSecondary,
-  },
-  stepFeatureSummary: {
-    color: colors.teal,
-    fontSize: 12,
-    fontWeight: '800',
-    marginTop: 6,
-  },
-  stepFeatureBox: {
-    marginTop: 8,
-  },
-  stepFeatureHeader: {
-    minHeight: controls.minimumTouchTarget,
-    alignSelf: 'flex-start',
-    borderRadius: radii.md,
-    borderWidth: 1,
-    borderColor: colors.teal,
-    backgroundColor: colors.tealSoft,
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-  },
-  stepFeatureHeaderText: {
-    color: colors.textPrimary,
-    fontSize: 12,
-    fontWeight: '900',
-  },
-  stepSelectedFeatureList: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 6,
-    marginTop: 8,
-  },
-  stepSelectedFeaturePill: {
-    borderRadius: radii.md,
-    backgroundColor: colors.amberSoft,
-    borderWidth: 1,
-    borderColor: colors.amber,
-    paddingHorizontal: 9,
-    paddingVertical: 6,
-  },
-  stepSelectedFeatureText: {
-    color: colors.textPrimary,
-    fontSize: 12,
-    fontWeight: '900',
-  },
-  stepFeatureList: {
-    marginTop: 8,
-    gap: 7,
-  },
-  stepFeatureItem: {
-    minHeight: controls.minimumTouchTarget,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    borderRadius: radii.md,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surface,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-  },
-  stepFeatureItemSelected: {
-    borderColor: colors.teal,
-    backgroundColor: colors.tealSoft,
-  },
-  stepFeatureCheck: {
-    width: 20,
-    color: colors.textSecondary,
-    fontSize: 14,
-    fontWeight: '900',
-    textAlign: 'center',
-  },
-  stepFeatureCheckSelected: {
-    color: colors.teal,
-  },
-  stepFeatureText: {
-    flex: 1,
-    color: colors.textSecondary,
-    fontSize: 13,
-    fontWeight: '800',
-  },
-  stepFeatureTextSelected: {
-    color: colors.textPrimary,
-  },
-  stepActionRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.xs,
-    marginTop: spacing.sm,
-  },
-  stepActionButton: {
-    width: controls.iconButtonSize,
-    height: controls.iconButtonSize,
-    borderRadius: radii.md,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surface,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  stepActionButtonActive: {
-    borderColor: colors.teal,
-    backgroundColor: colors.tealSoft,
-  },
-  stepActionButtonDanger: {
-    borderColor: semanticTones.danger.border,
-    backgroundColor: semanticTones.danger.soft,
-  },
-  itineraryAddRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.xs,
-    marginLeft: 40,
-    marginBottom: 10,
-  },
-  timeEditor: {
-    borderRadius: radii.md,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surface,
-    padding: 10,
-    marginLeft: 40,
-    marginBottom: 10,
-  },
-  timeEditorTitle: {
-    color: colors.textPrimary,
-    fontSize: 13,
-    fontWeight: '900',
-    marginBottom: 8,
-  },
-  timeStepperGroupLabel: {
-    color: colors.textSecondary,
-    fontSize: 12,
-    fontWeight: '900',
-    marginTop: 6,
-    marginBottom: 6,
-    textTransform: 'uppercase',
-  },
-  timeClockValue: {
-    color: colors.textPrimary,
-    fontSize: 20,
-    fontWeight: '900',
-    marginBottom: 8,
-  },
-  arrivalControl: {
-    gap: 8,
-    marginBottom: 6,
-  },
-  arrivalTimeRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  arrivalTimeValue: {
-    flex: 1,
-    color: colors.textPrimary,
-    fontSize: 22,
-    fontWeight: '900',
-    textAlign: 'center',
-  },
-  arrivalButton: {
-    minHeight: controls.minimumTouchTarget,
-    borderRadius: radii.md,
-    backgroundColor: colors.amberSoft,
-    paddingHorizontal: 12,
-    paddingVertical: 11,
-  },
-  arrivalButtonText: {
-    color: colors.textPrimary,
-    fontSize: 13,
-    fontWeight: '900',
-  },
-  arrivalMinuteRow: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  arrivalSmallButton: {
-    flex: 1,
-    minHeight: controls.minimumTouchTarget,
-    borderRadius: radii.md,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surface,
-    paddingVertical: 10,
-    alignItems: 'center',
-  },
-  arrivalSmallButtonText: {
-    color: colors.textSecondary,
-    fontSize: 13,
-    fontWeight: '900',
-  },
-  timeControls: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  timeEditorActions: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    gap: 8,
-    marginTop: 10,
-  },
-  timeStepper: {
-    flex: 1,
-  },
-  timeStepperLabel: {
-    color: colors.textSecondary,
-    fontSize: 12,
-    fontWeight: '800',
-    marginBottom: 5,
-  },
-  timeStepperControls: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderRadius: radii.md,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surface,
-    overflow: 'hidden',
-  },
-  timeStepperButton: {
-    width: controls.iconButtonSize,
-    height: controls.iconButtonSize,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: colors.amberSoft,
-  },
-  timeStepperButtonText: {
-    color: colors.textPrimary,
-    fontSize: 18,
-    fontWeight: '900',
-  },
-  timeStepperValue: {
-    flex: 1,
-    color: colors.textPrimary,
-    fontSize: 16,
-    fontWeight: '900',
-    textAlign: 'center',
-  },
-  planActions: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
   },
   bridgeBox: {
     borderWidth: 1,
