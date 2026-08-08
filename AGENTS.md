@@ -15,6 +15,40 @@ Vercel settings:
 - Output directory: `dist`
 - Development command: `npm run start:web`
 
+### Production Publishing Runbook
+
+Only push directly to `main` when the user explicitly asks to publish or push to production. A push to `origin/main` triggers the Vercel production deployment.
+
+1. Inspect `git status -sb` and preserve unrelated user-owned changes. Stage only the files in the requested release; never use `git add -A` in a mixed worktree.
+2. Refresh and compare the production branch before committing:
+
+   ```powershell
+   git fetch origin main
+   git rev-list --left-right --count HEAD...origin/main
+   ```
+
+   Resolve any divergence before publishing.
+3. Run the release checks:
+
+   ```powershell
+   npm.cmd run verify
+   npm.cmd run build:web
+   npm.cmd run export:android
+   npm.cmd run export:ios
+   npx.cmd expo install --check
+   ```
+
+4. Commit the explicitly staged release files and push with `git push origin main`.
+5. Confirm the local and remote `main` SHAs match, then monitor both the GitHub verification run and the Vercel commit status until they succeed. Do not report production as complete while either is pending.
+6. Probe `https://nomnomgo.differancelabs.com` after deployment. It must respond through Vercel, and an unauthenticated request must not expose the NomNomGo application UI because the alpha launch gate remains active.
+
+GitHub CLI is installed even when a Codex PowerShell session cannot resolve `gh` from `PATH`. Check these known locations before reporting it missing:
+
+- `C:\Program Files\GitHub CLI\gh.exe`
+- `$env:LOCALAPPDATA\Programs\GitHub CLI\gh.exe`
+
+Use the executable by absolute path for `gh auth status`, Actions monitoring, and commit-status checks when necessary. Never print authentication tokens or secret values.
+
 ## DL Alpha Launch Protection
 
 NomNomGo web is temporarily protected by Differance Labs alpha launch auth.
