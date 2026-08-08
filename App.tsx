@@ -9721,9 +9721,6 @@ function NomNomGoApp() {
                       />
                     </View>
                   )}
-                  {card.photoAttribution ? (
-                    <Text style={styles.placeCardAttribution} numberOfLines={1}>Photo: {card.photoAttribution}</Text>
-                  ) : null}
                 </TouchableOpacity>
                 <View style={styles.placeCardContent}>
                   <View style={styles.cardHeaderGrid}>
@@ -13738,19 +13735,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: colors.surfaceMuted,
-  },
-  placeCardAttribution: {
-    position: 'absolute',
-    left: spacing.micro,
-    right: spacing.micro,
-    bottom: spacing.micro,
-    paddingHorizontal: spacing.micro,
-    paddingVertical: spacing.hairline,
-    borderRadius: radii.xs,
-    backgroundColor: colors.scrim,
-    color: colors.textSecondary,
-    fontSize: 12,
-    lineHeight: 16,
   },
   placeCardInfoTouchTarget: {
     position: 'absolute',
