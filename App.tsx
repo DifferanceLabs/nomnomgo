@@ -9693,35 +9693,37 @@ function NomNomGoApp() {
               isDarkMode && styles.darkCard,
               (isSelected || isSuggested) && styles.cardSelected,
             ]}>
-              <TouchableOpacity
-                style={styles.placeCardInfoTouchTarget}
-                onPress={() => setPlaceDetailCard(card)}
-                accessibilityRole="button"
-                accessibilityLabel={`Show information for ${card.title}`}
-              >
-                <View style={styles.placeCardInfoButton}>
-                  <Ionicons name="information-circle-outline" size={17} color={colors.textPrimary} />
-                </View>
-              </TouchableOpacity>
               <View style={styles.placeCardBody}>
-                <TouchableOpacity
-                  style={styles.placeCardMedia}
-                  onPress={() => setPlaceDetailCard(card)}
-                  accessibilityRole="button"
-                  accessibilityLabel={`Open details for ${card.title}`}
-                >
-                  {imageUri ? (
-                    <Image source={{ uri: imageUri }} style={styles.placeCardImage} resizeMode="cover" />
-                  ) : (
-                    <View style={[styles.placeCardImage, styles.placeCardImageFallback]}>
-                      <Ionicons
-                        name={card.kind === 'event' ? 'ticket-outline' : resultMode === 'food' ? 'restaurant-outline' : 'sparkles-outline'}
-                        size={30}
-                        color={resultMode === 'food' ? colors.coral : colors.amber}
-                      />
+                <View style={styles.placeCardMedia}>
+                  <TouchableOpacity
+                    style={styles.placeCardMediaTap}
+                    onPress={() => setPlaceDetailCard(card)}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Open details for ${card.title}`}
+                  >
+                    {imageUri ? (
+                      <Image source={{ uri: imageUri }} style={styles.placeCardImage} resizeMode="cover" />
+                    ) : (
+                      <View style={[styles.placeCardImage, styles.placeCardImageFallback]}>
+                        <Ionicons
+                          name={card.kind === 'event' ? 'ticket-outline' : resultMode === 'food' ? 'restaurant-outline' : 'sparkles-outline'}
+                          size={30}
+                          color={resultMode === 'food' ? colors.coral : colors.amber}
+                        />
+                      </View>
+                    )}
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.placeCardInfoTouchTarget}
+                    onPress={() => setPlaceDetailCard(card)}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Show information for ${card.title}`}
+                  >
+                    <View style={styles.placeCardInfoButton}>
+                      <Ionicons name="information-circle-outline" size={17} color={colors.textPrimary} />
                     </View>
-                  )}
-                </TouchableOpacity>
+                  </TouchableOpacity>
+                </View>
                 <View style={styles.placeCardContent}>
                   <View style={styles.cardHeaderGrid}>
                     <View style={styles.cardHeaderMain}>
@@ -13693,7 +13695,6 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
   card: {
-    position: 'relative',
     borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.surfaceRaised,
@@ -13724,6 +13725,11 @@ const styles = StyleSheet.create({
     borderRadius: radii.md,
     overflow: 'hidden',
     backgroundColor: colors.surfaceMuted,
+    position: 'relative',
+  },
+  placeCardMediaTap: {
+    flex: 1,
+    width: '100%',
     position: 'relative',
   },
   placeCardImage: {
