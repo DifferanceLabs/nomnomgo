@@ -91,3 +91,10 @@ test('all three Asheville events survive the actual September 5 Events filters',
   assert.match(acidBath.eventDateText, /5:00/); // Venue time, even for a Central-time viewer.
   assert.equal(acidBath.eventStartMs, Date.parse('2026-09-05T21:00:00Z'));
 });
+
+test('local-only provider times are not shifted into the venue timezone twice', () => {
+  const format = appFunction('formatEventDateText', {});
+  const event = structuredClone(fixture.find((item) => item.id === 'G5eVZ_kQ1PtMl'));
+  delete event.dates.start.dateTime;
+  assert.match(format(event), /5:00/);
+});

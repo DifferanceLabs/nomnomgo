@@ -986,7 +986,10 @@ function formatEventDateText(event: any) {
     ].filter(Boolean).join(' ');
   }
   return parsed.toLocaleString([], {
-    timeZone: event?.dates?.timezone || event?._embedded?.venues?.[0]?.timezone,
+    // A local-only value is already a venue wall-clock time, not a UTC instant.
+    timeZone: event?.dates?.start?.dateTime || event?.start?.utc
+      ? event?.dates?.timezone || event?._embedded?.venues?.[0]?.timezone
+      : undefined,
     weekday: 'short',
     month: 'short',
     day: 'numeric',

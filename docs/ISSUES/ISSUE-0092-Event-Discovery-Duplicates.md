@@ -25,7 +25,7 @@ Asheville Events shows Acid Bath twice with conflicting venue addresses. The use
 - Display event times in the venue timezone and show the actual search center, radius, date, and coverage limitation.
 - Captured September 5 Asheville provider fixture: four records become three performances. Regression checks preserve volleyball, Acid Bath, and baseball; distinct times and venues remain separate.
 - Browser check against live providers in the rebuilt app: create Asheville plan for September 5, Dinner; select Events; refresh twice. Each result set contains one Acid Bath, volleyball, and baseball, followed by date-unverified local suggestions. Acid Bath card and details show 5:00 PM and the address-conflict notice. At 390px viewport, document width remains 390px; no browser errors or warnings observed.
-- `npm run verify`: 42 tests pass, typecheck passes, lint has 17 existing warnings and no errors. Web build, Android export, iOS export, and Expo dependency compatibility check all pass. Production verification is required before declaring release complete.
+- `npm run verify`: 43 tests pass, including local-only provider time formatting; typecheck passes, lint has 17 existing warnings and no errors. Web build, Android export, iOS export, and Expo dependency compatibility check all pass. Production verification is required before declaring release complete.
 
 ## Coverage decision remains open
 
