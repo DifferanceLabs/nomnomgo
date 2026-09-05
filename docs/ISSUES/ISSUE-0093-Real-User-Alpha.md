@@ -3,7 +3,7 @@
 - Epic: EPIC-005 Platform
 - Backlog: NOW
 - Priority: P0
-- Status: Implemented and release approved; Supabase authentication and production activation pending
+- Status: Implemented and release approved; production database ready, operator setting and publishing pending
 
 ## Acceptance criteria
 

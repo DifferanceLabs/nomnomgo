@@ -21,10 +21,10 @@ This release needs a migration in the existing Differance Labs Supabase project 
 
 All approvals must be requested in this conversation so the user can respond from mobile while away from the computer. A chat approval authorizes the described migration/deployment; it does not substitute for external service authentication. If service authentication is needed, provide a mobile-accessible login/device authorization link when available. Never require a desktop-only approval dialog or ask for secrets in chat.
 
-Approval received in the mobile conversation on 2026-09-05 for both migrations, server configuration and the alpha production release. GitHub and Vercel authentication are available. Supabase authentication is still required before applying the migrations and configuring the account backend. Do not request deployment approval again for this unchanged scope.
+Approval received in the mobile conversation on 2026-09-05 for both migrations, server configuration and the alpha production release. GitHub, Vercel and Supabase authentication are available. Both migrations have been applied to the existing Differance Labs database; the server database variables are configured in NomNomGo's production environment. The operator email setting and GitHub production push remain pending. Do not request deployment approval again for this unchanged scope.
 
 1. Review and approve both `supabase/migrations/001_real_user_alpha.sql` and `002_shared_alpha_plans.sql`. Together they add eight NNG tables, indexes and service-only functions for accounts and shared planning. They do not alter existing DL tables or Google OAuth. Inviting a person later inserts their email into DL `users` if absent and grants only the `nomnomgo` app.
-2. Apply both migrations in order to the same project containing DL `users`, `apps` and `app_grants`. Confirm `nomnomgo` is active. Run as the database administrator; never expose database credentials to the application client. Each migration is transactional and intended to be applied once. Neither has been applied in production.
+2. Both migrations were applied in order to the existing DL project on 2026-09-05. The `nomnomgo` app is active. Each migration is transactional and intended to be applied once; do not reapply them. All eight NNG tables have RLS enabled and deny reads to `anon` and `authenticated` roles.
 3. Configure these **server-only** environment variable names on the NomNomGo Vercel project:
    - `SUPABASE_URL`
    - `SUPABASE_SERVICE_ROLE_KEY`
@@ -34,7 +34,7 @@ Approval received in the mobile conversation on 2026-09-05 for both migrations, 
 4. Follow the root `AGENTS.md` production release runbook. Preserve unrelated worktree changes. Monitor GitHub verification and Vercel deployment, then check that unauthenticated access still displays the private-alpha gate.
 5. Re-enter through Differance Labs after release. Old identity-free alpha cookies cannot open account data and require a fresh launch.
 
-No deployment, production schema application, credential configuration or real invitation was performed during implementation.
+The approved activation has applied the production schema and configured server database access. No real person has been invited or sent a message by this release process.
 
 ## Two-phone acceptance test
 
@@ -51,7 +51,9 @@ No deployment, production schema application, credential configuration or real i
 
 The automated suite exercises the SQL in an isolated PostgreSQL-compatible runtime and tests API authentication, CSRF, scope, isolation, quotas, privilege revocation, concurrent RSVPs, idempotent votes, organizer permissions, locked-plan behavior and stale writes. The two-account browser test uses the actual API and migrations with a local database and synthetic signed identities, not Google or production Supabase. The real Google/two-phone test remains a post-activation check.
 
-Browser verification: organizer created a plan and invited a second account; invitee joined, submitted Maybe and a voted suggestion; organizer received both automatically, added the stop and locked the plan; invitee saw the locked itinerary and changed RSVP to Can't make it. The invitee UI was inspected at 390px width. Vercel authentication was confirmed during the approved release; production currently lacks the three new account environment variables.
+Browser verification: organizer created a plan and invited a second account; invitee joined, submitted Maybe and a voted suggestion; organizer received both automatically, added the stop and locked the plan; invitee saw the locked itinerary and changed RSVP to Can't make it. The invitee UI was inspected at 390px width.
+
+Production database verification also exercised account creation, admission grants, shared plans, RSVP propagation, suggestions, votes and organizer locking as `service_role`, inside one transaction that was rolled back. No synthetic accounts, grants or plans were retained. Both RPCs are reachable through Supabase REST and reject an ungranted identity.
 
 Local release checks passed: `npm run verify` (99 tests, type checking, lint with 17 existing warnings and no errors), web build, Android export, iOS export and `expo install --check`. All 27 alpha/account/shared-plan tests also passed after the final database locking adjustment. These checks do not replace production Google sign-in and the real two-phone acceptance test.
 
