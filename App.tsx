@@ -40,6 +40,7 @@ import {
 import { foodTimePreferenceScore, hoursLineForDate, placeOpenDuringWindow, timePreferenceForWindow } from './planningHours';
 import { BETA_FEATURES } from './src/config/features';
 import { SearchExecution, isSearchCancelled, mapConcurrent } from './src/domain/searchExecution';
+import { collectEventPages, deduplicateEvents } from './src/domain/eventDiscovery';
 import {
   calculateItineraryTimeline,
   defaultItineraryStopDurationMinutes,
@@ -141,6 +142,7 @@ type PlaceCard = {
   isOpen?: boolean | null;
   hoursText?: string;
   eventDateText?: string;
+  eventAddressConflict?: boolean;
   eventStartMs?: number;
   eventEndMs?: number;
   durationMinutes?: number;
@@ -378,7 +380,7 @@ const STORAGE_PLANNING_SESSIONS = 'nomNomGoPlanningSessionsV1';
 const STORAGE_ACTIVE_PLANNING_SESSION = 'nomNomGoActivePlanningSessionV1';
 const STORAGE_BETA_PLANS = 'nomNomGoBetaPlansV1';
 const STORAGE_ACTIVE_BETA_PLAN = 'nomNomGoActiveBetaPlanV1';
-const EVENT_PROVIDER_CACHE_VERSION = 'ticketmaster-v1';
+const EVENT_PROVIDER_CACHE_VERSION = 'ticketmaster-v2';
 const LOCATION_TTL_MS = 10 * 60 * 1000;
 const SEARCH_CACHE_TTL_MS = 15 * 60 * 1000;
 const TEXT_SEARCH_CACHE_TTL_MS = 30 * 60 * 1000;
@@ -984,6 +986,7 @@ function formatEventDateText(event: any) {
     ].filter(Boolean).join(' ');
   }
   return parsed.toLocaleString([], {
+    timeZone: event?.dates?.timezone || event?._embedded?.venues?.[0]?.timezone,
     weekday: 'short',
     month: 'short',
     day: 'numeric',
@@ -4853,15 +4856,22 @@ function NomNomGoApp() {
       endDateTime: ticketmasterDateParam(end),
       countryCode: 'US',
       sort: 'date,asc',
-      size: '30',
     });
 
     addLog(`Ticketmaster event search: ${center.latitude.toFixed(4)},${center.longitude.toFixed(4)} ${radiusMiles}mi`);
-    const json = await execution.json<{ _embedded?: { events?: any[] } }>('Ticketmaster', `https://app.ticketmaster.com/discovery/v2/events.json?${params.toString()}`);
-    const events = Array.isArray(json?._embedded?.events) ? json._embedded.events : [];
+    const { events, truncated } = await collectEventPages<any>(async (page, size) => {
+      execution.check();
+      params.set('page', String(page));
+      params.set('size', String(size));
+      return execution.json('Ticketmaster', `https://app.ticketmaster.com/discovery/v2/events.json?${params.toString()}`);
+    });
+    if (truncated) execution.notices.push('Showing the first 1,000 event listings. Choose a shorter date range to see all matches.');
     const now = Date.now();
-    const cards = events
-      .map(ticketmasterEventToCard)
+    const cards = deduplicateEvents(events)
+      .map(({ event, addressConflict }): PlaceCard | undefined => {
+        const card = ticketmasterEventToCard(event);
+        return card ? { ...card, eventAddressConflict: addressConflict } : undefined;
+      })
       .filter((card: PlaceCard | undefined): card is PlaceCard => Boolean(card))
       .filter((card: PlaceCard) => !memory.neverRecommend.includes(card.id))
       .filter((card: PlaceCard) => !card.eventStartMs || card.eventStartMs >= now - 60 * 60 * 1000)
@@ -4872,7 +4882,7 @@ function NomNomGoApp() {
         return distanceMeters(center, a) - distanceMeters(center, b);
       });
     addLog(`Ticketmaster events returned ${cards.length}`);
-    await writeCachedSearch(STORAGE_TEXT_SEARCH_CACHE, cacheKey, cards, 20, 'Ticketmaster event search');
+    if (!truncated) await writeCachedSearch(STORAGE_TEXT_SEARCH_CACHE, cacheKey, cards, 20, 'Ticketmaster event search');
     return cards;
   };
 
@@ -4891,6 +4901,7 @@ function NomNomGoApp() {
     const execution = searchExecutionRef.current;
     if (!execution || execution.id !== requestId) return;
     execution.check();
+    setLastSearchLocationCenter(center);
     const wantsEvents = slot === 'activity' && activitySelections.includes('Events');
     const eventsFocused = slot === 'activity' && activitySelections.includes('Events');
     const chargerFocused = slot === 'activity' && wantsChargerActivity(activitySelections);
@@ -5050,7 +5061,7 @@ function NomNomGoApp() {
       let ticketmasterEventCount = unblockedCards.filter((card) => card.kind === 'event' && card.source === 'Ticketmaster').length;
       try {
         const ticketmasterCards = await searchTicketmasterEvents(center, TICKETMASTER_EVENT_RADIUS_MILES, execution);
-        ticketmasterEventCount = ticketmasterCards.length;
+        ticketmasterEventCount = applyResultFilters(ticketmasterCards).length;
         unblockedCards = mergeCards(unblockedCards, ticketmasterCards);
         addLog(`Ticketmaster event results merged: ${unblockedCards.length} activity cards`);
       } catch (err) {
@@ -5118,12 +5129,12 @@ function NomNomGoApp() {
     setHasInitiatedSearch(true);
     setCards(finalCards);
     setSearchFailed(execution.failures > 0 && finalCards.length === 0);
-    setSearchNotice(execution.failures ? (finalCards.length
+    setSearchNotice([execution.failures ? (finalCards.length
       ? 'Some results could not be loaded. You can use these matches or try again.'
-      : 'Search is temporarily unavailable. Try again or add a place manually.') : '');
+      : 'Search is temporarily unavailable. Try again or add a place manually.') : '', ...execution.notices].filter(Boolean).join(' '));
     setVisibleCount(PAGE_SIZE);
     await rememberFavoriteCardsFromResults(slot, finalCards);
-    if (!execution.failures) await writeCachedSearch(STORAGE_SEARCH_CACHE, cacheKey, finalCards, 32, 'Nearby search');
+    if (!execution.failures && !execution.notices.length) await writeCachedSearch(STORAGE_SEARCH_CACHE, cacheKey, finalCards, 32, 'Nearby search');
   };
 
   const searchForSlot = async (
@@ -9704,6 +9715,11 @@ function NomNomGoApp() {
       ) : (
         <View onLayout={(event) => { resultsYRef.current = event.nativeEvent.layout.y; }}>
         <Section title={titleForResults}>
+          {resultMode === 'activity' && selectedActivities.includes('Events') && !manualSearchSubmitted ? (
+            <Text style={[styles.preferenceSummary, isDarkMode && styles.darkMutedText]}>
+              Upcoming events within {TICKETMASTER_EVENT_RADIUS_MILES} miles of {lastSearchLocationCenter?.label || searchLocationLabel} for {activePlanDateLabel}. Ticketmaster does not list every local show. Local search suggestions have unverified dates.
+            </Text>
+          ) : null}
           <View style={styles.filterTabs}>
             <FilterTab label="All" active={resultFilter === 'all'} onPress={() => setResultFilter('all')} />
             <FilterTab label="Favorites" active={resultFilter === 'favorites'} onPress={() => setResultFilter('favorites')} />
@@ -9848,6 +9864,7 @@ function NomNomGoApp() {
                     </Text>
                   </View>
                   {card.address ? <Text style={[styles.address, styles.darkMutedText]} numberOfLines={2}>{card.address}</Text> : null}
+                  {card.eventAddressConflict ? <Text style={[styles.address, styles.darkMutedText]}>Venue addresses differ between listings. Confirm on the event website.</Text> : null}
                 </View>
               </View>
               <View style={[styles.buttonRow, styles.resultCardActionRow]}>
@@ -9974,6 +9991,7 @@ function NomNomGoApp() {
                   </View>
                 ) : null}
                 {placeDetailCard.todayHours ? <Text style={styles.placeDetailHours}>{placeDetailCard.todayHours}</Text> : null}
+                {placeDetailCard.eventAddressConflict ? <Text style={styles.placeDetailAddress}>Venue addresses differ between listings. Confirm on the event website.</Text> : null}
               </View>
 
               <View style={styles.placeDetailPrimaryActions}>

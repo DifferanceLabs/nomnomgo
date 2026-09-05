@@ -1,0 +1,286 @@
+[
+  {
+    "id": "G5eVZ_G3m19fL",
+    "name": "Blue Ridge Volleyball Classic - Saturday",
+    "url": "https://www.ticketmaster.com/blue-ridge-volleyball-classic-saturday-asheville-north-carolina-09-05-2026/event/2D0064C4AE29751F",
+    "dates": {
+      "start": {
+        "localDate": "2026-09-05",
+        "localTime": "13:00:00",
+        "dateTime": "2026-09-05T17:00:00Z",
+        "dateTBD": false,
+        "dateTBA": false,
+        "timeTBA": false,
+        "noSpecificTime": false
+      },
+      "timezone": "America/New_York",
+      "status": {
+        "code": "onsale"
+      },
+      "spanMultipleDays": false
+    },
+    "classifications": [
+      {
+        "primary": true,
+        "segment": {
+          "id": "KZFzniwnSyZfZ7v7nE",
+          "name": "Sports"
+        },
+        "genre": {
+          "id": "KnvZfZ7vAA7",
+          "name": "Volleyball"
+        },
+        "subGenre": {
+          "id": "KZazBEonSMnZfZ7vFn6",
+          "name": "Volleyball"
+        },
+        "type": {
+          "id": "KZAyXgnZfZ7v7nI",
+          "name": "Undefined"
+        },
+        "subType": {
+          "id": "KZFzBErXgnZfZ7v7lJ",
+          "name": "Undefined"
+        },
+        "family": false
+      }
+    ],
+    "_embedded": {
+      "venues": [
+        {
+          "id": "KovZpZAJvnIA",
+          "name": "Harrah's Cherokee Center - Asheville",
+          "url": "https://www.ticketmaster.com/harrahs-cherokee-center-asheville-tickets-asheville/venue/368913",
+          "city": {
+            "name": "Asheville"
+          },
+          "state": {
+            "name": "North Carolina",
+            "stateCode": "NC"
+          },
+          "country": {
+            "name": "United States Of America",
+            "countryCode": "US"
+          },
+          "address": {
+            "line1": "87 Haywood Street"
+          },
+          "location": {
+            "longitude": "-82.55528900",
+            "latitude": "35.59747100"
+          },
+          "timezone": "America/New_York",
+          "postalCode": "28801"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Z7r9jZ1A7-N74",
+    "name": "Acid Bath",
+    "url": "https://www.ticketmaster.com/event/Z7r9jZ1A7-N74",
+    "dates": {
+      "start": {
+        "localDate": "2026-09-05",
+        "localTime": "17:00:00",
+        "dateTime": "2026-09-05T21:00:00Z",
+        "dateTBD": false,
+        "dateTBA": false,
+        "timeTBA": false,
+        "noSpecificTime": false
+      },
+      "status": {
+        "code": "onsale"
+      },
+      "spanMultipleDays": false
+    },
+    "classifications": [
+      {
+        "primary": true,
+        "segment": {
+          "id": "KZFzniwnSyZfZ7v7nJ",
+          "name": "Music"
+        },
+        "genre": {
+          "id": "KnvZfZ7vAvt",
+          "name": "Metal"
+        },
+        "subGenre": {
+          "id": "KZazBEonSMnZfZ7vkFE",
+          "name": "Sludge Metal"
+        },
+        "family": false
+      }
+    ],
+    "_embedded": {
+      "venues": [
+        {
+          "id": "Z7r9jZakfN",
+          "name": "Hellbenders by The Orange Peel",
+          "city": {
+            "name": "Asheville"
+          },
+          "state": {
+            "name": "North Carolina",
+            "stateCode": "NC"
+          },
+          "country": {
+            "name": "United States Of America",
+            "countryCode": "US"
+          },
+          "address": {
+            "line1": "101 Biltmore Avenue"
+          },
+          "location": {
+            "longitude": "-82.557198000",
+            "latitude": "35.594799000"
+          },
+          "timezone": "America/New_York",
+          "postalCode": "28801"
+        }
+      ]
+    }
+  },
+  {
+    "id": "G5eVZ_kQ1PtMl",
+    "name": "Acid Bath",
+    "url": "https://www.etix.com/ticket/p/61852481",
+    "dates": {
+      "start": {
+        "localDate": "2026-09-05",
+        "localTime": "17:00:00",
+        "dateTime": "2026-09-05T21:00:00Z",
+        "dateTBD": false,
+        "dateTBA": false,
+        "timeTBA": false,
+        "noSpecificTime": false
+      },
+      "timezone": "America/New_York",
+      "status": {
+        "code": "onsale"
+      },
+      "spanMultipleDays": false
+    },
+    "classifications": [
+      {
+        "primary": true,
+        "segment": {
+          "id": "KZFzniwnSyZfZ7v7nJ",
+          "name": "Music"
+        },
+        "genre": {
+          "id": "KnvZfZ7vAvt",
+          "name": "Metal"
+        },
+        "subGenre": {
+          "id": "KZazBEonSMnZfZ7vaJ6",
+          "name": "Nu-Metal"
+        },
+        "type": {
+          "id": "KZAyXgnZfZ7v7nI",
+          "name": "Undefined"
+        },
+        "subType": {
+          "id": "KZFzBErXgnZfZ7v7lJ",
+          "name": "Undefined"
+        },
+        "family": false
+      }
+    ],
+    "_embedded": {
+      "venues": [
+        {
+          "id": "KovZ917AV80",
+          "name": "Hellbender by The Orange Peel",
+          "url": "https://www.ticketmaster.com/hellbender-by-the-orange-peel-tickets-asheville/venue/369961",
+          "city": {
+            "name": "Asheville"
+          },
+          "state": {
+            "name": "North Carolina",
+            "stateCode": "NC"
+          },
+          "country": {
+            "name": "United States Of America",
+            "countryCode": "US"
+          },
+          "address": {
+            "line1": "151 Thompson Ave."
+          },
+          "location": {
+            "longitude": "-82.52505000",
+            "latitude": "35.57600000"
+          },
+          "timezone": "America/New_York",
+          "postalCode": "28803"
+        }
+      ]
+    }
+  },
+  {
+    "id": "Z7r9jZ1A7Q6Oy",
+    "name": "Asheville Tourists vs. Greensboro Grasshoppers",
+    "url": "https://www.ticketmaster.com/event/Z7r9jZ1A7Q6Oy",
+    "dates": {
+      "start": {
+        "localDate": "2026-09-05",
+        "localTime": "18:05:00",
+        "dateTime": "2026-09-05T22:05:00Z",
+        "dateTBD": false,
+        "dateTBA": false,
+        "timeTBA": false,
+        "noSpecificTime": false
+      },
+      "status": {
+        "code": "onsale"
+      },
+      "spanMultipleDays": false
+    },
+    "classifications": [
+      {
+        "primary": true,
+        "segment": {
+          "id": "KZFzniwnSyZfZ7v7nE",
+          "name": "Sports"
+        },
+        "genre": {
+          "id": "KnvZfZ7vA7A",
+          "name": "Miscellaneous"
+        },
+        "subGenre": {
+          "id": "KZazBEonSMnZfZ7vFIt",
+          "name": "Miscellaneous"
+        },
+        "family": false
+      }
+    ],
+    "_embedded": {
+      "venues": [
+        {
+          "id": "ZFr9jZFddA",
+          "name": "McCormick Field",
+          "city": {
+            "name": "Asheville"
+          },
+          "state": {
+            "name": "North Carolina",
+            "stateCode": "NC"
+          },
+          "country": {
+            "name": "United States Of America",
+            "countryCode": "US"
+          },
+          "address": {
+            "line1": "30 Buchanan Place"
+          },
+          "location": {
+            "longitude": "-82.557198000",
+            "latitude": "35.594799000"
+          },
+          "timezone": "America/New_York",
+          "postalCode": "28801"
+        }
+      ]
+    }
+  }
+]

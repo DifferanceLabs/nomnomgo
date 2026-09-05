@@ -21,6 +21,7 @@ export class SearchExecution {
   readonly blockedProviders = new Map<string, ProviderSearchError>();
   failures = 0;
   successes = 0;
+  readonly notices: string[] = [];
 
   constructor(readonly id: number, readonly refresh = false) {}
 
