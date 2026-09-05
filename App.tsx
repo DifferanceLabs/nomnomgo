@@ -39,6 +39,7 @@ import {
 } from './routeHandoff';
 import { foodTimePreferenceScore, hoursLineForDate, placeOpenDuringWindow, timePreferenceForWindow } from './planningHours';
 import { BETA_FEATURES } from './src/config/features';
+import { SearchExecution, isSearchCancelled, mapConcurrent } from './src/domain/searchExecution';
 import {
   calculateItineraryTimeline,
   defaultItineraryStopDurationMinutes,
@@ -366,7 +367,7 @@ const TICKETMASTER_API_KEY = process.env.EXPO_PUBLIC_TICKETMASTER_API_KEY;
 const STORAGE_MEMORY = 'thingsNearbyGooglePlacesMemoryV1';
 const STORAGE_LOCATION = 'thingsNearbyGooglePlacesLocationV1';
 const STORAGE_SEARCH_LOCATION = 'thingsNearbyGooglePlacesSearchLocationV1';
-const STORAGE_SEARCH_CACHE = 'thingsNearbyGooglePlacesSearchCacheV3';
+const STORAGE_SEARCH_CACHE = 'thingsNearbyGooglePlacesSearchCacheV4';
 const STORAGE_TEXT_SEARCH_CACHE = 'thingsNearbyGooglePlacesTextSearchCacheV2';
 const STORAGE_ZIP_CACHE = 'thingsNearbyZipCacheV1';
 const STORAGE_WEBSITE_FEATURE_CACHE = 'thingsNearbyWebsiteFeatureCacheV1';
@@ -2641,6 +2642,7 @@ function confirmedPlanFromBetaRecord(record: BetaPlanRecord): ConfirmedPlan {
     title: record.title,
     sharedPlanId: record.id,
     owner: record.owner,
+    invitees: record.participants.filter((name) => name !== record.owner),
     intent: record.intent,
     stops: record.stops || [],
     status: record.status === 'finalized' ? 'locked' : 'draft',
@@ -2887,6 +2889,9 @@ function NomNomGoApp() {
   const timelineYRef = useRef(0);
   const stopLayoutYRef = useRef<Record<string, number>>({});
   const searchRequestIdRef = useRef(0);
+  const searchExecutionRef = useRef<SearchExecution | null>(null);
+  const scrollTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const searchCacheWriteRef = useRef<Promise<void>>(Promise.resolve());
   const activePlanTimingRef = useRef<{
     dateRange: { start: string; end: string };
     timeWindow?: string;
@@ -2912,6 +2917,8 @@ function NomNomGoApp() {
   const [cards, setCards] = useState<PlaceCard[]>([]);
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const [searchNotice, setSearchNotice] = useState('');
+  const [searchFailed, setSearchFailed] = useState(false);
+  const [appNotice, setAppNotice] = useState<{ title: string; message: string } | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [location, setLocation] = useState<LatLon | null>(null);
@@ -2988,6 +2995,8 @@ function NomNomGoApp() {
   const [testerUser, setTesterUser] = useState<TesterUser | null>(null);
   const [testerAuthenticated, setTesterAuthenticated] = useState(false);
   const [usageMeter, setUsageMeter] = useState<UsageMeter>(emptyUsageMeter());
+  const usageMeterRef = useRef(usageMeter);
+  usageMeterRef.current = usageMeter;
   const [planningSessions, setPlanningSessions] = useState<PlanningSession[]>([]);
   const [activePlanningSessionId, setActivePlanningSessionId] = useState<string | null>(null);
   const [betaPlans, setBetaPlans] = useState<BetaPlanRecord[]>([]);
@@ -3333,19 +3342,47 @@ function NomNomGoApp() {
     }, 2200);
   };
 
-  const notifyGooglePlacesMissing = (logLine: string, message = 'Google Places key missing. Import a route or add stops manually.') => {
+  const notifyGooglePlacesMissing = (logLine: string, message = 'Place search is unavailable. You can add a place manually.') => {
     showToast(message);
     addLog(logLine);
   };
 
+  const showAppNotice = (title: string, message: string) => {
+    if (Platform.OS === 'web') setAppNotice({ title, message });
+    else Alert.alert(title, message);
+  };
+
   const resetResultsUntilSearch = () => {
+    searchExecutionRef.current?.cancel();
     searchRequestIdRef.current += 1;
     setHasInitiatedSearch(false);
     setCards([]);
     setVisibleCount(PAGE_SIZE);
     setSearchNotice('');
+    setSearchFailed(false);
     setLoading(false);
   };
+
+  const beginSearch = (refresh = false) => {
+    searchExecutionRef.current?.cancel();
+    const execution = new SearchExecution(++searchRequestIdRef.current, refresh);
+    searchExecutionRef.current = execution;
+    setSearchFailed(false);
+    setSearchNotice('');
+    return execution;
+  };
+
+  const cancelSearch = () => {
+    searchExecutionRef.current?.cancel();
+    searchRequestIdRef.current += 1;
+    setLoading(false);
+    if (scrollTimerRef.current) clearTimeout(scrollTimerRef.current);
+  };
+
+  useEffect(() => () => {
+    searchExecutionRef.current?.cancel();
+    if (scrollTimerRef.current) clearTimeout(scrollTimerRef.current);
+  }, []);
 
   const saveTesterUser = async (next: TesterUser | null) => {
     setTesterUser(next);
@@ -3357,6 +3394,7 @@ function NomNomGoApp() {
   };
 
   const saveUsageMeter = async (next: UsageMeter) => {
+    usageMeterRef.current = next;
     setUsageMeter(next);
     await AsyncStorage.setItem(STORAGE_USAGE_METER, JSON.stringify(next));
   };
@@ -3416,7 +3454,7 @@ function NomNomGoApp() {
   }, []);
 
   const recordPlacesUsage = async (kind: 'nearby' | 'text') => {
-    const current = normalizeUsageMeter(usageMeter);
+    const current = normalizeUsageMeter(usageMeterRef.current);
     const next = {
       ...current,
       nearbySearchesToday: current.nearbySearchesToday + (kind === 'nearby' ? 1 : 0),
@@ -3435,48 +3473,53 @@ function NomNomGoApp() {
     addLog(`Tester selected: ${name}`);
   };
 
-  const signOutTester = () => {
-    setTesterAuthenticated(false);
-    addLog('Tester signed out');
+  const signOutTester = async () => {
+    try {
+      await AsyncStorage.removeItem(STORAGE_TESTER_USER);
+      cancelSearch();
+      closeTransientSurfaces();
+      setTesterAuthenticated(false);
+      addLog('Tester signed out');
+    } catch {
+      showToast('Could not sign out. Please try again.');
+    }
+  };
+
+  const scheduleScroll = (target: () => number) => {
+    if (scrollTimerRef.current) clearTimeout(scrollTimerRef.current);
+    scrollTimerRef.current = setTimeout(() => {
+      scrollRef.current?.scrollTo({ y: Math.max(target(), 0), animated: true });
+    }, 90);
   };
 
   const scrollToResults = () => {
-    [90, 280, 650].forEach((delay) => {
-      setTimeout(() => scrollRef.current?.scrollTo({ y: Math.max(resultsYRef.current - 8, 0), animated: true }), delay);
-    });
+    scheduleScroll(() => resultsYRef.current - 8);
   };
 
   const scrollToTop = () => {
-    [70, 220].forEach((delay) => {
-      setTimeout(() => scrollRef.current?.scrollTo({ y: 0, animated: true }), delay);
-    });
+    scheduleScroll(() => 0);
   };
 
   const scrollToPlan = () => {
-    [90, 280, 650].forEach((delay) => {
-      setTimeout(() => scrollRef.current?.scrollTo({ y: Math.max(planBoxYRef.current - 8, 0), animated: true }), delay);
-    });
+    scheduleScroll(() => planBoxYRef.current - 8);
   };
 
   const scrollToSavedPlans = () => {
-    [90, 280, 650].forEach((delay) => {
-      setTimeout(() => scrollRef.current?.scrollTo({ y: Math.max(savedPlansYRef.current - 8, 0), animated: true }), delay);
-    });
+    scheduleScroll(() => savedPlansYRef.current - 8);
   };
 
   const scrollToPlanStop = (key: string) => {
-    [90, 280, 650].forEach((delay) => {
-      setTimeout(() => {
-        const stopY = stopLayoutYRef.current[key];
-        const targetY = typeof stopY === 'number'
-          ? planBoxYRef.current + timelineYRef.current + stopY
-          : planBoxYRef.current;
-        scrollRef.current?.scrollTo({ y: Math.max(targetY - 8, 0), animated: true });
-      }, delay);
+    scheduleScroll(() => {
+      const stopY = stopLayoutYRef.current[key];
+      const targetY = typeof stopY === 'number'
+        ? planBoxYRef.current + timelineYRef.current + stopY
+        : planBoxYRef.current;
+      return targetY - 8;
     });
   };
 
   const closeTransientSurfaces = () => {
+    cancelSearch();
     setAccountMenuOpen(false);
     setAccountSettingsOpen(false);
     setPeopleGroupsOpen(false);
@@ -3494,6 +3537,7 @@ function NomNomGoApp() {
   };
 
   const openHome = () => {
+    cancelSearch();
     closeTransientSurfaces();
     setHomeOpen(true);
     setNowMode('closed');
@@ -3724,11 +3768,11 @@ function NomNomGoApp() {
       const start = parseDateInput(planSetupCustomDateStartInput);
       const end = parseDateInput(planSetupCustomDateEndInput);
       if (!start || !end) {
-        Alert.alert('Check dates', 'Use dates like 2026-06-12.');
+        showAppNotice('Check dates', 'Use dates like 2026-06-12.');
         return;
       }
       if (end < start) {
-        Alert.alert('Check dates', 'End date must be the same as or after the start date.');
+        showAppNotice('Check dates', 'End date must be the same as or after the start date.');
         return;
       }
       nextCustomDateRange = {
@@ -3881,7 +3925,7 @@ function NomNomGoApp() {
       }
     } catch (err) {
       addLog(`Plan setup failed: ${compactError(err)}`);
-      Alert.alert('Plan setup failed', compactError(err));
+      showAppNotice('Plan setup failed', compactError(err));
     } finally {
       setPlanSetupSubmitting(false);
     }
@@ -4051,6 +4095,16 @@ function NomNomGoApp() {
           const activeRecord = parsedBetaPlans.find((record) => record.id === parsedActiveBetaPlanId);
           if (activeRecord) {
             setPlan(confirmedPlanFromBetaRecord(activeRecord));
+            setSelectedDateWindow(activeRecord.dateWindow);
+            selectedDateWindowRef.current = activeRecord.dateWindow;
+            setCustomDateRange(activeRecord.customDateRange || null);
+            customDateRangeRef.current = activeRecord.customDateRange || null;
+            setSelectedTime(activeRecord.timeWindow ? timePreferenceForWindow(activeRecord.timeWindow) : 'Now');
+            if (activeRecord.searchLocation) {
+              setSearchLocation(activeRecord.searchLocation);
+              setLastSearchLocationCenter(activeRecord.searchLocation);
+              setSearchLocationOverride(activeRecord.locationLabel);
+            }
             setHomeOpen(false);
             setSavedPlansLandingOpen(false);
           }
@@ -4156,18 +4210,22 @@ function NomNomGoApp() {
   };
 
   const writeCachedSearch = async (storageKey: string, key: string, nextCards: PlaceCard[], maxEntries: number, label: string) => {
-    try {
-      const raw = await AsyncStorage.getItem(storageKey);
-      const cache = raw ? (JSON.parse(raw) as Record<string, SearchCacheEntry>) : {};
-      cache[key] = { ts: Date.now(), cards: nextCards };
-      const recentEntries = Object.entries(cache)
-        .sort((a, b) => b[1].ts - a[1].ts)
-        .slice(0, maxEntries);
-      await AsyncStorage.setItem(storageKey, JSON.stringify(Object.fromEntries(recentEntries)));
-      addLog(`${label} cache saved: ${nextCards.length} cards`);
-    } catch (err) {
-      addLog(`${label} cache write failed: ${compactError(err)}`);
-    }
+    const write = searchCacheWriteRef.current.then(async () => {
+      try {
+        const raw = await AsyncStorage.getItem(storageKey);
+        const cache = raw ? (JSON.parse(raw) as Record<string, SearchCacheEntry>) : {};
+        cache[key] = { ts: Date.now(), cards: nextCards };
+        const recentEntries = Object.entries(cache)
+          .sort((a, b) => b[1].ts - a[1].ts)
+          .slice(0, maxEntries);
+        await AsyncStorage.setItem(storageKey, JSON.stringify(Object.fromEntries(recentEntries)));
+        addLog(`${label} cache saved: ${nextCards.length} cards`);
+      } catch (err) {
+        addLog(`${label} cache write failed: ${compactError(err)}`);
+      }
+    });
+    searchCacheWriteRef.current = write;
+    await write;
   };
 
   const readCachedZip = async (value: string) => {
@@ -4301,7 +4359,7 @@ function NomNomGoApp() {
 
     const query = isZip ? `${value}, USA` : value;
     try {
-      const results = await withTimeout(Location.geocodeAsync(query), 12000, `Location ${value}`);
+      const results = Platform.OS === 'web' ? [] : await withTimeout(Location.geocodeAsync(query), 12000, `Location ${value}`);
       const match = results[0];
       if (match) {
         next = {
@@ -4368,7 +4426,7 @@ function NomNomGoApp() {
     }
 
     addLog('Requesting GPS permission');
-    const permission = await Location.requestForegroundPermissionsAsync();
+    const permission = await withTimeout(Location.requestForegroundPermissionsAsync(), 10000, 'Location permission');
     addLog(`GPS permission: ${permission.status}`);
     if (permission.status !== 'granted') throw new Error('Location permission was not granted.');
 
@@ -4431,13 +4489,13 @@ function NomNomGoApp() {
     return getLocation();
   };
 
-  const searchNearbyType = async (type: string, center: LatLon, radiusMeters: number): Promise<PlaceCard[]> => {
+  const searchNearbyType = async (type: string, center: LatLon, radiusMeters: number, execution = new SearchExecution(0)): Promise<PlaceCard[]> => {
+    execution.check();
     if (!GOOGLE_API_KEY) throw new Error('Google Places API key is not loaded.');
 
     addLog(`Google Places search: ${type}`);
     await recordPlacesUsage('nearby');
-    const response = await withTimeout(
-      fetch('https://places.googleapis.com/v1/places:searchNearby', {
+    const json = await execution.json<{ places?: any[] }>('Google Places', 'https://places.googleapis.com/v1/places:searchNearby', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -4455,18 +4513,7 @@ function NomNomGoApp() {
             },
           },
         }),
-      }),
-      12000,
-      `Google Places ${type}`,
-    );
-
-    addLog(`Google Places ${type} status: ${response.status}`);
-    const text = await response.text();
-    if (!response.ok) {
-      throw new Error(`Google Places ${type} failed: ${response.status} ${text.slice(0, 140)}`);
-    }
-
-    const json = JSON.parse(text);
+      });
     const places = Array.isArray(json?.places) ? json.places : [];
     addLog(`Google Places ${type} returned ${places.length}`);
     return places.map(toCard);
@@ -4477,17 +4524,19 @@ function NomNomGoApp() {
     slot: PlanSlot,
     center?: LatLon | null,
     options?: { rawFoodQuery?: boolean; maxResults?: number; radiusMeters?: number },
+    execution = new SearchExecution(0),
   ): Promise<PlaceCard[]> => {
+    execution.check();
     if (!GOOGLE_API_KEY) throw new Error('Google Places API key is not loaded.');
 
-    const cacheKey = textSearchCacheKey(`${options?.rawFoodQuery ? 'raw' : 'default'}:${query}`, slot, center);
-    const cachedCards = await readCachedSearch(STORAGE_TEXT_SEARCH_CACHE, cacheKey, TEXT_SEARCH_CACHE_TTL_MS, 'Text search');
+    const cacheKey = `${textSearchCacheKey(`${options?.rawFoodQuery ? 'raw' : 'default'}:${query}`, slot, center)}|radius:${options?.radiusMeters || 'default'}|limit:${options?.maxResults || 10}`;
+    const cachedCards = execution.refresh ? undefined : await readCachedSearch(STORAGE_TEXT_SEARCH_CACHE, cacheKey, TEXT_SEARCH_CACHE_TTL_MS, 'Text search');
+    execution.check();
     if (cachedCards) return cachedCards;
 
     addLog(`Google Places text search: ${query}`);
     await recordPlacesUsage('text');
-    const response = await withTimeout(
-      fetch('https://places.googleapis.com/v1/places:searchText', {
+    const json = await execution.json<{ places?: any[] }>('Google Places', 'https://places.googleapis.com/v1/places:searchText', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -4506,18 +4555,7 @@ function NomNomGoApp() {
               }
             : undefined,
         }),
-      }),
-      12000,
-      `Google Places text search ${query}`,
-    );
-
-    addLog(`Google Places text status: ${response.status}`);
-    const text = await response.text();
-    if (!response.ok) {
-      throw new Error(`Google Places text search failed: ${response.status} ${text.slice(0, 140)}`);
-    }
-
-    const json = JSON.parse(text);
+      });
     const places = Array.isArray(json?.places) ? json.places : [];
     const queryName = normalizePlaceName(query);
     const scoreTextMatch = (card: PlaceCard) => {
@@ -4601,7 +4639,8 @@ function NomNomGoApp() {
     if (featureOptions.length) addLog(`Dynamic things here found: ${featureOptions.length}`);
   };
 
-  const searchOpenFoodByText = async (center: LatLon): Promise<PlaceCard[]> => {
+  const searchOpenFoodByText = async (center: LatLon, execution = new SearchExecution(0)): Promise<PlaceCard[]> => {
+    execution.check();
     if (!GOOGLE_API_KEY) throw new Error('Google Places API key is not loaded.');
 
     const cacheKey = [
@@ -4610,13 +4649,13 @@ function NomNomGoApp() {
       center.longitude.toFixed(4),
       center.label ? normalizePlaceName(center.label) : 'unlabeled',
     ].join('|');
-    const cachedCards = await readCachedSearch(STORAGE_TEXT_SEARCH_CACHE, cacheKey, TEXT_SEARCH_CACHE_TTL_MS, 'Open food text search');
+    const cachedCards = execution.refresh ? undefined : await readCachedSearch(STORAGE_TEXT_SEARCH_CACHE, cacheKey, TEXT_SEARCH_CACHE_TTL_MS, 'Open food text search');
+    execution.check();
     if (cachedCards) return cachedCards;
 
     addLog('Google Places open food text search');
     await recordPlacesUsage('text');
-    const response = await withTimeout(
-      fetch('https://places.googleapis.com/v1/places:searchText', {
+    const json = await execution.json<{ places?: any[] }>('Google Places', 'https://places.googleapis.com/v1/places:searchText', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -4635,18 +4674,7 @@ function NomNomGoApp() {
             },
           },
         }),
-      }),
-      12000,
-      'Google Places open food text search',
-    );
-
-    addLog(`Google Places open food text status: ${response.status}`);
-    const text = await response.text();
-    if (!response.ok) {
-      throw new Error(`Google Places open food text search failed: ${response.status} ${text.slice(0, 140)}`);
-    }
-
-    const json = JSON.parse(text);
+      });
     const places = Array.isArray(json?.places) ? json.places : [];
     const cards = places
       .map(toCard)
@@ -4661,7 +4689,9 @@ function NomNomGoApp() {
     center: LatLon,
     foodSelections: string[],
     selectedDietaryPreferences: string[],
+    execution = new SearchExecution(0),
   ): Promise<PlaceCard[]> => {
+    execution.check();
     const cuisines = cuisineSelections(foodSelections);
     const activeDietary = dietarySelections(selectedDietaryPreferences);
     const cuisineQueries = cuisines.length
@@ -4685,13 +4715,15 @@ function NomNomGoApp() {
     const queries = unique([...locationQueries, ...baseQueries]);
     const found = new Map<string, PlaceCard>();
 
-    for (const query of unique(queries).slice(0, 8)) {
+    const queryResults = await mapConcurrent(unique(queries).slice(0, 8), async (query) => {
+      execution.check();
+      const queryFound = new Map<string, PlaceCard>();
       try {
         const results = await searchPlaceByText(query, 'food', center, {
           rawFoodQuery: true,
           maxResults: 20,
           radiusMeters: EXPANDED_FOOD_RADIUS_METERS,
-        });
+        }, execution);
         results.slice(0, 10).forEach((card) => {
           if (memory.neverRecommend.includes(card.id)) return;
           const matchedCuisine = cuisines.find((cuisine) =>
@@ -4722,14 +4754,17 @@ function NomNomGoApp() {
                 types: unique([...(taggedCard.types || []), `food_dietary_${preferenceTag(matchedDietary)}`]),
               }
             : taggedCard;
-          found.set(card.id, {
+          queryFound.set(card.id, {
             ...dietaryTaggedCard,
           });
         });
       } catch (err) {
+        execution.check();
         addLog(`Food text discovery failed: ${query} ${compactError(err)}`);
       }
-    }
+      return Array.from(queryFound.values());
+    });
+    queryResults.flat().forEach((card) => found.set(card.id, card));
 
     const cards = Array.from(found.values())
       .filter((card) => hasKnownHours(card))
@@ -4741,7 +4776,8 @@ function NomNomGoApp() {
     return cards;
   };
 
-  const searchLocalEventPlaces = async (center: LatLon): Promise<PlaceCard[]> => {
+  const searchLocalEventPlaces = async (center: LatLon, execution = new SearchExecution(0)): Promise<PlaceCard[]> => {
+    execution.check();
     if (!GOOGLE_API_KEY) return [];
     const activeDateWindow = selectedDateWindowRef.current;
     const datePhrase = dateWindowSearchPhrase(activeDateWindow, customDateRangeRef.current);
@@ -4752,12 +4788,14 @@ function NomNomGoApp() {
     ];
     const found = new Map<string, PlaceCard>();
 
-    for (const query of queries) {
+    const queryResults = await mapConcurrent(queries, async (query) => {
+      execution.check();
+      const queryFound = new Map<string, PlaceCard>();
       try {
-        const results = await searchPlaceByText(query, 'activity', center);
+        const results = await searchPlaceByText(query, 'activity', center, undefined, execution);
         results.slice(0, 4).forEach((card) => {
           if (memory.neverRecommend.includes(card.id)) return;
-          found.set(`local-event-${card.id}`, {
+          queryFound.set(`local-event-${card.id}`, {
             ...card,
             id: `local-event-${card.id}`,
             kind: 'event',
@@ -4768,16 +4806,20 @@ function NomNomGoApp() {
           });
         });
       } catch (err) {
+        execution.check();
         addLog(`Local event fallback failed: ${query} ${compactError(err)}`);
       }
-    }
+      return Array.from(queryFound.values());
+    });
+    queryResults.flat().forEach((card) => found.set(card.id, card));
 
     return Array.from(found.values());
   };
 
   const ticketmasterDateParam = (date: Date) => date.toISOString().replace(/\.\d{3}Z$/, 'Z');
 
-  const searchTicketmasterEvents = async (center: LatLon, radiusMiles = TICKETMASTER_EVENT_RADIUS_MILES): Promise<PlaceCard[]> => {
+  const searchTicketmasterEvents = async (center: LatLon, radiusMiles = TICKETMASTER_EVENT_RADIUS_MILES, execution = new SearchExecution(0)): Promise<PlaceCard[]> => {
+    execution.check();
     if (!TICKETMASTER_API_KEY) {
       showToast('Ticketmaster key missing. Showing local search events if available.');
       addLog('Ticketmaster key missing; event discovery skipped');
@@ -4798,7 +4840,8 @@ function NomNomGoApp() {
       ticketmasterDateParam(start).slice(0, 10),
       ticketmasterDateParam(end).slice(0, 10),
     ].join('|');
-    const cached = await readCachedSearch(STORAGE_TEXT_SEARCH_CACHE, cacheKey, EVENT_SEARCH_CACHE_TTL_MS, 'Ticketmaster event search');
+    const cached = execution.refresh ? undefined : await readCachedSearch(STORAGE_TEXT_SEARCH_CACHE, cacheKey, EVENT_SEARCH_CACHE_TTL_MS, 'Ticketmaster event search');
+    execution.check();
     if (cached) return cached;
 
     const params = new URLSearchParams({
@@ -4814,23 +4857,7 @@ function NomNomGoApp() {
     });
 
     addLog(`Ticketmaster event search: ${center.latitude.toFixed(4)},${center.longitude.toFixed(4)} ${radiusMiles}mi`);
-    const response = await withTimeout(
-      fetch(`https://app.ticketmaster.com/discovery/v2/events.json?${params.toString()}`),
-      12000,
-      'Ticketmaster event search',
-    );
-    const text = await response.text();
-    if (!response.ok) {
-      throw new Error(`Ticketmaster event search failed: ${response.status} ${text.slice(0, 140)}`);
-    }
-
-    let json: any;
-    try {
-      json = JSON.parse(text);
-    } catch {
-      throw new Error('Ticketmaster event search returned malformed JSON');
-    }
-
+    const json = await execution.json<{ _embedded?: { events?: any[] } }>('Ticketmaster', `https://app.ticketmaster.com/discovery/v2/events.json?${params.toString()}`);
     const events = Array.isArray(json?._embedded?.events) ? json._embedded.events : [];
     const now = Date.now();
     const cards = events
@@ -4861,6 +4888,9 @@ function NomNomGoApp() {
     activitySelections = selectedActivities,
     routeBias?: SearchRouteBias,
   ) => {
+    const execution = searchExecutionRef.current;
+    if (!execution || execution.id !== requestId) return;
+    execution.check();
     const wantsEvents = slot === 'activity' && activitySelections.includes('Events');
     const eventsFocused = slot === 'activity' && activitySelections.includes('Events');
     const chargerFocused = slot === 'activity' && wantsChargerActivity(activitySelections);
@@ -4869,7 +4899,7 @@ function NomNomGoApp() {
       ? `${wantsNoFastFood(foodSelections) ? '|no-fast-food' : ''}${wantsCloseBy(foodSelections) ? '|close-by' : ''}${wantsOpenNow(foodSelections) ? '|open-now' : ''}${cuisineSelections(foodSelections).join(',')}|dietary:${dietarySelections(selectedDietaryPreferences).join(',')}`
       : `${nonEventActivitySelections(activitySelections).join(',')}|${wantsEvents ? `events|${EVENT_PROVIDER_CACHE_VERSION}|${selectedDateWindowRef.current}|${customDateRangeRef.current ? `${customDateRangeRef.current.start}-${customDateRangeRef.current.end}` : 'preset'}${eventsFocused ? '|focused' : ''}` : ''}`;
     const activeTiming = activePlanTimingRef.current;
-    const timingKey = `|timing:${activeTiming.dateRange.start}:${activeTiming.timeWindow || 'now'}`;
+    const timingKey = `|timing:${activeTiming.dateRange.start}:${activeTiming.dateRange.end}:${activeTiming.timeWindow || 'now'}`;
     const cacheKey = `${searchCacheKey(slot, center, types, effectiveRadiusMeters)}${preferenceKey}${timingKey}${routeBiasCacheKey(routeBias)}`;
     if (routeBias?.mode === 'walk') {
       addLog('Walking route bias active: favoring places near the stop and start');
@@ -4882,6 +4912,7 @@ function NomNomGoApp() {
     const planStartMs = new Date(`${activeTiming.dateRange.start}T00:00:00`).getTime();
     const planEndMs = new Date(`${activeTiming.dateRange.end}T23:59:59`).getTime();
     const applyResultFilters = (nextCards: PlaceCard[]) => nextCards.map(cardForActivePlanTiming).filter((card) => {
+      if (memory.neverRecommend.includes(card.id)) return false;
       if (!hasKnownHours(card) && !(chargerFocused && isEvCharger(card))) return false;
       const cardDistance = distanceMeters(center, card);
       if (Number.isFinite(cardDistance) && cardDistance > resultRadiusMeters) return false;
@@ -4913,17 +4944,24 @@ function NomNomGoApp() {
       count < MIN_FOOD_RESULTS_BEFORE_EXPAND;
     const searchAndFilter = async (searchRadius: number) => {
       const merged = new Map<string, PlaceCard>();
-      for (const type of types) {
-        try {
-          const results = await searchNearbyType(type, center, searchRadius);
-          results.forEach((card) => {
-            if (!memory.neverRecommend.includes(card.id)) merged.set(card.id, card);
-          });
-        } catch (err) {
-          addLog(`Google Places ${type} error: ${compactError(err)}`);
-        }
+      execution.check();
+      if (!GOOGLE_API_KEY) {
+        execution.failures += 1;
+        return [];
       }
-
+      const batches = await mapConcurrent(types, async (type) => {
+        execution.check();
+        try {
+          return await searchNearbyType(type, center, searchRadius, execution);
+        } catch (err) {
+          execution.check();
+          addLog(`Google Places ${type} error: ${compactError(err)}`);
+          return [];
+        }
+      });
+      batches.flat().forEach((card) => {
+        if (!memory.neverRecommend.includes(card.id)) merged.set(card.id, card);
+      });
       return applyResultFilters(Array.from(merged.values()));
     };
 
@@ -4932,7 +4970,13 @@ function NomNomGoApp() {
       : await readCachedSearch(STORAGE_SEARCH_CACHE, cacheKey, SEARCH_CACHE_TTL_MS, 'Nearby search');
     if (unblockedCards) {
       unblockedCards = applyResultFilters(unblockedCards);
+      execution.check();
       addLog(`Nearby cache after filters: ${unblockedCards.length} cards`);
+      setResultMode(slot);
+      setHasInitiatedSearch(true);
+      setCards(unblockedCards);
+      setVisibleCount(PAGE_SIZE);
+      return;
     } else {
       unblockedCards = await searchAndFilter(effectiveRadiusMeters);
       if (routeBias?.mode === 'walk' && effectiveRadiusMeters < radiusMeters && unblockedCards.length < PAGE_SIZE) {
@@ -4944,10 +4988,11 @@ function NomNomGoApp() {
 
     if (slot === 'food') {
       try {
-        const textFoodCards = await searchFoodByTextPreferences(center, foodSelections, selectedDietaryPreferences);
+        const textFoodCards = await searchFoodByTextPreferences(center, foodSelections, selectedDietaryPreferences, execution);
         unblockedCards = mergeCards(unblockedCards, textFoodCards);
         addLog(`Food text discovery merged: ${unblockedCards.length} cards`);
       } catch (err) {
+        execution.check();
         addLog(`Food text discovery error: ${compactError(err)}`);
       }
     }
@@ -4961,10 +5006,11 @@ function NomNomGoApp() {
           const chargerTextCards = await searchPlaceByText(query, 'activity', center, {
             maxResults: 20,
             radiusMeters: walkingAdjustedRadius(DEFAULT_ACTIVITY_RADIUS_METERS, routeBias),
-          });
+          }, execution);
           unblockedCards = mergeCards(unblockedCards, chargerTextCards);
           addLog(`${query} text discovery merged: ${unblockedCards.length} activity cards`);
         } catch (err) {
+        execution.check();
           addLog(`${query} text discovery error: ${compactError(err)}`);
         }
       }
@@ -4972,7 +5018,7 @@ function NomNomGoApp() {
 
     if (shouldExpand(unblockedCards.length)) {
       addLog(`Food results sparse (${unblockedCards.length}); expanding radius to ${Math.round(EXPANDED_FOOD_RADIUS_METERS / 1609)} miles`);
-      const expandedCacheKey = `${searchCacheKey(slot, center, types, EXPANDED_FOOD_RADIUS_METERS)}${preferenceKey}|expanded`;
+      const expandedCacheKey = `${searchCacheKey(slot, center, types, EXPANDED_FOOD_RADIUS_METERS)}${preferenceKey}${timingKey}${routeBiasCacheKey(routeBias)}|expanded`;
       const expandedCachedCards = forceRefresh
         ? undefined
         : await readCachedSearch(STORAGE_SEARCH_CACHE, expandedCacheKey, SEARCH_CACHE_TTL_MS, 'Expanded food search');
@@ -4982,14 +5028,15 @@ function NomNomGoApp() {
       } else {
         const expandedCards = await searchAndFilter(EXPANDED_FOOD_RADIUS_METERS);
         unblockedCards = mergeCards(unblockedCards, expandedCards);
-        await writeCachedSearch(STORAGE_SEARCH_CACHE, expandedCacheKey, expandedCards, 32, 'Expanded food search');
+        if (!execution.failures) await writeCachedSearch(STORAGE_SEARCH_CACHE, expandedCacheKey, expandedCards, 32, 'Expanded food search');
       }
       if (unblockedCards.length < MIN_FOOD_RESULTS_BEFORE_EXPAND && !activeTiming.timeWindow) {
         try {
-          const openFoodTextCards = await searchOpenFoodByText(center);
+          const openFoodTextCards = await searchOpenFoodByText(center, execution);
           unblockedCards = mergeCards(unblockedCards, openFoodTextCards);
           addLog(`Open food text fallback merged: ${unblockedCards.length} cards`);
         } catch (err) {
+        execution.check();
           addLog(`Open food text fallback error: ${compactError(err)}`);
         }
       }
@@ -5002,11 +5049,12 @@ function NomNomGoApp() {
     if (wantsEvents && !chargerFocused) {
       let ticketmasterEventCount = unblockedCards.filter((card) => card.kind === 'event' && card.source === 'Ticketmaster').length;
       try {
-        const ticketmasterCards = await searchTicketmasterEvents(center);
+        const ticketmasterCards = await searchTicketmasterEvents(center, TICKETMASTER_EVENT_RADIUS_MILES, execution);
         ticketmasterEventCount = ticketmasterCards.length;
         unblockedCards = mergeCards(unblockedCards, ticketmasterCards);
         addLog(`Ticketmaster event results merged: ${unblockedCards.length} activity cards`);
       } catch (err) {
+        execution.check();
         addLog(`Ticketmaster event search failed: ${compactError(err)}`);
       }
 
@@ -5017,16 +5065,18 @@ function NomNomGoApp() {
               .filter((card) => card.kind === 'event' && card.source === 'Ticketmaster')
               .map((card) => normalizePlaceName(card.title)),
           );
-          const localEventCards = (await searchLocalEventPlaces(center))
+          const localEventCards = (await searchLocalEventPlaces(center, execution))
             .filter((card) => !ticketmasterNames.has(normalizePlaceName(card.title)));
           unblockedCards = mergeCards(unblockedCards, localEventCards);
           addLog(`Local event fallback merged: ${unblockedCards.length} activity cards`);
         } catch (err) {
+        execution.check();
           addLog(`Local event fallback failed: ${compactError(err)}`);
         }
       }
     }
 
+    execution.check();
     const sortedCards = unblockedCards.sort((a, b) => {
       if (wantsEvents) {
         if (eventsFocused) {
@@ -5067,9 +5117,13 @@ function NomNomGoApp() {
     setResultMode(slot);
     setHasInitiatedSearch(true);
     setCards(finalCards);
+    setSearchFailed(execution.failures > 0 && finalCards.length === 0);
+    setSearchNotice(execution.failures ? (finalCards.length
+      ? 'Some results could not be loaded. You can use these matches or try again.'
+      : 'Search is temporarily unavailable. Try again or add a place manually.') : '');
     setVisibleCount(PAGE_SIZE);
     await rememberFavoriteCardsFromResults(slot, finalCards);
-    await writeCachedSearch(STORAGE_SEARCH_CACHE, cacheKey, finalCards, 32, 'Nearby search');
+    if (!execution.failures) await writeCachedSearch(STORAGE_SEARCH_CACHE, cacheKey, finalCards, 32, 'Nearby search');
   };
 
   const searchForSlot = async (
@@ -5080,8 +5134,8 @@ function NomNomGoApp() {
     preferenceOverride?: SearchPreferenceOverride,
     routeBiasOverride?: SearchRouteBias,
   ) => {
-    const requestId = searchRequestIdRef.current + 1;
-    searchRequestIdRef.current = requestId;
+    const execution = beginSearch(forceRefresh);
+    const requestId = execution.id;
     const foodSelections = preferenceOverride?.foodSelections || selectedFoods;
     const activitySelections = preferenceOverride?.activitySelections || selectedActivities;
     const dietaryPreferences = preferenceOverride?.dietarySelections || selectedDietary;
@@ -5089,13 +5143,15 @@ function NomNomGoApp() {
       addLog('Favorites filter needs a search before saved places can be shown');
     }
     addLog(`Find button tapped: ${slot}`);
-    if (!keyLoaded) {
+    if (!keyLoaded && !(slot === 'activity' && activitySelections.includes('Events') && TICKETMASTER_API_KEY)) {
       setResultMode(slot);
       setResultFilter('all');
       setHasInitiatedSearch(true);
       setCards([]);
       setVisibleCount(PAGE_SIZE);
-      setSearchNotice('Search needs EXPO_PUBLIC_GOOGLE_PLACES_API_KEY. Import a route, or use Find a specific place to add stops manually.');
+      setSearchFailed(true);
+      setLoading(false);
+      setSearchNotice('Search is temporarily unavailable. You can add a place manually.');
       notifyGooglePlacesMissing('Search stopped: Google Places key missing');
       return;
     }
@@ -5133,15 +5189,15 @@ function NomNomGoApp() {
         addLog(`Selected food types: ${types.join(', ')}`);
         await runPlacesSearch('food', center, types, wantsCloseBy(foodSelections) ? CLOSE_BY_RADIUS_METERS : DEFAULT_RADIUS_METERS, forceRefresh, foodSelections, requestId, dietaryPreferences, activitySelections, routeBiasOverride);
       }
-      if (shouldScroll) scrollToResults();
     } catch (err) {
+      if (execution.id !== searchRequestIdRef.current || isSearchCancelled(err)) return;
+      setSearchFailed(true);
       addLog(`Find failed: ${compactError(err)}`);
       const searchError = compactError(err);
-      const needsLocation = /location|gps|geolocation|secure origin|permission/i.test(searchError);
+      const needsLocation = /location|gps|geolocation|secure origin/i.test(searchError);
       setSearchNotice(needsLocation
-        ? 'Location is unavailable in this browser preview. Enter a ZIP, neighborhood, or city under Search area and try again.'
-        : 'Search could not be completed. Check the search area and try again.');
-      Alert.alert('Could not search nearby', compactError(err));
+        ? 'Location is unavailable. Enter a ZIP, neighborhood, or city under Search area and try again.'
+        : 'Search is temporarily unavailable. Try again or add a place manually.');
     } finally {
       if (requestId === searchRequestIdRef.current) setLoading(false);
     }
@@ -5205,8 +5261,9 @@ function NomNomGoApp() {
     setCards([]);
     setVisibleCount(PAGE_SIZE);
     setLoading(true);
+    const pending = beginSearch();
     setTimeout(() => {
-      void searchForSlot(resultMode, true, false);
+      if (pending.id === searchRequestIdRef.current) void searchForSlot(resultMode, true, false);
     }, 25);
   };
 
@@ -5214,11 +5271,11 @@ function NomNomGoApp() {
     const start = parseDateInput(customDateStartInput);
     const end = parseDateInput(customDateEndInput);
     if (!start || !end) {
-      Alert.alert('Check dates', 'Use dates like 2026-06-12.');
+      showAppNotice('Check dates', 'Use dates like 2026-06-12.');
       return;
     }
     if (end < start) {
-      Alert.alert('Check dates', 'End date must be the same as or after the start date.');
+      showAppNotice('Check dates', 'End date must be the same as or after the start date.');
       return;
     }
 
@@ -5276,8 +5333,9 @@ function NomNomGoApp() {
     setCards([]);
     setVisibleCount(PAGE_SIZE);
     setLoading(true);
+    const pending = beginSearch();
     setTimeout(() => {
-      void searchForSlot(resultMode, true, false);
+      if (pending.id === searchRequestIdRef.current) void searchForSlot(resultMode, true, false);
     }, 25);
   };
 
@@ -5291,8 +5349,9 @@ function NomNomGoApp() {
     setCards([]);
     setVisibleCount(PAGE_SIZE);
     setLoading(true);
+    const pending = beginSearch();
     setTimeout(() => {
-      void searchForSlot(resultMode, true, false, centerOverride);
+      if (pending.id === searchRequestIdRef.current) void searchForSlot(resultMode, true, false, centerOverride);
     }, 25);
   };
 
@@ -5366,18 +5425,20 @@ function NomNomGoApp() {
   const searchFromLocationOverride = async () => {
     const value = routeOriginOverride.trim();
     if (!value) {
-      Alert.alert('Location needed', 'Enter a ZIP, address, or place first.');
+      showAppNotice('Location needed', 'Enter a ZIP, address, or place first.');
       return;
     }
 
     addLog(`Location override tapped: ${value}`);
     const shouldDeferSearch = !hasInitiatedSearch && !plan.stops.length;
     if (!shouldDeferSearch) beginSettingsLocationSearch();
+    const execution = beginSearch();
     try {
       const next = await resolveLocationInput(value);
+      execution.check();
       if (!next) {
         setLoading(false);
-        Alert.alert('Location not found', `Could not find a location for ${value}.`);
+        showAppNotice('Location not found', `Could not find a location for ${value}.`);
         addLog(`Location geocode returned no results: ${value}`);
         return;
       }
@@ -5401,9 +5462,10 @@ function NomNomGoApp() {
       searchAfterSettingsLocationChange(refreshCenter);
       addLog('Starting location saved; refreshing active results');
     } catch (err) {
+      if (execution.id !== searchRequestIdRef.current || isSearchCancelled(err)) return;
       setLoading(false);
       addLog(`Location override failed: ${compactError(err)}`);
-      Alert.alert('Location search failed', compactError(err));
+      showAppNotice('Location search failed', compactError(err));
     }
   };
 
@@ -5423,18 +5485,20 @@ function NomNomGoApp() {
   const searchFromSearchLocationOverride = async () => {
     const value = searchLocationOverride.trim();
     if (!value) {
-      Alert.alert('Search location needed', 'Enter a ZIP, address, or place first.');
+      showAppNotice('Search location needed', 'Enter a ZIP, address, or place first.');
       return;
     }
 
     addLog(`Search location tapped: ${value}`);
     const shouldDeferSearch = !hasInitiatedSearch && !plan.stops.length;
     if (!shouldDeferSearch) beginSettingsLocationSearch();
+    const execution = beginSearch();
     try {
       const next = await resolveLocationInput(value);
+      execution.check();
       if (!next) {
         setLoading(false);
-        Alert.alert('Location not found', `Could not find a location for ${value}.`);
+        showAppNotice('Location not found', `Could not find a location for ${value}.`);
         addLog(`Search location geocode returned no results: ${value}`);
         return;
       }
@@ -5458,15 +5522,16 @@ function NomNomGoApp() {
       searchAfterSettingsLocationChange(next);
       addLog('Search location saved; refreshing active results');
     } catch (err) {
+      if (execution.id !== searchRequestIdRef.current || isSearchCancelled(err)) return;
       setLoading(false);
       addLog(`Search location failed: ${compactError(err)}`);
-      Alert.alert('Search location failed', compactError(err));
+      showAppNotice('Search location failed', compactError(err));
     }
   };
 
   const clearSearchLocationOverride = async () => {
     if (activePlanningSession) {
-      Alert.alert('Shared location required', 'A planning session needs a shared search location. Edit it instead of clearing it.');
+      showAppNotice('Shared location required', 'A planning session needs a shared search location. Edit it instead of clearing it.');
       return;
     }
     setSearchLocationOverride('');
@@ -5487,7 +5552,7 @@ function NomNomGoApp() {
 
   const createPlanningSession = async () => {
     if (!sessionInvitees.length) {
-      Alert.alert('Invite testers', 'Choose at least one local tester user for this planning session.');
+      showAppNotice('Invite testers', 'Choose at least one local tester user for this planning session.');
       return;
     }
 
@@ -5497,7 +5562,7 @@ function NomNomGoApp() {
         ? await resolveLocationInput(locationInput)
         : searchLocation || location || await getLocation();
       if (!resolvedLocation) {
-        Alert.alert('Shared location needed', 'Enter a ZIP, address, or place for the shared session search.');
+        showAppNotice('Shared location needed', 'Enter a ZIP, address, or place for the shared session search.');
         return;
       }
 
@@ -5544,7 +5609,7 @@ function NomNomGoApp() {
       showToast('Planning session started');
     } catch (err) {
       addLog(`Planning session create failed: ${compactError(err)}`);
-      Alert.alert('Could not create session', compactError(err));
+      showAppNotice('Could not create session', compactError(err));
     }
   };
 
@@ -5688,12 +5753,12 @@ function NomNomGoApp() {
   const buildFinalPlanRecommendation = async () => {
     if (!activePlanningSession || !isPlanningOwner) return;
     if (!activePlanningSession.suggestions.length) {
-      Alert.alert('Add suggestions first', 'Food or activity suggestions are needed before building a final plan.');
+      showAppNotice('Add suggestions first', 'Food or activity suggestions are needed before building a final plan.');
       return;
     }
     const recommendation = buildPlanningRecommendation(activePlanningSession);
     if (!recommendation.suggestionIds.length) {
-      Alert.alert('No matching suggestions', 'Add suggestions that match the session intent first.');
+      showAppNotice('No matching suggestions', 'Add suggestions that match the session intent first.');
       return;
     }
     await patchPlanningSession(activePlanningSession.id, (session) => ({
@@ -5901,7 +5966,11 @@ function NomNomGoApp() {
       setSelectedFoods(suggestion.selections);
     }
 
-    if (!keyLoaded) return;
+    if (!keyLoaded) {
+      await searchForSlot(suggestion.slot, true);
+      return;
+    }
+    const execution = beginSearch();
     setHasInitiatedSearch(true);
     setCards([]);
     setVisibleCount(PAGE_SIZE);
@@ -5909,6 +5978,7 @@ function NomNomGoApp() {
     scrollToResults();
     try {
       const center = await getSearchLocation();
+      execution.check();
       const lastCompatibleIndex = plan.stops.length > 0 && plan.stops[plan.stops.length - 1].slot !== suggestion.slot
         ? plan.stops.length - 1
         : -1;
@@ -5938,16 +6008,18 @@ function NomNomGoApp() {
         suggestionRadius,
         false,
         suggestion.slot === 'food' ? suggestion.selections : selectedFoods,
-        searchRequestIdRef.current,
+        execution.id,
         selectedDietary,
         suggestion.slot === 'activity' ? suggestion.selections : selectedActivities,
         routeBias,
       );
-      scrollToResults();
     } catch (err) {
+      if (execution.id !== searchRequestIdRef.current || isSearchCancelled(err)) return;
+      setSearchFailed(true);
+      setSearchNotice('Search is temporarily unavailable. Try again or add a place manually.');
       addLog(`Suggested pairing search failed: ${compactError(err)}`);
     } finally {
-      setLoading(false);
+      if (execution.id === searchRequestIdRef.current) setLoading(false);
     }
   };
 
@@ -6372,7 +6444,7 @@ function NomNomGoApp() {
       addLog(`NOW plan created: ${nextTitle}`);
     } catch (err) {
       addLog(`NOW plan creation failed: ${compactError(err)}`);
-      Alert.alert('Could not create plan', compactError(err));
+      showAppNotice('Could not create plan', compactError(err));
     } finally {
       setNowPlanCreating(false);
     }
@@ -6436,8 +6508,9 @@ function NomNomGoApp() {
   };
 
   const lockPlan = async () => {
+    cancelSearch();
     if (!plan.stops.length) {
-      Alert.alert('Choose a final option', 'Add a food place, activity, or participant suggestion before finalizing.');
+      showAppNotice('Choose a final option', 'Add a food place, activity, or participant suggestion before finalizing.');
       return;
     }
     const lockedArrivalTimes = currentDisplayedArrivalTimes();
@@ -6550,7 +6623,7 @@ function NomNomGoApp() {
         : GOOGLE_MAPS_ROUTE_IMPORT_ERROR;
       setRouteImportError(message);
       addLog(`Google Maps route import failed: ${compactError(err)}`);
-      Alert.alert('Could not import route', message);
+      showAppNotice('Could not import route', message);
     } finally {
       setRouteImporting(false);
     }
@@ -6572,7 +6645,7 @@ function NomNomGoApp() {
 
   const openRouteOptions = () => {
     if (!plan.stops.length) {
-      Alert.alert('No plan yet', 'Select food or activity first.');
+      showAppNotice('No plan yet', 'Select food or activity first.');
       return;
     }
     setRouteOptionsOpen(true);
@@ -6590,7 +6663,7 @@ function NomNomGoApp() {
       title: planTitle,
     });
     if (!payload) {
-      Alert.alert('No destination yet', 'Select food or activity first.');
+      showAppNotice('No destination yet', 'Select food or activity first.');
       return;
     }
 
@@ -6600,7 +6673,7 @@ function NomNomGoApp() {
       addLog('Tesla route handoff opened');
     } catch (err) {
       addLog(`Tesla route handoff failed: ${compactError(err)}`);
-      Alert.alert('Could not open Tesla handoff', compactError(err));
+      showAppNotice('Could not open Tesla handoff', compactError(err));
     }
   };
 
@@ -6676,6 +6749,7 @@ function NomNomGoApp() {
   };
 
   const loadSavedPlan = (saved: SavedPlan) => {
+    cancelSearch();
     const loadSuffix = `-load-${Date.now()}`;
     const loadedStops = saved.stops.map((stop) => cloneStopForSavedPlan(stop, loadSuffix));
     const loadedPlanTimes: Record<string, StopTime | undefined> = {};
@@ -6884,12 +6958,34 @@ function NomNomGoApp() {
   };
 
   const clearManualSearch = () => {
+    cancelSearch();
+    setSearchNotice('');
+    setSearchFailed(false);
     setManualSearch('');
     setManualSearchSubmitted(false);
     setCards([]);
     setVisibleCount(PAGE_SIZE);
     setHasInitiatedSearch(false);
     setTimeout(() => manualSearchRef.current?.focus(), 50);
+  };
+
+  const addManualPlace = async (slot: PlanSlot) => {
+    const value = manualSearch.trim();
+    if (!value || (isPlanLocked && !planningSuggestionMode)) return;
+    cancelSearch();
+    if (planningSuggestionMode) {
+      await addPlanningSuggestion(slot, value, 'manual');
+    } else if (nowDiscovering) {
+      await selectNowDestination(slot, value);
+    } else {
+      const visualType = searchVisualType === 'dessert' && slot === 'food' ? 'dessert' : slot;
+      const inserted = insertStopIntoPlan(slot, value, visualType);
+      if (inserted) scrollToPlanStop(inserted.key);
+    }
+    setManualSearch('');
+    setManualSearchSubmitted(false);
+    setSearchNotice('');
+    setSearchFailed(false);
   };
 
   const runManualSearch = async (slot: PlanSlot) => {
@@ -6899,27 +6995,15 @@ function NomNomGoApp() {
     }
     const value = manualSearch.trim();
     if (!value) return;
+    const execution = beginSearch();
+    const requestId = execution.id;
     setManualSearchSubmitted(true);
+    setHasInitiatedSearch(true);
+    setResultMode(slot);
+    setResultFilter('all');
+    setCards([]);
     if (!keyLoaded) {
-      if (planningSuggestionMode) {
-        await addPlanningSuggestion(slot, value, 'manual');
-        setManualSearch('');
-        addLog(`Manual ${slot} suggested without Places lookup: ${value}`);
-        return;
-      }
-      if (nowDiscovering) {
-        await selectNowDestination(slot, value);
-        addLog(`Manual NOW ${slot} added without Places lookup: ${value}`);
-        return;
-      }
-      const manualVisualType = searchVisualType === 'dessert' && slot === 'food' && selectedFoods.includes('Dessert')
-        ? 'dessert'
-        : searchVisualType === slot ? searchVisualType : undefined;
-      const insertedStop = insertStopIntoPlan(slot, value, manualVisualType);
-      if (insertedStop) scrollToPlanStop(insertedStop.key);
-      setManualSearch('');
-      setManualSearchSubmitted(false);
-      addLog(`Manual ${slot} used without Places lookup: ${value}`);
+      await addManualPlace(slot);
       return;
     }
 
@@ -6929,7 +7013,9 @@ function NomNomGoApp() {
         addLog(`Manual lookup location unavailable: ${compactError(err)}`);
         return null;
       });
-      const matches = (await searchPlaceByText(value, slot, center)).map(cardForActivePlanTiming);
+      execution.check();
+      const matches = (await searchPlaceByText(value, slot, center, undefined, execution)).map(cardForActivePlanTiming);
+      execution.check();
       setResultMode(slot);
       setHasInitiatedSearch(true);
       setCards(matches);
@@ -6942,14 +7028,15 @@ function NomNomGoApp() {
         ? `Manual ${slot} needs choice: ${matches.slice(0, 3).map((card) => card.title).join(' | ')}`
         : `Manual ${slot} lookup found no match: ${value}`);
     } catch (err) {
+      if (requestId !== searchRequestIdRef.current || isSearchCancelled(err)) return;
+      setSearchFailed(true);
       setResultMode(slot);
       setHasInitiatedSearch(true);
       setCards([]);
-      setSearchNotice('Place lookup failed. Nothing was added; check the search area and try again.');
+      setSearchNotice('Place search is temporarily unavailable. Try again or add this place manually.');
       addLog(`Manual ${slot} lookup failed: ${compactError(err)}`);
-      Alert.alert('Manual lookup failed', 'Nothing was added. Check the search area and try again.');
     } finally {
-      setLoading(false);
+      if (requestId === searchRequestIdRef.current) setLoading(false);
     }
   };
 
@@ -7013,7 +7100,7 @@ function NomNomGoApp() {
     }
     const url = mapsDirectionsUrl(plan, origin);
     if (!url) {
-      Alert.alert('No plan yet', 'Select food or activity first.');
+      showAppNotice('No plan yet', 'Select food or activity first.');
       return;
     }
     addLog('Directions to plan opened');
@@ -7030,7 +7117,7 @@ function NomNomGoApp() {
       addLog('Plan shared as text');
     } catch (err) {
       addLog(`Plan share failed: ${compactError(err)}`);
-      Alert.alert('Could not share plan', compactError(err));
+      showAppNotice('Could not share plan', compactError(err));
     }
   };
 
@@ -7113,7 +7200,7 @@ function NomNomGoApp() {
       addLog('Beta plan shared');
     } catch (err) {
       addLog(`Beta plan share failed: ${compactError(err)}`);
-      Alert.alert('Could not share plan', compactError(err));
+      showAppNotice('Could not share plan', compactError(err));
     }
   };
 
@@ -7141,7 +7228,7 @@ function NomNomGoApp() {
       addLog('Calendar export created');
     } catch (err) {
       addLog(`Calendar export failed: ${compactError(err)}`);
-      Alert.alert('Could not create calendar file', compactError(err));
+      showAppNotice('Could not create calendar file', compactError(err));
     }
   };
 
@@ -7198,7 +7285,7 @@ function NomNomGoApp() {
       addLog('Visitor beta plan shared');
     } catch (err) {
       addLog(`Visitor beta plan share failed: ${compactError(err)}`);
-      Alert.alert('Could not share plan', compactError(err));
+      showAppNotice('Could not share plan', compactError(err));
     }
   };
 
@@ -7699,6 +7786,8 @@ function NomNomGoApp() {
                     key={name}
                     style={[styles.testerOption, Platform.OS === 'web' && styles.webTesterOption]}
                     onPress={() => selectTester(name)}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Choose tester ${name}`}
                   >
                     <Text style={styles.testerOptionText}>{name}</Text>
                   </TouchableOpacity>
@@ -9594,10 +9683,13 @@ function NomNomGoApp() {
           {manualSearchSubmitted ? (
             <Button label="Clear" onPress={clearManualSearch} compact />
           ) : (
-            <Button label="Search" onPress={() => runManualSearch(resultMode)} compact />
+            <Button label="Search" onPress={() => runManualSearch(resultMode)} disabled={!manualSearch.trim()} compact />
           )}
         </View>
         <Text style={[styles.preferenceSummary, isDarkMode && styles.darkMutedText]}>Search shows matches first. Choose Add, Suggest, or Use to select one.</Text>
+        {!loading && manualSearch.trim() && manualSearchSubmitted && (searchFailed || cards.length === 0) ? (
+          <Button label={planningSuggestionMode ? 'Suggest this place manually' : 'Add this place manually'} onPress={() => addManualPlace(resultMode)} compact />
+        ) : null}
       </View>
 
       {!hasInitiatedSearch ? (
@@ -9622,6 +9714,7 @@ function NomNomGoApp() {
               tone={resultMode === 'food' ? 'food' : 'activity'}
               title={`Searching ${resultMode === 'food' ? 'food places' : 'activities'}…`}
               description="Gathering the best nearby matches."
+              action={<Button label="Cancel search" onPress={cancelSearch} compact />}
             />
           ) : null}
           {!loading && shownCards.length === 0 && resultFilter === 'favorites' ? (
@@ -9632,11 +9725,15 @@ function NomNomGoApp() {
             />
           ) : !loading && shownCards.length === 0 ? (
             <EmptyState
-              status={searchNotice ? 'error' : 'empty'}
-              title={searchNotice ? 'Search unavailable' : 'No results found'}
+              status={searchFailed ? 'error' : 'empty'}
+              title={searchFailed ? 'Search unavailable' : 'No results found'}
               description={searchNotice || 'Try a different category, search area, or preference.'}
-              icon={<Ionicons name={searchNotice ? 'alert-circle-outline' : 'search-outline'} size={30} color={searchNotice ? colors.red : colors.textSecondary} />}
+              icon={<Ionicons name={searchFailed ? 'alert-circle-outline' : 'search-outline'} size={30} color={searchFailed ? colors.red : colors.textSecondary} />}
+              action={<Button label="Try again" onPress={() => manualSearchSubmitted && manualSearch.trim() ? runManualSearch(resultMode) : searchForSlot(resultMode, true, true)} compact />}
             />
+          ) : null}
+          {!loading && shownCards.length > 0 && searchNotice ? (
+            <Text style={styles.preferenceSummary} accessibilityLiveRegion="polite">{searchNotice}</Text>
           ) : null}
           {!loading && shownCards.map((card, index) => {
             const isSelected = !nowDiscovering && selectedCards.some((item) => cardToId(item) === card.id);
@@ -10064,7 +10161,7 @@ function NomNomGoApp() {
                 : 'Open the current plan in Google Maps for final routing and navigation.'}
             </Text>
               <View style={styles.routeOptionList}>
-              <TouchableOpacity style={styles.routeOptionButton} onPress={openGoogleRouteFromOptions}>
+              <TouchableOpacity style={styles.routeOptionButton} onPress={openGoogleRouteFromOptions} accessibilityRole="button" accessibilityLabel="Open plan in Google Maps">
                 <Ionicons name="map-outline" size={18} color={colors.teal} />
                 <Text style={styles.routeOptionButtonText}>
                   {isImportedGoogleMapsPlan && plan.sourceUrl ? 'Open Google route' : 'Google Maps'}
@@ -10301,6 +10398,22 @@ function NomNomGoApp() {
         </View>
       </Modal>
 
+      <Modal
+        visible={Boolean(appNotice)}
+        animationType="fade"
+        transparent
+        onRequestClose={() => setAppNotice(null)}
+      >
+        <View style={styles.shareOverlay}>
+          <View style={[styles.quickShareCard, isDarkMode && styles.darkModalCard]} accessibilityRole="alert">
+            <Text style={[styles.quickShareTitle, isDarkMode && styles.darkText]}>{appNotice?.title}</Text>
+            <Text style={[styles.quickShareHint, isDarkMode && styles.darkMutedText]}>{appNotice?.message}</Text>
+            <View style={styles.shareActions}>
+              <Button label="OK" onPress={() => setAppNotice(null)} primary />
+            </View>
+          </View>
+        </View>
+      </Modal>
     </Animated.ScrollView>
     <BottomNavigation<MainNavigationKey>
       style={styles.bottomNavigation}
@@ -13315,6 +13428,8 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
   },
   mapChip: {
+    maxWidth: '100%',
+    flexShrink: 1,
     minHeight: controls.minimumTouchTarget,
     borderRadius: radii.md,
     borderWidth: 1,
@@ -13331,6 +13446,7 @@ const styles = StyleSheet.create({
     borderColor: semanticTones.activity.border,
   },
   mapChipText: {
+    flexShrink: 1,
     fontWeight: '800',
   },
   mapChipTextFood: {
