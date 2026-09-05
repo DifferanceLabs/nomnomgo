@@ -77,6 +77,7 @@ This index lists GitHub-ready issue files generated from the NomNomGo planning f
 | [ISSUE-0042](ISSUE-0042-Feature-Flags.md) | Feature Flags | P2 | No | M2 |
 | [ISSUE-0043](ISSUE-0043-Environment-Separation.md) | Environment Separation | P0 | Yes | M1 |
 | [ISSUE-0088](ISSUE-0088-Server-Side-Provider-Proxy.md) | Server-Side Provider Proxy | P1 | No | M5 |
+| [ISSUE-0093](ISSUE-0093-Real-User-Alpha.md) | Real-user Alpha Invitations and Accounts | P0 | Yes | M1 |
 
 ## Epic 006: Reliability
 

@@ -20,7 +20,10 @@ import * as Location from 'expo-location';
 import { useFonts } from 'expo-font';
 import { StatusBar } from 'expo-status-bar';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import AsyncStorage, { getAlphaAccount, initializeAlphaAccount, signOutAlphaAccount, subscribeAccountSaveError } from './src/data/accountStorage';
+import { AlphaAccountPanel } from './src/ui/AlphaAccountPanel';
+import { SharedPlansScreen } from './src/ui/SharedPlansScreen';
+import { createSharedPlan, planIdFromUrl, type SharedPlan, type SharedPlanDraft } from './src/data/sharedPlans';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import Sortable, { type DropIndicatorComponentProps, type SortableFlexDragEndParams } from 'react-native-sortables';
 import Animated, { useAnimatedRef, useAnimatedStyle } from 'react-native-reanimated';
@@ -2806,6 +2809,13 @@ function useWebDocumentSurface(backgroundColor: string) {
 
 function openDifferanceLaunch() {
   if (Platform.OS === 'web' && typeof window !== 'undefined') {
+    const pendingPlan = planIdFromUrl();
+    if (pendingPlan) {
+      try { window.sessionStorage.setItem('nngPendingPlan', pendingPlan); } catch { /* Optional redirect recovery. */ }
+    }
+    if (window.location.hash.includes('shared_plan=')) {
+      try { window.sessionStorage.setItem('nngPendingShare', window.location.hash); } catch { /* Browser storage may be disabled. */ }
+    }
     window.location.assign(DIFFERANCE_NOMNOMGO_LAUNCH_URL);
     return;
   }
@@ -2833,6 +2843,7 @@ function AlphaAccessGate({ children }: { children: React.ReactNode }) {
   const isDarkMode = true;
   useWebDocumentSurface(DARK_WEB_BACKGROUND);
   const [gateState, setGateState] = useState<AlphaGateState>(() => (shouldApplyAlphaGate() ? 'checking' : 'allowed'));
+  const [gateError, setGateError] = useState('');
 
   useEffect(() => {
     if (!shouldApplyAlphaGate()) {
@@ -2849,9 +2860,27 @@ function AlphaAccessGate({ children }: { children: React.ReactNode }) {
       try {
         const response = launchToken ? await validateLaunchToken(launchToken) : await validateAlphaSession();
         const hasAccess = await responseGrantsAlphaAccess(response);
+        if (hasAccess) {
+          await initializeAlphaAccount();
+          try {
+            const pendingPlan = window.sessionStorage.getItem('nngPendingPlan');
+            if (pendingPlan && !planIdFromUrl()) {
+              const url = new URL(window.location.href);
+              url.searchParams.set('plan', pendingPlan);
+              window.history.replaceState({}, '', url.toString());
+            }
+            window.sessionStorage.removeItem('nngPendingPlan');
+            const pendingShare = window.sessionStorage.getItem('nngPendingShare');
+            if (pendingShare && !window.location.hash) window.history.replaceState({}, '', `${window.location.pathname}${window.location.search}${pendingShare}`);
+            window.sessionStorage.removeItem('nngPendingShare');
+          } catch { /* Sharing still works without optional browser storage. */ }
+        }
         if (active) setGateState(hasAccess ? 'allowed' : 'locked');
-      } catch {
-        if (active) setGateState('locked');
+      } catch (error) {
+        if (active) {
+          setGateError(error instanceof Error ? error.message : 'Your account could not be loaded. Please try again.');
+          setGateState('locked');
+        }
       }
     }
 
@@ -2877,7 +2906,7 @@ function AlphaAccessGate({ children }: { children: React.ReactNode }) {
             <>
               <Text style={[styles.authTitle, isDarkMode && styles.darkText]}>NomNomGo is currently in private alpha.</Text>
               <Text style={[styles.authCopy, isDarkMode && styles.darkMutedText]}>
-                Launch NomNomGo from Differance Labs to continue.
+                {gateError || 'Launch NomNomGo from Differance Labs to continue.'}
               </Text>
               <Button label="Open with Differance Labs" onPress={openDifferanceLaunch} primary />
             </>
@@ -2896,6 +2925,13 @@ function ItineraryInsertionIndicator({ activeAnimationProgress, style }: DropInd
 }
 
 function NomNomGoApp() {
+  const [sharedWorkspace, setSharedWorkspace] = useState<{ id?: string; plan?: SharedPlan } | null>(() => {
+    const id = getAlphaAccount() ? planIdFromUrl() : null;
+    return id ? { id } : null;
+  });
+  const sharedPublishingRef = useRef(false);
+  const [accountSaveError, setAccountSaveError] = useState('');
+  useEffect(() => subscribeAccountSaveError(setAccountSaveError), []);
   const scrollRef = useAnimatedRef<React.ComponentRef<typeof Animated.ScrollView>>();
   const manualSearchRef = useRef<TextInput | null>(null);
   const resultsYRef = useRef(0);
@@ -3498,6 +3534,11 @@ function NomNomGoApp() {
 
   const signOutTester = async () => {
     try {
+      if (getAlphaAccount()) {
+        await signOutAlphaAccount();
+        if (Platform.OS === 'web') window.location.reload();
+        return;
+      }
       await AsyncStorage.removeItem(STORAGE_TESTER_USER);
       cancelSearch();
       closeTransientSurfaces();
@@ -3733,6 +3774,10 @@ function NomNomGoApp() {
   };
 
   const openNowPeopleFromHome = async () => {
+    if (getAlphaAccount()) {
+      setSharedWorkspace({});
+      return;
+    }
     await startNowPlan();
     setNowPeoplePickerOpen(true);
   };
@@ -7259,6 +7304,7 @@ function NomNomGoApp() {
 
   const sharePlan = async () => {
     try {
+      if (getAlphaAccount()) { await openCurrentSharedPlan(); return; }
       if (activeBetaPlanId || plan.sharedPlanId) {
         await shareActiveBetaPlan();
         return;
@@ -7345,6 +7391,7 @@ function NomNomGoApp() {
 
   const shareActiveBetaPlan = async () => {
     try {
+      if (getAlphaAccount()) { await openCurrentSharedPlan(); return; }
       const record = await ensureActiveBetaPlanRecord();
       await Share.share({ message: plan.stops.length ? sharePlanText() : betaPlanShareMessage(record) });
       addLog('Beta plan shared');
@@ -7352,6 +7399,33 @@ function NomNomGoApp() {
       addLog(`Beta plan share failed: ${compactError(err)}`);
       showAppNotice('Could not share plan', compactError(err));
     }
+  };
+
+  const openCurrentSharedPlan = async () => {
+    if (sharedPublishingRef.current) return;
+    sharedPublishingRef.current = true;
+    try {
+      const record = await ensureActiveBetaPlanRecord();
+      const details: SharedPlanDraft = {
+        title: record.title, intent: record.intent, locationLabel: record.locationLabel,
+        dateStart: record.planDateStart || activePlanDateRange.start,
+        dateEnd: record.planDateEnd || activePlanDateRange.end, timeWindow: record.timeWindow,
+        stops: record.stops.map((stop, index) => ({
+          id: stop.key, planId: '', position: index,
+          place: typeof stop.item === 'string' ? { provider: 'manual', title: stop.item } : {
+            provider: stop.item.kind === 'event' ? 'ticketmaster' : 'google_places',
+            providerId: stop.item.id, title: stop.item.title, address: stop.item.address,
+            latitude: stop.item.lat, longitude: stop.item.lng,
+          },
+          travelMode: stop.travelMode, durationMinutes: durationForStop(stop),
+          arrivalTime: formatClockTime(displayedArrivalTimeForStop(stop, index)),
+        })),
+      };
+      const shared = await createSharedPlan(record.id, details);
+      setSharePreviewOpen(false); setPlanPeopleOpen(false);
+      setSharedWorkspace({ plan: shared });
+    } catch (error) { showAppNotice('Could not open shared plan', compactError(error)); }
+    finally { sharedPublishingRef.current = false; }
   };
 
   const addActiveBetaPlanToCalendar = async () => {
@@ -7646,7 +7720,7 @@ function NomNomGoApp() {
           ? undefined
           : 'plans';
 
-  const quickShareUsers = unique(TEST_USERS.filter((user) => user !== currentTesterName));
+  const quickShareUsers = getAlphaAccount() ? [] : unique(TEST_USERS.filter((user) => user !== currentTesterName));
   const recentPeople = quickShareUsers.slice(0, 2);
   const favoritePeople = quickShareUsers.filter((user) => !recentPeople.includes(user)).slice(0, 3);
   const planPeopleSummary = activePlanPeopleSummary;
@@ -7672,6 +7746,20 @@ function NomNomGoApp() {
     setPlanSetupInvitees((prev) => prev.includes(user) ? prev.filter((item) => item !== user) : unique([...prev, user]));
   };
 
+  if (accountSaveError) {
+    return (
+      <SafeAreaView style={[styles.safeArea, styles.darkScreen]}>
+        <View style={styles.alphaGateShell}>
+          <View style={[styles.authCard, styles.darkPanel]}>
+            <Text style={[styles.authTitle, styles.darkText]}>Your changes could not be saved</Text>
+            <Text accessibilityRole="alert" selectable style={[styles.authCopy, styles.darkMutedText]}>{accountSaveError}</Text>
+            <Button label="Reload cloud saves" onPress={() => { if (Platform.OS === 'web') window.location.reload(); }} primary />
+          </View>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   if (!authLoaded) {
     return (
       <SafeAreaView style={[styles.safeArea, isLightMode && styles.lightScreen, isDarkMode && styles.darkScreen]} edges={['top', 'bottom', 'left', 'right']}>
@@ -7681,6 +7769,17 @@ function NomNomGoApp() {
         </View>
       </SafeAreaView>
     );
+  }
+
+  if (sharedWorkspace && getAlphaAccount() && authLoaded) {
+    return <SharedPlansScreen initialPlan={sharedWorkspace.plan} initialPlanId={sharedWorkspace.id} onClose={() => {
+      setSharedWorkspace(null);
+      if (Platform.OS === 'web') {
+        const url = new URL(window.location.href);
+        url.searchParams.delete('plan');
+        window.history.replaceState({}, '', url.toString());
+      }
+    }} />;
   }
 
   if (visitorBetaPlan) {
@@ -7750,6 +7849,7 @@ function NomNomGoApp() {
               <View style={styles.betaPlanHeader}>
                 <View style={styles.betaPlanTitleBlock}>
                   <Text style={[styles.betaPlanEyebrow, isDarkMode && styles.darkMutedText]}>Shared Plan</Text>
+                  {getAlphaAccount() ? <Text style={[styles.authCopy, styles.darkMutedText]}>This is a shared copy. Your changes, votes and RSVP are saved only to your account.</Text> : null}
                   <Text style={[styles.betaPlanTitle, isDarkMode && styles.darkText]}>{visitorBetaPlan.title}</Text>
                   <Text style={[styles.betaSummaryLine, isDarkMode && styles.darkMutedText]} numberOfLines={2}>
                     {visitorSummaryLine}
@@ -8026,8 +8126,9 @@ function NomNomGoApp() {
               </View>
             </View>
             <View style={styles.accountActions}>
+              {getAlphaAccount() ? <Button label="Shared plans & RSVPs" onPress={() => { setAccountMenuOpen(false); setSharedWorkspace({}); }} compact /> : null}
               <Button
-                label="User settings"
+                label={getAlphaAccount() ? 'Account, invites & usage' : 'User settings'}
                 onPress={() => {
                   setAccountMenuOpen(false);
                   setAccountSettingsOpen(true);
@@ -8035,7 +8136,7 @@ function NomNomGoApp() {
                 compact
               />
               <Button
-                label="Switch user"
+                label={getAlphaAccount() ? 'Sign out of NomNomGo' : 'Switch user'}
                 onPress={() => {
                   setAccountMenuOpen(false);
                   void signOutTester();
@@ -8057,6 +8158,7 @@ function NomNomGoApp() {
         <TouchableOpacity style={styles.accountOverlay} activeOpacity={1} onPress={() => setAccountSettingsOpen(false)}>
           <TouchableOpacity style={[styles.accountCard, isDarkMode && styles.darkModalCard]} activeOpacity={1} onPress={(event) => event.stopPropagation()}>
             <Text style={[styles.accountName, isDarkMode && styles.darkText]}>User settings</Text>
+            <ScrollView style={{ maxHeight: 420 }} keyboardShouldPersistTaps="handled">
             <View style={styles.accountSettingList}>
               <View>
                 <Text style={[styles.accountSettingLabel, isDarkMode && styles.darkMutedText]}>Active user</Text>
@@ -8071,7 +8173,7 @@ function NomNomGoApp() {
             </View>
             <View style={styles.accountActions}>
               <Button
-                label="Switch user"
+                label={getAlphaAccount() ? 'Sign out of NomNomGo' : 'Switch user'}
                 onPress={() => {
                   setAccountSettingsOpen(false);
                   void signOutTester();
@@ -8080,6 +8182,8 @@ function NomNomGoApp() {
               />
               <Button label="Close" onPress={() => setAccountSettingsOpen(false)} compact />
             </View>
+            <AlphaAccountPanel onOpenSharedPlans={() => { setAccountSettingsOpen(false); setSharedWorkspace({}); }} />
+            </ScrollView>
           </TouchableOpacity>
         </TouchableOpacity>
       </Modal>
@@ -8785,7 +8889,13 @@ function NomNomGoApp() {
               </Text>
             </View>
 
-            {activeBetaPlan || plan.sharedPlanId ? (
+            {getAlphaAccount() ? (
+              <View style={styles.itineraryCollaborationStrip}>
+                <Text style={styles.itineraryCollaborationSummary}>Invite people and manage live RSVPs in your shared plan. Once shared, edit the group itinerary there.</Text>
+                <Button label="Open shared plan & RSVPs" onPress={openCurrentSharedPlan} compact />
+              </View>
+            ) : null}
+            {!getAlphaAccount() && (activeBetaPlan || plan.sharedPlanId) ? (
               <View style={styles.itineraryCollaborationStrip}>
                 <View style={styles.itineraryCollaborationHeader}>
                   <View style={styles.itineraryCollaborationLabel}>
@@ -9144,7 +9254,7 @@ function NomNomGoApp() {
                     accessibilityLabel="Invite people"
                     accessibilityRole="button"
                     accessibilityState={{ expanded: planPeopleOpen }}
-                    onPress={() => setPlanPeopleOpen((current) => !current)}
+                    onPress={() => { if (getAlphaAccount()) void openCurrentSharedPlan(); else setPlanPeopleOpen((current) => !current); }}
                     style={[styles.itinerarySecondaryAction, planPeopleOpen && styles.itinerarySecondaryActionActive]}
                   >
                     <Ionicons name="person-add-outline" size={iconSizes.sm} color={colors.textPrimary} />
@@ -9201,7 +9311,7 @@ function NomNomGoApp() {
                   <TouchableOpacity
                     accessibilityLabel="Share plan"
                     accessibilityRole="button"
-                    onPress={() => setSharePreviewOpen(true)}
+                    onPress={() => { if (getAlphaAccount()) void openCurrentSharedPlan(); else setSharePreviewOpen(true); }}
                     style={styles.itineraryUtilityButton}
                   >
                     <Ionicons name="share-outline" size={iconSizes.xs} color={colors.textSecondary} />
@@ -9308,7 +9418,7 @@ function NomNomGoApp() {
           <View style={styles.lockedPlanActions}>
             <Button label={isImportedGoogleMapsPlan && plan.sourceUrl ? 'Open route' : 'Route'} onPress={openRouteOptions} primary compact />
             <Button label="Add to Calendar" onPress={addActiveBetaPlanToCalendar} success compact />
-            <Button label="Share" onPress={() => setSharePreviewOpen(true)} compact />
+            <Button label="Share" onPress={() => { if (getAlphaAccount()) void openCurrentSharedPlan(); else setSharePreviewOpen(true); }} compact />
             {!isCurrentPlanSaved ? <Button label="Save" onPress={saveCurrentPlan} compact /> : null}
             <Button label="Unlock/Edit" onPress={unlockPlan} compact />
           </View>

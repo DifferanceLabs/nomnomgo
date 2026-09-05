@@ -12,6 +12,8 @@ NomNomGo must remain capable of later moving to `nomnomgo.com` without architect
 
 ## What It Does
 
+Real-user alpha setup and the two-phone acceptance test are documented in [docs/REAL_USER_ALPHA.md](docs/REAL_USER_ALPHA.md). The implementation requires an approved Supabase migration and server configuration before release; it has not yet been activated in production.
+
 - Helps users choose food, activities, or both.
 - Builds a simple plan with route, share, map, favorites, saved plans, and quick add flows.
 - Uses location/search-location context to bias results.
@@ -136,7 +138,7 @@ The repository includes `vercel.json` with the same build settings and an SPA re
 
 After the first successful deployment, `nomnomgo.differancelabs.com` can be added as a custom domain in Vercel. Configure DNS according to Vercel's domain instructions. Keep domain-specific values out of app logic so the app can later move to `nomnomgo.com`.
 
-Do not integrate Differance Labs authentication or the Differance Labs admin portal as part of this deployment path.
+The alpha account adapter temporarily federates with Differance Labs authentication and NomNomGo app grants. Keep permanent NomNomGo auth and hosting independent; see the alpha activation runbook before deploying these account changes.
 
 ### DL Alpha Launch Protection
 
@@ -177,7 +179,7 @@ Testing:
 - Native sharing, maps links, and browser geolocation behavior depend on the user's browser and device.
 - Provider API calls currently run from the client and use `EXPO_PUBLIC_` variables, which are client-visible.
 - DL alpha launch protection is temporary alpha gating, not permanent production auth.
-- The gate validates only signed launch tokens and NomNomGo session cookies; it does not yet check Supabase grants.
+- Hosted account loading and every account API request check the active app and current Supabase grant; the legacy alpha-session endpoint alone verifies only the signed cookie. Operator emails are explicitly configured server-side.
 - Before serious public production use, move Google Places and Ticketmaster calls behind an independently deployable server-side API proxy so provider credentials are not exposed to the web client.
 
 ## Event Discovery Strategy

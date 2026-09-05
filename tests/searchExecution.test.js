@@ -176,12 +176,25 @@ test('a newer manual search owns the results and loading state after an older lo
 test('sign-out removes the persisted tester before showing the selector', async () => {
   const events = [];
   const handler = appHandler('signOutTester', {
+    getAlphaAccount: () => null,
     AsyncStorage: { removeItem: async (key) => events.push(key) },
     STORAGE_TESTER_USER: 'tester', cancelSearch: () => {}, closeTransientSurfaces: () => {},
     setTesterAuthenticated: (value) => events.push(value), addLog: () => {}, showToast: () => {},
   });
   await handler();
   assert.deepEqual(events, ['tester', false]);
+});
+
+test('hosted sign-out clears the server session before reloading and never opens a tester selector', async () => {
+  const events = [];
+  const handler = appHandler('signOutTester', {
+    getAlphaAccount: () => ({ email: 'real@example.com' }),
+    signOutAlphaAccount: async () => events.push('server logout'),
+    Platform: { OS: 'web' }, window: { location: { reload: () => events.push('reload') } },
+    showToast: () => events.push('error'),
+  });
+  await handler();
+  assert.deepEqual(events, ['server logout', 'reload']);
 });
 
 

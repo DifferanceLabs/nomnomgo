@@ -46,17 +46,19 @@ function readJsonPayload(encodedPayload) {
 }
 
 function expirySeconds(payload) {
+  if (!payload || typeof payload !== 'object') return null;
   const value = typeof payload.exp === 'number' ? payload.exp : payload.expires_at;
   if (typeof value !== 'number' || !Number.isFinite(value)) return null;
   return value > 100000000000 ? Math.floor(value / 1000) : Math.floor(value);
 }
 
 function payloadAppSlug(payload) {
+  if (!payload || typeof payload !== 'object') return null;
   return payload.app || payload.app_slug || payload.appSlug || payload.slug;
 }
 
 function verifyLaunchToken(token, secret) {
-  if (!token || !secret) return false;
+  if (typeof token !== 'string' || !token || token.length > 8192 || !secret) return false;
 
   const parts = token.split('.');
   if (parts.length === 2) {
@@ -97,7 +99,7 @@ function verifyLaunchToken(token, secret) {
     return false;
   }
 
-  if (header.alg !== 'HS256') return false;
+  if (!header || header.alg !== 'HS256') return false;
   if (payloadAppSlug(payload) !== APP_SLUG) return false;
 
   const expiresAt = expirySeconds(payload);
@@ -106,20 +108,29 @@ function verifyLaunchToken(token, secret) {
   return expiresAt > Math.floor(Date.now() / 1000);
 }
 
-function createSessionToken(secret) {
+function verifiedLaunchIdentity(token, secret) {
+  if (!verifyLaunchToken(token, secret)) return null;
+  const parts = token.split('.');
+  const payload = readJsonPayload(parts[parts.length === 3 ? 1 : 0]);
+  const email = typeof payload.user_email === 'string' ? payload.user_email.trim().toLowerCase() : '';
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && email.length <= 254 ? { email } : null;
+}
+
+function createSessionToken(secret, identity) {
   const now = Math.floor(Date.now() / 1000);
   const payload = {
     app: APP_SLUG,
     kind: 'nomnomgo-alpha-session',
     iat: now,
     exp: now + SESSION_TTL_SECONDS,
+    ...(identity ? { email: identity.email } : {}),
   };
   const encodedPayload = base64UrlEncode(JSON.stringify(payload));
   return `${encodedPayload}.${signBase64Url(encodedPayload, secret)}`;
 }
 
 function verifySessionToken(token, secret) {
-  if (!token || !secret) return false;
+  if (typeof token !== 'string' || !token || token.length > 8192 || !secret) return false;
 
   const parts = token.split('.');
   if (parts.length !== 2) return false;
@@ -136,13 +147,21 @@ function verifySessionToken(token, secret) {
     return false;
   }
 
-  if (payload.kind !== 'nomnomgo-alpha-session') return false;
+  if (!payload || payload.kind !== 'nomnomgo-alpha-session') return false;
   if (payloadAppSlug(payload) !== APP_SLUG) return false;
 
   const expiresAt = expirySeconds(payload);
   if (!expiresAt) return false;
 
   return expiresAt > Math.floor(Date.now() / 1000);
+}
+
+function sessionIdentity(req) {
+  const token = parseCookies(req.headers.cookie)[COOKIE_NAME];
+  if (!verifySessionToken(token, getSecret())) return null;
+  const payload = readJsonPayload(token.split('.')[0]);
+  return typeof payload.email === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(payload.email)
+    ? { email: payload.email.toLowerCase() } : null;
 }
 
 function parseCookies(cookieHeader) {
@@ -155,7 +174,7 @@ function parseCookies(cookieHeader) {
       if (separatorIndex === -1) return cookies;
       const name = part.slice(0, separatorIndex);
       const value = part.slice(separatorIndex + 1);
-      cookies[name] = decodeURIComponent(value);
+      try { cookies[name] = decodeURIComponent(value); } catch { /* Ignore malformed cookies. */ }
       return cookies;
     }, {});
 }
@@ -228,4 +247,6 @@ module.exports = {
   setNoStore,
   verifyLaunchToken,
   verifySessionToken,
+  verifiedLaunchIdentity,
+  sessionIdentity,
 };

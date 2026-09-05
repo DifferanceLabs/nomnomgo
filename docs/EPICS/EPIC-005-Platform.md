@@ -1,6 +1,6 @@
 # EPIC-005: Platform
 
-Status: Proposed
+Status: Active
 
 Primary phase: Phase 1 through Phase 5
 
@@ -26,6 +26,8 @@ Users can trust identity, profiles, sessions, and planning data while the team c
 | PF-008 | As a developer, I want environment separation so local, preview, and production are clear. | Now | Config distinguishes local, preview, hosted alpha, and production assumptions. |
 
 ## Technical Backlog
+
+- ISSUE-0093: real-user alpha accounts and shared planning; temporary DL federation, personal cloud saves, synchronized RSVPs/suggestions/votes, organizer permissions and aggregate metrics. Production activation approved through the mobile conversation on 2026-09-05; Supabase authentication and rollout pending.
 
 - Auth architecture selection.
 - User profile model.

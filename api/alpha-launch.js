@@ -4,7 +4,7 @@ const {
   readRequestBody,
   serializeSessionCookie,
   setNoStore,
-  verifyLaunchToken,
+  verifiedLaunchIdentity,
 } = require('./_alphaAuth');
 
 module.exports = async function alphaLaunch(req, res) {
@@ -30,13 +30,14 @@ module.exports = async function alphaLaunch(req, res) {
     return;
   }
 
-  const token = typeof body.token === 'string' ? body.token : '';
-  if (!verifyLaunchToken(token, secret)) {
+  const token = body && typeof body.token === 'string' ? body.token : '';
+  const identity = verifiedLaunchIdentity(token, secret);
+  if (!identity) {
     res.status(401).json({ access: false });
     return;
   }
 
-  const sessionToken = createSessionToken(secret);
+  const sessionToken = createSessionToken(secret, identity);
   res.setHeader('Set-Cookie', serializeSessionCookie(sessionToken, req));
   res.status(200).json({ access: true });
 };

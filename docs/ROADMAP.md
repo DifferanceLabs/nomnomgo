@@ -34,6 +34,8 @@ Primary documents:
 
 ## Phase 1: Planning MVP
 
+Immediate alpha slice: ISSUE-0093 adds verified DL identity, private cloud saves, email-bound invitations, shared plans with synchronized RSVPs/suggestions/votes, organizer controls and aggregate operator metrics. Native distribution remains separate. See `REAL_USER_ALPHA.md` for mobile approval, activation and the two-phone test.
+
 Goal: Small groups can create plans and decide where to go.
 
 Features:
