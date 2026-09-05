@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const ts = require('typescript');
 const { SearchExecution, mapConcurrent, isSearchCancelled } = require('../.route-import-test-build/src/domain/searchExecution');
-const { areaSearchRadius, isInsideSearchArea, METERS_PER_MILE } = require('../.route-import-test-build/src/domain/searchArea');
+const { AREA_CHOICES, areaSearchRadius, isInsideSearchArea, locationForArea, METERS_PER_MILE } = require('../.route-import-test-build/src/domain/searchArea');
 
 function deferred() {
   let resolve;
@@ -215,4 +215,79 @@ test('sparse food results never expand outside an explicitly selected area', () 
   assert.equal(shouldExpand(0), false);
   context.center = {};
   assert.equal(shouldExpand(0), true);
+});
+
+function areaSelectionHarness(overrides = {}) {
+  const events = [];
+  const base = { latitude: 35.9251, longitude: -86.8689, label: 'Franklin, TN' };
+  let execution;
+  const context = {
+    AREA_CHOICES, locationForArea, isSearchCancelled,
+    GOOGLE_API_KEY: 'test-key', activePlanningSession: null, activeSearchLocation: null,
+    searchLocationOverride: 'Franklin, TN', manualSearch: '', manualSearchSubmitted: false, resultMode: 'food',
+    searchRequestIdRef: { current: 0 },
+    beginSearch() { execution?.cancel(); execution = new SearchExecution(++context.searchRequestIdRef.current); return execution; },
+    getAreaBaseLocation: async () => base,
+    recordPlacesUsage: async () => {},
+    findSearchAreas: async (_, kind) => [{ ...base, id: kind, label: `${kind} match`, address: 'Franklin, TN', description: 'Area' }],
+    saveSearchLocation: async (next) => { events.push(['saved', next]); context.activeSearchLocation = next; },
+    setSearchLocationOverride: (value) => { context.searchLocationOverride = value; },
+    searchForSlot: (slot, scroll, refresh, center) => { context.beginSearch(); events.push(['main', slot, center]); },
+    runManualSearch: (slot, center) => { context.beginSearch(); events.push(['manual', slot, center, context.manualSearch]); },
+    setLoading: (value) => events.push(['loading', value]),
+    setSearchNotice: (value) => events.push(['notice', value]),
+    setCards: (value) => events.push(['cards', value]),
+    setAreaSelection: () => {}, setHasInitiatedSearch: () => {}, setResultFilter: () => {}, setSearchFailed: () => {},
+    ...overrides,
+  };
+  return { context, events, base, select: appHandler('selectSearchArea', context) };
+}
+
+test('one area selection automatically updates the main search, even before a previous search', async () => {
+  const { events, select } = areaSelectionHarness();
+  await select('downtown');
+  const main = events.find((event) => event[0] === 'main');
+  assert.equal(main[1], 'food');
+  assert.equal(main[2].areaFocus.kind, 'downtown');
+  assert.equal(main[2].areaFocus.radiusMeters, 2 * METERS_PER_MILE);
+  assert.equal(main[2].label, 'downtown match');
+  assert.equal(events.filter((event) => event[0] === 'main').length, 1);
+});
+
+test('area and radius changes preserve an active typed search; Whole area restores the city', async () => {
+  let lookups = 0;
+  const { context, events, select, base } = areaSelectionHarness({ manualSearch: 'pizza', manualSearchSubmitted: true, resultMode: 'activity' });
+  const find = context.findSearchAreas;
+  context.findSearchAreas = async (...args) => { lookups += 1; return find(...args); };
+  await select('freeway');
+  await select('freeway', METERS_PER_MILE);
+  await select(null);
+  assert.equal(lookups, 1);
+  const queries = events.filter((event) => event[0] === 'manual');
+  assert.equal(queries.length, 3);
+  assert.ok(queries.every((event) => event[1] === 'activity' && event[3] === 'pizza'));
+  assert.equal(queries[1][2].areaFocus.radiusMeters, METERS_PER_MILE);
+  assert.deepEqual(queries[2][2], base);
+});
+
+test('a later area choice cancels a slow lookup before it can replace the main search', async () => {
+  const first = deferred();
+  const { context, events, select, base } = areaSelectionHarness();
+  context.findSearchAreas = async (_, kind) => kind === 'downtown' ? first.promise : [{ ...base, id: 'freeway', label: 'Freeway' }];
+  const older = select('downtown');
+  await new Promise(setImmediate);
+  await select('freeway');
+  const latest = JSON.stringify(events);
+  first.resolve([{ ...base, id: 'old', label: 'Old downtown' }]);
+  await older;
+  assert.equal(JSON.stringify(events), latest);
+  assert.equal(events.find((event) => event[0] === 'main')[2].label, 'Freeway');
+});
+
+test('an unresolved area reports an empty main result instead of silently searching the whole city', async () => {
+  const { events, select } = areaSelectionHarness({ findSearchAreas: async () => [] });
+  await select('downtown');
+  assert.equal(events.some((event) => event[0] === 'main'), false);
+  assert.ok(events.some((event) => event[0] === 'notice' && event[1].includes('No nearby area found')));
+  assert.equal(events.at(-1)[1], false);
 });

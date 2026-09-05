@@ -41,7 +41,7 @@ import { foodTimePreferenceScore, hoursLineForDate, placeOpenDuringWindow, timeP
 import { BETA_FEATURES } from './src/config/features';
 import { SearchExecution, isSearchCancelled, mapConcurrent } from './src/domain/searchExecution';
 import { collectEventPages, deduplicateEvents } from './src/domain/eventDiscovery';
-import { areaSearchRadius, findSearchAreas, isInsideSearchArea, METERS_PER_MILE, type AreaFocus, type AreaKind, type AreaCenter, type AreaLocation } from './src/domain/searchArea';
+import { AREA_CHOICES, areaSearchRadius, findSearchAreas, isInsideSearchArea, locationForArea, METERS_PER_MILE, type AreaFocus, type AreaKind, type AreaLocation } from './src/domain/searchArea';
 import { SearchAreaPicker } from './src/ui/SearchAreaPicker';
 import {
   calculateItineraryTimeline,
@@ -2932,6 +2932,7 @@ function NomNomGoApp() {
   const [loading, setLoading] = useState(false);
   const [location, setLocation] = useState<LatLon | null>(null);
   const [searchLocation, setSearchLocation] = useState<LatLon | null>(null);
+  const [areaSelection, setAreaSelection] = useState<{ kind: AreaKind | 'whole'; requestId: number } | null>(null);
   const [lastSearchLocationCenter, setLastSearchLocationCenter] = useState<LatLon | null>(null);
   const [manualSearch, setManualSearch] = useState('');
   const [manualSearchSubmitted, setManualSearchSubmitted] = useState(false);
@@ -5579,34 +5580,68 @@ function NomNomGoApp() {
     return getLocation();
   };
 
-  const lookupSearchAreas = async (kind: AreaKind, input: string, base: AreaCenter, execution: SearchExecution) => {
-    execution.check();
-    await recordPlacesUsage('text');
-    return findSearchAreas(GOOGLE_API_KEY || '', kind, input, base, execution);
-  };
-
-  const selectSearchArea = async (next: AreaLocation) => {
-    cancelSearch();
-    setSearchLocationOverride(next.label || '');
-    setManualSearchSubmitted(false);
-    if (activePlanningSession) {
-      const stamped = { ...next, ts: Date.now() };
-      setSearchLocation(stamped);
-      setLastSearchLocationCenter(stamped);
-      await updateActiveSessionSearchLocation(stamped);
-    } else {
-      await saveSearchLocation(next);
+  const selectSearchArea = async (kind: AreaKind | null, radiusMeters?: number) => {
+    const execution = beginSearch();
+    setAreaSelection({ kind: kind || 'whole', requestId: execution.id });
+    setHasInitiatedSearch(true);
+    setLoading(true);
+    setResultFilter('all');
+    try {
+      const base = await getAreaBaseLocation();
+      execution.check();
+      let next: AreaLocation = base;
+      if (kind) {
+        const current = activeSearchLocation;
+        const sameLocation = !searchLocationOverride.trim() || searchLocationOverride.trim() === current?.label;
+        if (radiusMeters && sameLocation && current?.areaFocus?.kind === kind) {
+          next = { ...current, areaFocus: { ...current.areaFocus, radiusMeters } };
+        } else {
+          await recordPlacesUsage('text');
+          const matches = await findSearchAreas(GOOGLE_API_KEY || '', kind, '', base, execution);
+          execution.check();
+          const resolved = locationForArea(kind, base, matches, radiusMeters || current?.areaFocus?.radiusMeters);
+          if (!resolved) {
+            setCards([]);
+            const label = AREA_CHOICES.find((choice) => choice.kind === kind)?.label || 'that area';
+            setSearchNotice(`No nearby area found for ${label}. Choose another area or enter a neighborhood in Search area.`);
+            return;
+          }
+          next = resolved;
+        }
+      }
+      execution.check();
+      setSearchLocationOverride(next.label || '');
+      if (activePlanningSession) {
+        const stamped = { ...next, ts: Date.now() };
+        setSearchLocation(stamped);
+        setLastSearchLocationCenter(stamped);
+        await updateActiveSessionSearchLocation(stamped);
+      } else {
+        await saveSearchLocation(next);
+      }
+      execution.check();
+      if (manualSearchSubmitted && manualSearch.trim()) {
+        void runManualSearch(resultMode, next);
+      } else {
+        void searchForSlot(resultMode, true, false, next);
+      }
+    } catch (error) {
+      if (execution.id !== searchRequestIdRef.current || isSearchCancelled(error)) return;
+      setCards([]);
+      setSearchFailed(true);
+      setSearchNotice('Could not update the area. Check your city or ZIP, then choose the area again.');
+    } finally {
+      if (execution.id === searchRequestIdRef.current) {
+        setAreaSelection(null);
+        setLoading(false);
+      }
     }
-    refreshAfterSearchContextChange(next);
   };
 
   const renderSearchAreaPicker = () => (
     <SearchAreaPicker
-      key={`${searchLocationOverride}|${activePlanningSession?.id || 'solo'}|${activeSearchLocation?.areaFocus?.placeId || 'whole'}`}
       location={activeSearchLocation}
-      locationLabel={searchLocationLabel}
-      getBaseLocation={getAreaBaseLocation}
-      findAreas={lookupSearchAreas}
+      pendingKind={areaSelection?.requestId === searchRequestIdRef.current ? areaSelection.kind : undefined}
       onSelect={selectSearchArea}
     />
   );
@@ -7056,7 +7091,7 @@ function NomNomGoApp() {
     setSearchFailed(false);
   };
 
-  const runManualSearch = async (slot: PlanSlot) => {
+  const runManualSearch = async (slot: PlanSlot, centerOverride?: LatLon) => {
     if (isPlanLocked && !planningSuggestionMode) {
       showToast('Unlock the plan to edit it');
       return;
@@ -7077,7 +7112,7 @@ function NomNomGoApp() {
 
     setLoading(true);
     try {
-      const center = await getSearchLocation().catch((err) => {
+      const center = centerOverride || await getSearchLocation().catch((err) => {
         addLog(`Manual lookup location unavailable: ${compactError(err)}`);
         return null;
       });

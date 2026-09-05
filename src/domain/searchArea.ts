@@ -22,6 +22,18 @@ export const AREA_CHOICES: { kind: AreaKind; label: string; query: string }[] = 
   { kind: 'custom', label: 'Other area', query: '' },
 ];
 
+/** Use Google's highest-ranked local match without a second user selection. */
+export function locationForArea(kind: AreaKind, base: AreaCenter, matches: AreaMatch[], radiusMeters = 2 * METERS_PER_MILE): AreaLocation | undefined {
+  const match = matches[0];
+  if (!match) return undefined;
+  return {
+    latitude: match.latitude,
+    longitude: match.longitude,
+    label: match.label,
+    areaFocus: { kind, placeId: match.id, base, radiusMeters },
+  };
+}
+
 export function areaDistanceMeters(a: AreaCenter, b: AreaCenter) {
   const rad = Math.PI / 180;
   const lat = (b.latitude - a.latitude) * rad;
