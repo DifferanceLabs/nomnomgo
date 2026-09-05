@@ -4,6 +4,9 @@
   "devCommand": "npm run start:web",
   "cleanUrls": true,
   "framework": null,
+  "functions": {
+    "api/local-areas.js": { "maxDuration": 30 }
+  },
   "rewrites": [
     {
       "source": "/api/:path*",

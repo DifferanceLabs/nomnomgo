@@ -41,7 +41,7 @@ import { foodTimePreferenceScore, hoursLineForDate, placeOpenDuringWindow, timeP
 import { BETA_FEATURES } from './src/config/features';
 import { SearchExecution, isSearchCancelled, mapConcurrent } from './src/domain/searchExecution';
 import { collectEventPages, deduplicateEvents } from './src/domain/eventDiscovery';
-import { AREA_CHOICES, areaSearchRadius, findSearchAreas, isInsideSearchArea, locationForArea, METERS_PER_MILE, type AreaFocus, type AreaKind, type AreaLocation } from './src/domain/searchArea';
+import { areaSearchRadius, findSearchAreas, isInsideSearchArea, METERS_PER_MILE, type AreaFocus, type AreaKind, type AreaLocation } from './src/domain/searchArea';
 import { SearchAreaPicker } from './src/ui/SearchAreaPicker';
 import {
   calculateItineraryTimeline,
@@ -5580,35 +5580,23 @@ function NomNomGoApp() {
     return getLocation();
   };
 
-  const selectSearchArea = async (kind: AreaKind | null, radiusMeters?: number) => {
+  const loadSearchAreas = async (kind: AreaKind, execution: SearchExecution) => {
+    const base = await getAreaBaseLocation();
+    execution.check();
+    if (kind !== 'freeway') await recordPlacesUsage('text');
+    const matches = await findSearchAreas(GOOGLE_API_KEY || '', kind, '', base, execution);
+    execution.check();
+    return { base, matches };
+  };
+
+  const selectSearchArea = async (selection: AreaLocation | null) => {
     const execution = beginSearch();
-    setAreaSelection({ kind: kind || 'whole', requestId: execution.id });
+    setAreaSelection({ kind: selection?.areaFocus?.kind || 'whole', requestId: execution.id });
     setHasInitiatedSearch(true);
     setLoading(true);
     setResultFilter('all');
     try {
-      const base = await getAreaBaseLocation();
-      execution.check();
-      let next: AreaLocation = base;
-      if (kind) {
-        const current = activeSearchLocation;
-        const sameLocation = !searchLocationOverride.trim() || searchLocationOverride.trim() === current?.label;
-        if (radiusMeters && sameLocation && current?.areaFocus?.kind === kind) {
-          next = { ...current, areaFocus: { ...current.areaFocus, radiusMeters } };
-        } else {
-          await recordPlacesUsage('text');
-          const matches = await findSearchAreas(GOOGLE_API_KEY || '', kind, '', base, execution);
-          execution.check();
-          const resolved = locationForArea(kind, base, matches, radiusMeters || current?.areaFocus?.radiusMeters);
-          if (!resolved) {
-            setCards([]);
-            const label = AREA_CHOICES.find((choice) => choice.kind === kind)?.label || 'that area';
-            setSearchNotice(`No nearby area found for ${label}. Choose another area or enter a neighborhood in Search area.`);
-            return;
-          }
-          next = resolved;
-        }
-      }
+      const next = selection || await getAreaBaseLocation();
       execution.check();
       setSearchLocationOverride(next.label || '');
       if (activePlanningSession) {
@@ -5641,7 +5629,9 @@ function NomNomGoApp() {
   const renderSearchAreaPicker = () => (
     <SearchAreaPicker
       location={activeSearchLocation}
+      contextKey={`${activePlanningSession?.id || ''}:${searchLocationOverride}:${activeSearchLocation?.areaFocus?.base.latitude ?? activeSearchLocation?.latitude ?? location?.latitude ?? ''}:${activeSearchLocation?.areaFocus?.base.longitude ?? activeSearchLocation?.longitude ?? location?.longitude ?? ''}:${routeOriginOverride}`}
       pendingKind={areaSelection?.requestId === searchRequestIdRef.current ? areaSelection.kind : undefined}
+      onLoad={loadSearchAreas}
       onSelect={selectSearchArea}
     />
   );
