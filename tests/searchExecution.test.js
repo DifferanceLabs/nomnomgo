@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const ts = require('typescript');
 const { SearchExecution, mapConcurrent, isSearchCancelled } = require('../.route-import-test-build/src/domain/searchExecution');
+const { areaSearchRadius, isInsideSearchArea, METERS_PER_MILE } = require('../.route-import-test-build/src/domain/searchArea');
 
 function deferred() {
   let resolve;
@@ -176,4 +177,42 @@ test('parallel provider results do not overwrite each other in the search cache'
   ]);
   assert.equal(JSON.parse(stored).coffee.cards[0].id, 'one');
   assert.equal(JSON.parse(stored).dinner.cards[0].id, 'two');
+});
+
+test('the actual text search narrows requests and results, with separate caches for each area radius', async () => {
+  const requests = [];
+  const keys = [];
+  const center = { latitude: 35.9251, longitude: -86.8689, label: 'Downtown', areaFocus: { radiusMeters: METERS_PER_MILE, placeId: 'district' } };
+  const execution = {
+    check() {}, refresh: false,
+    async json(_, __, init) {
+      requests.push(JSON.parse(init.body));
+      return { places: [{ id: 'near', title: 'Coffee', lat: center.latitude, lng: center.longitude }, { id: 'far', title: 'Coffee', lat: 40, lng: -87 }] };
+    },
+  };
+  const search = appHandler('searchPlaceByText', {
+    GOOGLE_API_KEY: 'test-key', FIELD_MASK: 'places.id', DEFAULT_ACTIVITY_RADIUS_METERS: 10000,
+    areaSearchRadius, isInsideSearchArea, textSearchCacheKey: () => 'coffee',
+    STORAGE_TEXT_SEARCH_CACHE: 'cache', TEXT_SEARCH_CACHE_TTL_MS: 1,
+    readCachedSearch: async (_, key) => { keys.push(key); }, writeCachedSearch: async () => {},
+    addLog: () => {}, recordPlacesUsage: async () => {}, normalizePlaceName: (value) => value,
+    toCard: (card) => card, distanceMeters: () => 0, scoreCard: () => 0, memory: {}, selectedMoods: [],
+  });
+  assert.deepEqual(Array.from(await search('Coffee', 'food', center, undefined, execution), (card) => card.id), ['near']);
+  assert.equal(requests[0].locationBias.circle.radius, METERS_PER_MILE);
+  await search('Coffee', 'food', { ...center, areaFocus: { ...center.areaFocus, radiusMeters: 5 * METERS_PER_MILE } }, undefined, execution);
+  assert.notEqual(keys[0], keys[1]);
+  assert.equal(requests[1].locationBias.circle.radius, 5 * METERS_PER_MILE);
+  await search('Coffee', 'food', center, { radiusMeters: 1000 }, execution);
+  await search('Coffee', 'food', { ...center, areaFocus: { ...center.areaFocus, radiusMeters: 5 * METERS_PER_MILE } }, { radiusMeters: 1000 }, execution);
+  assert.notEqual(keys[2], keys[3]); // Same provider bias, different final result boundary.
+});
+
+test('sparse food results never expand outside an explicitly selected area', () => {
+  const context = { slot: 'food', center: { areaFocus: { radiusMeters: 1609 } }, routeBias: undefined,
+    wantsCloseBy: () => false, foodSelections: [], effectiveRadiusMeters: 1609, EXPANDED_FOOD_RADIUS_METERS: 50000, MIN_FOOD_RESULTS_BEFORE_EXPAND: 8 };
+  const shouldExpand = appHandler('shouldExpand', context);
+  assert.equal(shouldExpand(0), false);
+  context.center = {};
+  assert.equal(shouldExpand(0), true);
 });

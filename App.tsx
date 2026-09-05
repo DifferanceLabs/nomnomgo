@@ -41,6 +41,8 @@ import { foodTimePreferenceScore, hoursLineForDate, placeOpenDuringWindow, timeP
 import { BETA_FEATURES } from './src/config/features';
 import { SearchExecution, isSearchCancelled, mapConcurrent } from './src/domain/searchExecution';
 import { collectEventPages, deduplicateEvents } from './src/domain/eventDiscovery';
+import { areaSearchRadius, findSearchAreas, isInsideSearchArea, METERS_PER_MILE, type AreaFocus, type AreaKind, type AreaCenter, type AreaLocation } from './src/domain/searchArea';
+import { SearchAreaPicker } from './src/ui/SearchAreaPicker';
 import {
   calculateItineraryTimeline,
   defaultItineraryStopDurationMinutes,
@@ -119,6 +121,7 @@ type LatLon = {
   longitude: number;
   label?: string;
   ts?: number;
+  areaFocus?: AreaFocus;
 };
 
 type CityState = {
@@ -4466,7 +4469,7 @@ function NomNomGoApp() {
     }
   };
 
-  const getSearchLocation = async () => {
+  const getSearchLocation = async (): Promise<LatLon> => {
     if (activePlanningSession?.searchLocation) return activePlanningSession.searchLocation;
 
     const searchOverride = searchLocationOverride.trim();
@@ -4515,7 +4518,7 @@ function NomNomGoApp() {
           locationRestriction: {
             circle: {
               center: { latitude: center.latitude, longitude: center.longitude },
-              radius: radiusMeters,
+              radius: areaSearchRadius(center, radiusMeters),
             },
           },
         }),
@@ -4535,7 +4538,8 @@ function NomNomGoApp() {
     execution.check();
     if (!GOOGLE_API_KEY) throw new Error('Google Places API key is not loaded.');
 
-    const cacheKey = `${textSearchCacheKey(`${options?.rawFoodQuery ? 'raw' : 'default'}:${query}`, slot, center)}|radius:${options?.radiusMeters || 'default'}|limit:${options?.maxResults || 10}`;
+    const radiusMeters = areaSearchRadius(center, options?.radiusMeters || (slot === 'food' ? 50000 : DEFAULT_ACTIVITY_RADIUS_METERS));
+    const cacheKey = `${textSearchCacheKey(`${options?.rawFoodQuery ? 'raw' : 'default'}:${query}`, slot, center)}|radius:${radiusMeters}|area:${center?.areaFocus?.placeId || 'whole'}:${center?.areaFocus?.radiusMeters || ''}|limit:${options?.maxResults || 10}`;
     const cachedCards = execution.refresh ? undefined : await readCachedSearch(STORAGE_TEXT_SEARCH_CACHE, cacheKey, TEXT_SEARCH_CACHE_TTL_MS, 'Text search');
     execution.check();
     if (cachedCards) return cachedCards;
@@ -4556,7 +4560,7 @@ function NomNomGoApp() {
             ? {
                 circle: {
                   center: { latitude: center.latitude, longitude: center.longitude },
-                  radius: options?.radiusMeters || (slot === 'food' ? 50000 : DEFAULT_ACTIVITY_RADIUS_METERS),
+                  radius: radiusMeters,
                 },
               }
             : undefined,
@@ -4578,7 +4582,7 @@ function NomNomGoApp() {
       }
       return score + scoreCard(card, memory, selectedMoods) / 20;
     };
-    const cards: PlaceCard[] = places.map(toCard).sort((a: PlaceCard, b: PlaceCard) => scoreTextMatch(b) - scoreTextMatch(a));
+    const cards: PlaceCard[] = places.map(toCard).filter((card: PlaceCard) => isInsideSearchArea(center, card)).sort((a: PlaceCard, b: PlaceCard) => scoreTextMatch(b) - scoreTextMatch(a));
     addLog(`Google Places text returned ${cards.length}: ${cards.slice(0, 3).map((card) => card.title).join(' | ') || 'none'}`);
     await writeCachedSearch(STORAGE_TEXT_SEARCH_CACHE, cacheKey, cards, 40, 'Text search');
     return cards;
@@ -4826,6 +4830,7 @@ function NomNomGoApp() {
 
   const searchTicketmasterEvents = async (center: LatLon, radiusMiles = TICKETMASTER_EVENT_RADIUS_MILES, execution = new SearchExecution(0)): Promise<PlaceCard[]> => {
     execution.check();
+    radiusMiles = areaSearchRadius(center, radiusMiles * METERS_PER_MILE) / METERS_PER_MILE;
     if (!TICKETMASTER_API_KEY) {
       showToast('Ticketmaster key missing. Showing local search events if available.');
       addLog('Ticketmaster key missing; event discovery skipped');
@@ -4908,24 +4913,25 @@ function NomNomGoApp() {
     const wantsEvents = slot === 'activity' && activitySelections.includes('Events');
     const eventsFocused = slot === 'activity' && activitySelections.includes('Events');
     const chargerFocused = slot === 'activity' && wantsChargerActivity(activitySelections);
-    const effectiveRadiusMeters = walkingAdjustedRadius(radiusMeters, routeBias);
+    const effectiveRadiusMeters = areaSearchRadius(center, walkingAdjustedRadius(radiusMeters, routeBias));
     const preferenceKey = slot === 'food'
       ? `${wantsNoFastFood(foodSelections) ? '|no-fast-food' : ''}${wantsCloseBy(foodSelections) ? '|close-by' : ''}${wantsOpenNow(foodSelections) ? '|open-now' : ''}${cuisineSelections(foodSelections).join(',')}|dietary:${dietarySelections(selectedDietaryPreferences).join(',')}`
       : `${nonEventActivitySelections(activitySelections).join(',')}|${wantsEvents ? `events|${EVENT_PROVIDER_CACHE_VERSION}|${selectedDateWindowRef.current}|${customDateRangeRef.current ? `${customDateRangeRef.current.start}-${customDateRangeRef.current.end}` : 'preset'}${eventsFocused ? '|focused' : ''}` : ''}`;
     const activeTiming = activePlanTimingRef.current;
     const timingKey = `|timing:${activeTiming.dateRange.start}:${activeTiming.dateRange.end}:${activeTiming.timeWindow || 'now'}`;
-    const cacheKey = `${searchCacheKey(slot, center, types, effectiveRadiusMeters)}${preferenceKey}${timingKey}${routeBiasCacheKey(routeBias)}`;
+    const cacheKey = `${searchCacheKey(slot, center, types, effectiveRadiusMeters)}${preferenceKey}${timingKey}${routeBiasCacheKey(routeBias)}|area:${center.areaFocus?.placeId || 'whole'}:${center.areaFocus?.radiusMeters || ''}`;
     if (routeBias?.mode === 'walk') {
       addLog('Walking route bias active: favoring places near the stop and start');
     }
-    const resultRadiusMeters = slot === 'food'
+    const resultRadiusMeters = areaSearchRadius(center, slot === 'food'
       ? EXPANDED_FOOD_RADIUS_METERS
       : wantsEvents
         ? TICKETMASTER_EVENT_RADIUS_MILES * 1609.344
-        : Math.max(effectiveRadiusMeters, DEFAULT_ACTIVITY_RADIUS_METERS);
+        : Math.max(effectiveRadiusMeters, DEFAULT_ACTIVITY_RADIUS_METERS));
     const planStartMs = new Date(`${activeTiming.dateRange.start}T00:00:00`).getTime();
     const planEndMs = new Date(`${activeTiming.dateRange.end}T23:59:59`).getTime();
     const applyResultFilters = (nextCards: PlaceCard[]) => nextCards.map(cardForActivePlanTiming).filter((card) => {
+      if (!isInsideSearchArea(center, card)) return false;
       if (memory.neverRecommend.includes(card.id)) return false;
       if (!hasKnownHours(card) && !(chargerFocused && isEvCharger(card))) return false;
       const cardDistance = distanceMeters(center, card);
@@ -4952,6 +4958,7 @@ function NomNomGoApp() {
     };
     const shouldExpand = (count: number) =>
       slot === 'food' &&
+      !center.areaFocus &&
       routeBias?.mode !== 'walk' &&
       !wantsCloseBy(foodSelections) &&
       effectiveRadiusMeters < EXPANDED_FOOD_RADIUS_METERS &&
@@ -5185,7 +5192,7 @@ function NomNomGoApp() {
       if (slot === 'activity') {
         const types = typesForSelection(activitySelections, ACTIVITY_TYPE_MAP, DEFAULT_ACTIVITY_TYPES);
         addLog(`Selected activity types: ${types.join(', ')}`);
-        const anchorIndex = centerOverride
+        const anchorIndex = centerOverride || center.areaFocus
           ? -1
           : plan.stops.findIndex((stop) => stop.slot === 'food' && typeof stop.item !== 'string' && Boolean(stop.item.lat && stop.item.lng));
         const anchor = anchorIndex >= 0 && typeof plan.stops[anchorIndex].item !== 'string'
@@ -5424,7 +5431,7 @@ function NomNomGoApp() {
       slot,
       true,
       false,
-      anchorIndex >= 0 ? stopSearchCenter(plan.stops[anchorIndex]) : undefined,
+      activeSearchLocation?.areaFocus ? activeSearchLocation : anchorIndex >= 0 ? stopSearchCenter(plan.stops[anchorIndex]) : undefined,
       preferenceOverride,
       searchRouteBiasForAnchorIndex(anchorIndex),
     );
@@ -5556,6 +5563,53 @@ function NomNomGoApp() {
     refreshAfterSearchContextChange(location || undefined);
     addLog('Search location override cleared');
   };
+
+  const getAreaBaseLocation = async () => {
+    if (activePlanningSession) return activePlanningSession.searchLocation.areaFocus?.base || activePlanningSession.searchLocation;
+    const input = searchLocationOverride.trim();
+    if (searchLocation && (!input || searchLocation.label?.trim().toLowerCase() === input.toLowerCase())) {
+      return searchLocation.areaFocus?.base || searchLocation;
+    }
+    const query = input || routeOriginOverride.trim();
+    if (query) {
+      const resolved = await resolveLocationInput(query);
+      if (!resolved) throw new Error('Search location not found.');
+      return resolved;
+    }
+    return getLocation();
+  };
+
+  const lookupSearchAreas = async (kind: AreaKind, input: string, base: AreaCenter, execution: SearchExecution) => {
+    execution.check();
+    await recordPlacesUsage('text');
+    return findSearchAreas(GOOGLE_API_KEY || '', kind, input, base, execution);
+  };
+
+  const selectSearchArea = async (next: AreaLocation) => {
+    cancelSearch();
+    setSearchLocationOverride(next.label || '');
+    setManualSearchSubmitted(false);
+    if (activePlanningSession) {
+      const stamped = { ...next, ts: Date.now() };
+      setSearchLocation(stamped);
+      setLastSearchLocationCenter(stamped);
+      await updateActiveSessionSearchLocation(stamped);
+    } else {
+      await saveSearchLocation(next);
+    }
+    refreshAfterSearchContextChange(next);
+  };
+
+  const renderSearchAreaPicker = () => (
+    <SearchAreaPicker
+      key={`${searchLocationOverride}|${activePlanningSession?.id || 'solo'}|${activeSearchLocation?.areaFocus?.placeId || 'whole'}`}
+      location={activeSearchLocation}
+      locationLabel={searchLocationLabel}
+      getBaseLocation={getAreaBaseLocation}
+      findAreas={lookupSearchAreas}
+      onSelect={selectSearchArea}
+    />
+  );
 
   const patchPlanningSession = async (id: string, updater: (session: PlanningSession) => PlanningSession) => {
     const existing = planningSessions.find((session) => session.id === id);
@@ -8348,6 +8402,7 @@ function NomNomGoApp() {
                   />
                   <Button label="Use" onPress={searchFromSearchLocationOverride} compact />
                 </View>
+                {renderSearchAreaPicker()}
               </View>
             </View>
           )}
@@ -9677,6 +9732,19 @@ function NomNomGoApp() {
 
       {showDiscoveryTools ? (
       <>
+      {!nowDiscovering ? (
+        <View style={[styles.bridgeBox, isDarkMode && styles.darkPanel]}>
+          <Text style={[styles.bridgeTitle, isDarkMode && styles.darkText]}>Search area</Text>
+          <View style={styles.inputRow}>
+            <TextInput style={[styles.input, styles.darkPanelInput, Platform.OS === 'web' && styles.webInput]}
+              value={searchLocationOverride} onChangeText={setSearchLocationOverride}
+              accessibilityLabel="Search area" placeholder="ZIP, neighborhood, or city" placeholderTextColor={colors.textSecondary}
+              returnKeyType="search" onSubmitEditing={searchFromSearchLocationOverride} />
+            <Button label="Use" onPress={searchFromSearchLocationOverride} compact />
+          </View>
+          {renderSearchAreaPicker()}
+        </View>
+      ) : null}
       <View style={[styles.bridgeBox, isLightMode && styles.lightPanel, Platform.OS === 'web' && styles.webBridgeBox, isDarkMode && styles.darkPanel]}>
         <Text style={[styles.bridgeTitle, styles.bridgeTitleDarkPanel, isLightMode && styles.lightSectionTitle, isDarkMode && styles.darkText]}>Find a specific place</Text>
         <View style={styles.inputRow}>
@@ -9720,7 +9788,7 @@ function NomNomGoApp() {
         <Section title={titleForResults}>
           {resultMode === 'activity' && selectedActivities.includes('Events') && !manualSearchSubmitted ? (
             <Text style={[styles.preferenceSummary, isDarkMode && styles.darkMutedText]}>
-              Upcoming events within {TICKETMASTER_EVENT_RADIUS_MILES} miles of {lastSearchLocationCenter?.label || searchLocationLabel} for {activePlanDateLabel}. Ticketmaster does not list every local show. Local search suggestions have unverified dates.
+              Upcoming events within {Math.round(areaSearchRadius(lastSearchLocationCenter, TICKETMASTER_EVENT_RADIUS_MILES * METERS_PER_MILE) / METERS_PER_MILE)} miles of {lastSearchLocationCenter?.label || searchLocationLabel} for {activePlanDateLabel}. Ticketmaster does not list every local show. Local search suggestions have unverified dates.
             </Text>
           ) : null}
           <View style={styles.filterTabs}>

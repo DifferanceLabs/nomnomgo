@@ -16,7 +16,7 @@
     "export:ios": "expo export --platform ios --output-dir .expo-export-check/ios",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test:route-import": "tsc --module commonjs --target ES2020 --skipLibCheck --esModuleInterop --outDir .route-import-test-build routeImport.ts routeHandoff.ts planningHours.ts alphaAccess.ts src/domain/itinerary.ts src/domain/searchExecution.ts src/domain/eventDiscovery.ts && node --test tests/routeImport.test.js tests/routeHandoff.test.js tests/planningHours.test.js tests/alphaAccess.test.js tests/itinerary.test.js tests/searchExecution.test.js tests/eventDiscovery.test.js",
+    "test:route-import": "tsc --module commonjs --target ES2020 --skipLibCheck --esModuleInterop --outDir .route-import-test-build routeImport.ts routeHandoff.ts planningHours.ts alphaAccess.ts src/domain/itinerary.ts src/domain/searchExecution.ts src/domain/eventDiscovery.ts src/domain/searchArea.ts && node --test tests/routeImport.test.js tests/routeHandoff.test.js tests/planningHours.test.js tests/alphaAccess.test.js tests/itinerary.test.js tests/searchExecution.test.js tests/eventDiscovery.test.js tests/searchArea.test.js",
     "test": "npm run test:route-import",
     "verify": "npm run lint && npm run typecheck && npm test"
   },

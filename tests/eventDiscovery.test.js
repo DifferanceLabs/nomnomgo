@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const ts = require('typescript');
 const { deduplicateEvents, collectEventPages } = require('../.route-import-test-build/src/domain/eventDiscovery');
+const { isInsideSearchArea } = require('../.route-import-test-build/src/domain/searchArea');
 const fixture = require('./fixtures/ticketmaster-asheville-2026-09-05.json');
 
 test('Asheville results retain volleyball and baseball and show Acid Bath once', () => {
@@ -79,6 +80,7 @@ test('all three Asheville events survive the actual September 5 Events filters',
     planStartMs: Date.parse('2026-09-05T04:00:00Z'), planEndMs: Date.parse('2026-09-06T03:59:59Z'),
     activeTiming: { timePreference: 'Dinner' }, cardForActivePlanTiming: (card) => card,
     distanceMeters: () => 0, mapsSearchUrl: (query) => query,
+    isInsideSearchArea,
   };
   context.BLOCKED_ACTIVITY_TERMS = appFunction('BLOCKED_ACTIVITY_TERMS', context);
   for (const name of ['formatEventDateText', 'ticketmasterEventToCard', 'hasKnownHours', 'isBadActivityResult', 'isRelevantActivityResult']) {
