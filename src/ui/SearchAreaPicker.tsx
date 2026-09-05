@@ -118,6 +118,7 @@ export function SearchAreaPicker({ location, contextKey, pendingKind, onLoad, on
       <Text style={styles.hint}>
         {pendingKind ? 'Updating main results…' : focus ? `Showing results ${focus.corridor ? 'along' : 'near'} ${location.label}.` : 'Choose a filter, then a location to update the main results.'}
       </Text>
+      {focus?.kind === 'supercharger' ? <Text style={styles.hint}>Adding a place also adds this Supercharger to your plan.</Text> : null}
       {focus ? (
         <View style={styles.chips}>
           <Text style={styles.radiusLabel}>{focus.corridor ? 'From freeway' : 'Within'}</Text>

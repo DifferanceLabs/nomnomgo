@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { areaMatches, areaSearchBody, areaSearchRadius, findSearchAreas, isInsideSearchArea, locationForArea, localAreaMatches, localAreaQuery, rankNeighborhoods, METERS_PER_MILE } = require('../.route-import-test-build/src/domain/searchArea');
+const { areaMatches, areaSearchBody, areaSearchRadius, findSearchAreas, isInsideSearchArea, locationForArea, localAreaMatches, localAreaQuery, rankNeighborhoods, superchargerForSearchArea, METERS_PER_MILE } = require('../.route-import-test-build/src/domain/searchArea');
 const { SearchExecution, isSearchCancelled } = require('../.route-import-test-build/src/domain/searchExecution');
 const base = { latitude: 35.9251, longitude: -86.8689, label: 'Franklin, TN' };
 const focus = { ...base, areaFocus: { kind: 'downtown', placeId: 'downtown', base, radiusMeters: 2 * METERS_PER_MILE } };
@@ -104,6 +104,24 @@ test('Tesla choices exclude Destination Chargers and other networks and keep sta
   assert.deepEqual(matches.map((match) => match.id), ['one', 'two']);
   assert.equal(matches[1].address, 'Moores Lane');
   assert.equal(locationForArea('supercharger', base, matches[1]).areaFocus.placeId, 'two');
+});
+
+test('a selected Supercharger becomes the exact station with its address, coordinates and map link', () => {
+  const station = { ...base, id: 'charger-one', label: 'Tesla Supercharger', address: '7116 Moores Ln', description: 'Charger' };
+  const location = locationForArea('supercharger', base, station);
+  const card = superchargerForSearchArea(JSON.parse(JSON.stringify(location)));
+  assert.equal(card.id, station.id);
+  assert.equal(card.title, station.label);
+  assert.equal(card.address, station.address);
+  assert.equal(card.lat, station.latitude);
+  assert.equal(card.lng, station.longitude);
+  assert.ok(card.types.includes('electric_vehicle_charging_station'));
+  assert.equal(new URL(card.mapsUri).searchParams.get('query_place_id'), station.id);
+  const legacy = { ...location, areaFocus: { ...location.areaFocus, placeName: undefined, placeAddress: undefined } };
+  assert.deepEqual(superchargerForSearchArea(legacy), card);
+  assert.equal(superchargerForSearchArea(base), undefined);
+  assert.equal(superchargerForSearchArea(focus), undefined);
+  assert.equal(superchargerForSearchArea({ ...location, latitude: NaN }), undefined);
 });
 
 test('incomplete geographic data is an error, while an empty map result remains empty', async (t) => {

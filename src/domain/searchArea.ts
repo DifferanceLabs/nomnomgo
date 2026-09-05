@@ -9,6 +9,8 @@ export type AreaFocus = {
   radiusMeters: number;
   base: AreaCenter;
   corridor?: AreaCorridor;
+  placeName?: string;
+  placeAddress?: string;
 };
 export type AreaLocation = AreaCenter & { areaFocus?: AreaFocus };
 export type AreaMatch = AreaCenter & { id: string; label: string; address: string; description: string; corridor?: AreaCorridor; source?: 'osm' | 'google' };
@@ -31,7 +33,30 @@ export function locationForArea(kind: AreaKind, base: AreaCenter, match: AreaMat
     latitude: match.latitude,
     longitude: match.longitude,
     label: kind === 'supercharger' && match.address ? `${match.label} · ${match.address}` : match.label,
-    areaFocus: { kind, placeId: match.id, base, radiusMeters, ...(match.corridor ? { corridor: match.corridor } : {}) },
+    areaFocus: {
+      kind, placeId: match.id, base, radiusMeters,
+      ...(match.corridor ? { corridor: match.corridor } : {}),
+      ...(kind === 'supercharger' ? { placeName: match.label, placeAddress: match.address } : {}),
+    },
+  };
+}
+
+/** Reuse the selected station without another provider request, including older saved searches. */
+export function superchargerForSearchArea(center: AreaLocation | null | undefined) {
+  const focus = center?.areaFocus;
+  if (!center || focus?.kind !== 'supercharger' || !focus.placeId
+    || !Number.isFinite(center.latitude) || !Number.isFinite(center.longitude)
+    || Math.abs(center.latitude) > 90 || Math.abs(center.longitude) > 180) return undefined;
+  const [legacyName, ...legacyAddress] = (center.label || '').split(' · ');
+  return {
+    id: focus.placeId,
+    title: focus.placeName || legacyName || 'Tesla Supercharger',
+    subtitle: 'Tesla Supercharger',
+    address: focus.placeAddress || legacyAddress.join(' · ') || undefined,
+    lat: center.latitude,
+    lng: center.longitude,
+    types: ['electric_vehicle_charging_station'],
+    mapsUri: `https://www.google.com/maps/search/?api=1&query=${center.latitude},${center.longitude}&query_place_id=${encodeURIComponent(focus.placeId)}`,
   };
 }
 

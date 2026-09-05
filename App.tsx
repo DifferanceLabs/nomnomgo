@@ -41,7 +41,7 @@ import { foodTimePreferenceScore, hoursLineForDate, placeOpenDuringWindow, timeP
 import { BETA_FEATURES } from './src/config/features';
 import { SearchExecution, isSearchCancelled, mapConcurrent } from './src/domain/searchExecution';
 import { collectEventPages, deduplicateEvents } from './src/domain/eventDiscovery';
-import { areaSearchRadius, findSearchAreas, isInsideSearchArea, METERS_PER_MILE, type AreaFocus, type AreaKind, type AreaLocation } from './src/domain/searchArea';
+import { areaSearchRadius, findSearchAreas, isInsideSearchArea, superchargerForSearchArea, METERS_PER_MILE, type AreaFocus, type AreaKind, type AreaLocation } from './src/domain/searchArea';
 import { SearchAreaPicker } from './src/ui/SearchAreaPicker';
 import {
   calculateItineraryTimeline,
@@ -1080,6 +1080,25 @@ function cardToId(card: PlaceCard | string) {
 
 function makeStopKey(slot: PlanSlot, item: PlaceCard | string) {
   return `${slot}-${cardToId(item)}-${Date.now()}`;
+}
+
+function searchSuperchargerStop(center: AreaLocation | null | undefined): ItineraryStop | undefined {
+  const charger = superchargerForSearchArea(center);
+  if (!charger) return undefined;
+  const stop: ItineraryStop = {
+    key: makeStopKey('activity', charger), slot: 'activity', item: charger, visualType: 'activity',
+    featureOptions: [], selectedFeatures: [], featuresExpanded: false,
+  };
+  stop.durationMinutes = defaultStopDurationMinutes(stop);
+  return stop;
+}
+
+/** Commit the selected place and its charging stop together, retaining existing stop order. */
+function appendPlanSelection(stops: ItineraryStop[], selected: ItineraryStop, companion?: ItineraryStop) {
+  if (stops.some((stop) => stop.slot === selected.slot && cardToId(stop.item) === cardToId(selected.item))) return stops;
+  const needsCompanion = companion && cardToId(companion.item) !== cardToId(selected.item)
+    && !stops.some((stop) => cardToId(stop.item) === cardToId(companion.item));
+  return [...stops, ...(needsCompanion ? [companion] : []), selected];
 }
 
 function planItems(plan: ConfirmedPlan, slot: PlanSlot) {
@@ -6120,6 +6139,7 @@ function NomNomGoApp() {
     slot: PlanSlot,
     item: PlaceCard | string,
     requestedVisualType?: ItineraryStopKind,
+    searchCenter?: AreaLocation | null,
   ) => {
     if (isPlanLocked) {
       showToast('Unlock the plan to edit it');
@@ -6146,8 +6166,11 @@ function NomNomGoApp() {
       featuresExpanded: false,
     };
     nextStop.durationMinutes = defaultStopDurationMinutes(nextStop);
+    const companion = searchSuperchargerStop(searchCenter);
     setPlan((prev) => {
-      const nextStops = [...prev.stops, nextStop];
+      if (prev.status === 'locked') return prev;
+      const nextStops = appendPlanSelection(prev.stops, nextStop, companion);
+      if (nextStops === prev.stops) return prev;
       return {
         ...prev,
         ...currentPlanContext(nextStops),
@@ -6243,7 +6266,7 @@ function NomNomGoApp() {
     const resultVisualType = searchVisualType === 'dessert' && resultMode === 'food' && !selectedFoods.includes('Dessert')
       ? 'food'
       : searchVisualType;
-    const insertedStop = insertStopIntoPlan(resultMode, card, resultVisualType);
+    const insertedStop = insertStopIntoPlan(resultMode, card, resultVisualType, lastSearchLocationCenter);
     addLog(alreadySelected ? `Already in plan: ${card.title}` : `Added ${resultMode} choice: ${card.title}`);
     if (insertedStop) scrollToPlanStop(insertedStop.key);
     setManualSearch('');
@@ -6462,6 +6485,7 @@ function NomNomGoApp() {
         selectedFeatures: [],
         featuresExpanded: false,
       };
+      const nextStops = appendPlanSelection([], nextStop, searchSuperchargerStop(selectedSearchLocation));
       const nextPlanType = inferPlanType({
         planDateStart: nextDateRange.start,
         planDateEnd: nextDateRange.end,
@@ -6483,7 +6507,7 @@ function NomNomGoApp() {
         routeOriginLabel: startingLocationLabel,
         routeStartLocation,
         participants: nowSelectedPeople,
-        stops: [cloneStopForSavedPlan(nextStop)],
+        stops: nextStops.map((stop) => cloneStopForSavedPlan(stop)),
       });
 
       selectedDateWindowRef.current = effectiveDateWindow;
@@ -6499,7 +6523,7 @@ function NomNomGoApp() {
         owner: betaRecord.owner,
         intent: 'both',
         status: 'draft',
-        stops: [nextStop],
+        stops: nextStops,
         dateWindow: effectiveDateWindow,
         customDateRange: null,
         planDateStart: nextDateRange.start,
@@ -7072,7 +7096,7 @@ function NomNomGoApp() {
       await selectNowDestination(slot, value);
     } else {
       const visualType = searchVisualType === 'dessert' && slot === 'food' ? 'dessert' : slot;
-      const inserted = insertStopIntoPlan(slot, value, visualType);
+      const inserted = insertStopIntoPlan(slot, value, visualType, lastSearchLocationCenter);
       if (inserted) scrollToPlanStop(inserted.key);
     }
     setManualSearch('');

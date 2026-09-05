@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const ts = require('typescript');
 const { SearchExecution, mapConcurrent, isSearchCancelled } = require('../.route-import-test-build/src/domain/searchExecution');
-const { areaSearchRadius, isInsideSearchArea, locationForArea, METERS_PER_MILE } = require('../.route-import-test-build/src/domain/searchArea');
+const { areaSearchRadius, isInsideSearchArea, locationForArea, superchargerForSearchArea, METERS_PER_MILE } = require('../.route-import-test-build/src/domain/searchArea');
 
 function deferred() {
   let resolve;
@@ -290,4 +290,102 @@ test('empty or failed discovery leaves existing main results intact', async () =
   context.findSearchAreas = async () => { throw new Error('Unavailable'); };
   await assert.rejects(load('freeway', new SearchExecution(2)), /Unavailable/);
   assert.deepEqual(events, []);
+});
+
+function chargerPlanHarness() {
+  const queue = [];
+  const notices = [];
+  const center = locationForArea('supercharger', { latitude: 35.93, longitude: -86.87, label: 'Franklin' }, {
+    id: 'charger-one', label: 'Tesla Supercharger', address: '7116 Moores Ln', latitude: 35.967471, longitude: -86.811444,
+  });
+  const context = {
+    superchargerForSearchArea,
+    cardToId: (item) => typeof item === 'string' ? item : item.id,
+    cardToName: (item) => typeof item === 'string' ? item : item.title,
+    makeStopKey: (slot, item) => `${slot}-${typeof item === 'string' ? item : item.id}`,
+    defaultStopDurationMinutes: () => 75,
+    inferItineraryStopKind: ({ slot }) => slot,
+    isPlanLocked: false, plan: { stops: [], status: 'draft' },
+    setPlan: (update) => queue.push(update),
+    currentPlanContext: () => ({}), setRecentlyAddedStopKey: () => {}, setTimeout: () => {},
+    refreshStopFeatures: async () => {}, showToast: (message) => notices.push(message),
+    planningSuggestionMode: false, nowDiscovering: false, resultMode: 'food', searchVisualType: 'food', selectedFoods: [],
+    lastSearchLocationCenter: center, memory: { selectedHistory: [] },
+    addLog: () => {}, unique: (items) => [...new Set(items)], saveMemory: async () => {},
+    scrollToPlanStop: () => {}, setManualSearch: () => {}, setManualSearchSubmitted: () => {},
+  };
+  context.searchSuperchargerStop = appHandler('searchSuperchargerStop', context);
+  context.appendPlanSelection = appHandler('appendPlanSelection', context);
+  context.insertStopIntoPlan = appHandler('insertStopIntoPlan', context);
+  const flush = () => { while (queue.length) context.plan = queue.shift()(context.plan); };
+  return { context, center, notices, flush, select: appHandler('selectCard', context) };
+}
+
+test('adding a search result inserts the selected Supercharger first and keeps one charger across rapid additions', async () => {
+  const { context, flush, select, center } = chargerPlanHarness();
+  const one = { id: 'pizza', title: 'Pizza', subtitle: 'Food' };
+  const two = { id: 'coffee', title: 'Coffee', subtitle: 'Food' };
+  await select(one);
+  await select(two);
+  await select(one); // All three updates were queued against the same render.
+  flush();
+  assert.deepEqual(Array.from(context.plan.stops, (stop) => stop.item.id), ['charger-one', 'pizza', 'coffee']);
+  assert.equal(context.plan.stops[0].slot, 'activity');
+  assert.equal(context.plan.stops[0].item.lat, center.latitude);
+  assert.equal(context.plan.stops[0].item.address, '7116 Moores Ln');
+});
+
+test('existing charging stops keep their order; different Supercharger sites remain distinct', () => {
+  const { context, center, flush } = chargerPlanHarness();
+  const existing = context.searchSuperchargerStop(center);
+  const priorFood = { key: 'existing-food', slot: 'food', item: { id: 'existing-food', title: 'Existing place' } };
+  context.plan.stops = [priorFood, existing];
+  context.insertStopIntoPlan('food', { id: 'one', title: 'One' }, 'food', center);
+  const other = { ...center, areaFocus: { ...center.areaFocus, placeId: 'charger-two', placeAddress: 'Other station' } };
+  context.insertStopIntoPlan('food', { id: 'two', title: 'Two' }, 'food', other);
+  flush();
+  assert.deepEqual(Array.from(context.plan.stops, (stop) => stop.item.id), ['existing-food', 'charger-one', 'one', 'charger-two', 'two']);
+});
+
+test('selecting the charger itself adds it once; ordinary additions and locked plans do not gain a charger', async () => {
+  const { context, center, flush, select } = chargerPlanHarness();
+  context.resultMode = 'activity';
+  await select(superchargerForSearchArea(center));
+  flush();
+  assert.equal(context.plan.stops.length, 1);
+  context.plan.stops = [];
+  context.insertStopIntoPlan('activity', 'An unrelated idea');
+  flush();
+  assert.equal(context.plan.stops.length, 1);
+  assert.equal(context.plan.stops[0].item, 'An unrelated idea');
+  context.isPlanLocked = true;
+  await select({ id: 'blocked', title: 'Blocked' });
+  flush();
+  assert.equal(context.plan.stops.length, 1);
+  context.isPlanLocked = false;
+  context.insertStopIntoPlan('food', { id: 'late', title: 'Late' }, 'food', center);
+  context.plan.status = 'locked'; // A queued insertion cannot edit a newly locked plan.
+  flush();
+  assert.equal(context.plan.stops.length, 1);
+});
+
+test('Use in Now mode saves the charger and chosen destination together in the new plan', async () => {
+  const { context } = chargerPlanHarness();
+  let saved;
+  let active;
+  Object.assign(context, {
+    nowPlanCreating: false, setNowPlanCreating: () => {},
+    dateRangeKeysForWindow: () => ({ start: '2026-09-05', end: '2026-09-05' }),
+    contextualNowPlanTitle: () => 'Lunch', inferPlanType: () => 'local_plan',
+    startingLocationLabel: 'Franklin', routeStartLocation: undefined, nowSelectedPeople: [],
+    cloneStopForSavedPlan: (stop) => ({ ...stop }),
+    createBetaPlanRecord: async (record) => { saved = record; return { id: 'new-plan', owner: 'Tester', rsvps: {} }; },
+    selectedDateWindowRef: { current: '' }, customDateRangeRef: { current: null }, EMPTY_PLAN: { stops: [] },
+    setPlan: (plan) => { active = plan; }, scrollToPlan: () => {},
+    compactError: (error) => error.message, showAppNotice: (_, message) => assert.fail(message),
+  });
+  for (const name of ['setSelectedDateWindow', 'setCustomDateRange', 'setSelectedTime', 'setResultMode', 'setPlanTimes', 'setArrivalTimes', 'setTimeEditorKey', 'setNowMode', 'setPlanSetupOpen', 'setHomeOpen', 'setSavedPlansLandingOpen', 'setSavedPlansOpen', 'setPlanSettingsOpen', 'setPreferencesOpen', 'setAdvancedPreferencesOpen', 'setCards', 'setHasInitiatedSearch']) context[name] = () => {};
+  await appHandler('createNowPlanFromDestination', context)({ slot: 'food', item: { id: 'lunch', title: 'Lunch' }, category: 'Lunch' });
+  assert.deepEqual(Array.from(saved.stops, (stop) => stop.item.id), ['charger-one', 'lunch']);
+  assert.deepEqual(Array.from(active.stops, (stop) => stop.item.id), ['charger-one', 'lunch']);
 });
