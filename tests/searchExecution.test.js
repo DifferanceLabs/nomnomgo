@@ -5,6 +5,7 @@ const vm = require('node:vm');
 const ts = require('typescript');
 const { SearchExecution, mapConcurrent, isSearchCancelled } = require('../.route-import-test-build/src/domain/searchExecution');
 const { areaSearchRadius, isInsideSearchArea, locationForArea, superchargerForSearchArea, METERS_PER_MILE } = require('../.route-import-test-build/src/domain/searchArea');
+const { currentHoursDisplay, readPlaceHours, PLACE_HOURS_FIELDS } = require('../.route-import-test-build/placeHours');
 
 function deferred() {
   let resolve;
@@ -104,6 +105,40 @@ function appHandler(name, context) {
   const js = ts.transpileModule(`(${initializer.getText(source)})`, { compilerOptions: { target: ts.ScriptTarget.ES2020 } }).outputText;
   return vm.runInNewContext(js, context);
 }
+
+test('place details reuse fresh special hours and refresh stale or regular-only data', async () => {
+  let details;
+  let calls = 0;
+  const context = {
+    placeDetailRequestRef: { current: 0 }, GOOGLE_API_KEY: 'test-key',
+    currentHoursDisplay, readPlaceHours, PLACE_HOURS_FIELDS,
+    cardForActivePlanTiming: (card) => ({ ...card, ...currentHoursDisplay(card) }),
+    setPlaceDetailCard: (update) => { details = typeof update === 'function' ? update(details) : update; },
+    canResolvePlaceWebsite: () => true, placeDetailsLookupId: (card) => card.id,
+    recordPlacesUsage: async () => {}, withTimeout: (promise) => promise,
+    setCards: () => {}, addLog: () => {},
+    fetch: async (_, init) => {
+      calls += 1;
+      assert.ok(init.headers['X-Goog-FieldMask'].includes('currentOpeningHours'));
+      return { ok: true, json: async () => ({ currentOpeningHours: { openNow: false } }) };
+    },
+  };
+  const open = appHandler('openPlaceDetails', context);
+  const fresh = { id: 'coffee', ...readPlaceHours({ currentOpeningHours: { openNow: false } }) };
+  await open(fresh);
+  assert.equal(calls, 0);
+  assert.equal(details.isOpen, false);
+  await open({ ...fresh, hoursFetchedAt: Date.now() - 6 * 60_000 });
+  assert.equal(calls, 1);
+  assert.equal(details.isOpen, false);
+  await open(details);
+  assert.equal(calls, 1);
+  await open({ id: 'regular-only', ...readPlaceHours({ regularOpeningHours: { openNow: true } }) });
+  assert.equal(calls, 2);
+  assert.equal(details.isOpen, false);
+  await open({ ...fresh, openNow: true, hoursNextChange: new Date(Date.now() - 1000).toISOString() });
+  assert.equal(calls, 3);
+});
 
 test('a newer manual search owns the results and loading state after an older lookup completes', async () => {
   const first = deferred();

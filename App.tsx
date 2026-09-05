@@ -38,6 +38,7 @@ import {
   type RouteHandoffStop,
 } from './routeHandoff';
 import { foodTimePreferenceScore, hoursLineForDate, placeOpenDuringWindow, timePreferenceForWindow } from './planningHours';
+import { currentHoursDisplay, PLACE_HOURS_FIELDS, readPlaceHours, weeklyHoursForDate, type PlaceHours } from './placeHours';
 import { BETA_FEATURES } from './src/config/features';
 import { SearchExecution, isSearchCancelled, mapConcurrent } from './src/domain/searchExecution';
 import { collectEventPages, deduplicateEvents } from './src/domain/eventDiscovery';
@@ -129,7 +130,7 @@ type CityState = {
   state?: string;
 };
 
-type PlaceCard = {
+type PlaceCard = PlaceHours & {
   id: string;
   title: string;
   subtitle: string;
@@ -372,8 +373,8 @@ const TICKETMASTER_API_KEY = process.env.EXPO_PUBLIC_TICKETMASTER_API_KEY;
 const STORAGE_MEMORY = 'thingsNearbyGooglePlacesMemoryV1';
 const STORAGE_LOCATION = 'thingsNearbyGooglePlacesLocationV1';
 const STORAGE_SEARCH_LOCATION = 'thingsNearbyGooglePlacesSearchLocationV1';
-const STORAGE_SEARCH_CACHE = 'thingsNearbyGooglePlacesSearchCacheV4';
-const STORAGE_TEXT_SEARCH_CACHE = 'thingsNearbyGooglePlacesTextSearchCacheV2';
+const STORAGE_SEARCH_CACHE = 'thingsNearbyGooglePlacesSearchCacheV5';
+const STORAGE_TEXT_SEARCH_CACHE = 'thingsNearbyGooglePlacesTextSearchCacheV3';
 const STORAGE_ZIP_CACHE = 'thingsNearbyZipCacheV1';
 const STORAGE_WEBSITE_FEATURE_CACHE = 'thingsNearbyWebsiteFeatureCacheV1';
 const STORAGE_TESTER_USER = 'nomNomGoSelectedTesterV1';
@@ -673,7 +674,7 @@ const FIELD_MASK = [
   'places.types',
   'places.primaryType',
   'places.primaryTypeDisplayName',
-  'places.regularOpeningHours',
+  ...PLACE_HOURS_FIELDS.map((field) => `places.${field}`),
   'places.googleMapsUri',
   'places.websiteUri',
   'places.priceLevel',
@@ -935,11 +936,7 @@ function priceText(priceLevel?: string) {
 function toCard(place: any): PlaceCard {
   const title = place?.displayName?.text || 'Unnamed place';
   const primaryPhoto = Array.isArray(place?.photos) ? place.photos[0] : undefined;
-  const openNow = place?.regularOpeningHours?.openNow;
-  const weeklyHours = place?.regularOpeningHours?.weekdayDescriptions || [];
-  const todayHours = todayHoursText(weeklyHours);
-  const hoursText =
-    typeof openNow === 'boolean' ? (openNow ? 'Open now' : 'Closed now') : undefined;
+  const hours = readPlaceHours(place || {});
 
   return {
     id: place?.id || place?.name || `${title}-${place?.formattedAddress || ''}`,
@@ -960,11 +957,8 @@ function toCard(place: any): PlaceCard {
     rating: place?.rating,
     ratingCount: place?.userRatingCount,
     priceLevel: priceText(place?.priceLevel),
-    openNow: typeof openNow === 'boolean' ? openNow : null,
-    isOpen: typeof openNow === 'boolean' ? openNow : null,
-    hoursText,
-    todayHours,
-    weeklyHours,
+    ...hours,
+    ...currentHoursDisplay(hours),
     mapsUri: place?.googleMapsUri,
     websiteUri: typeof place?.websiteUri === 'string' ? place.websiteUri : undefined,
     lat: place?.location?.latitude,
@@ -1044,13 +1038,6 @@ function ticketmasterEventToCard(event: any): PlaceCard | undefined {
     lng: Number.isFinite(lng) ? lng : undefined,
     types: ['event', 'ticketmaster', event?.classifications?.[0]?.segment?.name, event?.classifications?.[0]?.genre?.name].filter(Boolean),
   };
-}
-
-function todayHoursText(weeklyHours: string[]) {
-  if (!weeklyHours.length) return undefined;
-  const jsDay = new Date().getDay();
-  const googleDayIndex = jsDay === 0 ? 6 : jsDay - 1;
-  return weeklyHours[googleDayIndex] || weeklyHours[0];
 }
 
 function cardToName(card?: PlaceCard | string) {
@@ -2982,6 +2969,15 @@ function NomNomGoApp() {
   const [planPreviewOpen, setPlanPreviewOpen] = useState(false);
   const [quickShareTarget, setQuickShareTarget] = useState<QuickShareTarget | null>(null);
   const [placeDetailCard, setPlaceDetailCard] = useState<PlaceCard | null>(null);
+  const placeDetailRequestRef = useRef(0);
+  useEffect(() => {
+    if (!placeDetailCard?.id || placeDetailCard.kind === 'event') return;
+    const timer = setInterval(() => {
+      if (activePlanTimingRef.current.timeWindow) return;
+      setPlaceDetailCard((card) => card ? { ...card, ...currentHoursDisplay(card) } : card);
+    }, 30_000);
+    return () => clearInterval(timer);
+  }, [placeDetailCard?.id, placeDetailCard?.kind]);
   const [routeOptionsOpen, setRouteOptionsOpen] = useState(false);
   const [pendingConfirmation, setPendingConfirmation] = useState<{
     title: string;
@@ -3140,17 +3136,15 @@ function NomNomGoApp() {
     if (card.kind === 'event') return card;
     const timing = activePlanTimingRef.current;
     if (!timing.timeWindow) {
-      const openNow = typeof card.openNow === 'boolean' ? card.openNow : card.isOpen;
       return {
         ...card,
-        isOpen: typeof openNow === 'boolean' ? openNow : null,
-        hoursText: typeof openNow === 'boolean' ? (openNow ? 'Open now' : 'Closed now') : card.hoursText,
-        todayHours: todayHoursText(card.weeklyHours || []),
+        ...currentHoursDisplay(card),
       };
     }
 
-    const planAvailability = placeOpenDuringWindow(card.weeklyHours, timing.dateRange.start, timing.timeWindow);
-    const plannedDayHours = hoursLineForDate(card.weeklyHours, timing.dateRange.start);
+    const weeklyHours = weeklyHoursForDate(card, timing.dateRange.start);
+    const planAvailability = placeOpenDuringWindow(weeklyHours, timing.dateRange.start, timing.timeWindow);
+    const plannedDayHours = hoursLineForDate(weeklyHours, timing.dateRange.start);
     return {
       ...card,
       isOpen: planAvailability ?? null,
@@ -4533,6 +4527,7 @@ function NomNomGoApp() {
         },
         body: JSON.stringify({
           includedTypes: [type],
+          languageCode: 'en',
           maxResultCount: 20,
           rankPreference: 'DISTANCE',
           locationRestriction: {
@@ -4575,6 +4570,7 @@ function NomNomGoApp() {
         },
         body: JSON.stringify({
           textQuery: slot === 'food' && !options?.rawFoodQuery ? `${query} restaurant` : query,
+          languageCode: 'en',
           maxResultCount: options?.maxResults || 10,
           locationBias: center
             ? {
@@ -4696,6 +4692,7 @@ function NomNomGoApp() {
           textQuery: 'restaurants',
           includedType: 'restaurant',
           openNow: true,
+          languageCode: 'en',
           maxResultCount: 20,
           locationBias: {
             circle: {
@@ -5966,6 +5963,42 @@ function NomNomGoApp() {
       return;
     }
     await openExternalUrl(suggestion.item.mapsUri || mapsSearchUrl(suggestion.item.title, suggestion.item));
+  };
+
+  const openPlaceDetails = async (card: PlaceCard) => {
+    const request = ++placeDetailRequestRef.current;
+    setPlaceDetailCard(cardForActivePlanTiming(card));
+    if (!canResolvePlaceWebsite(card) || !GOOGLE_API_KEY) return;
+    // Search already returns special hours. Avoid paying for a duplicate lookup
+    // while that status is fresh and before its next opening/closing boundary.
+    if (card.currentHoursStartDate && currentHoursDisplay(card).isOpen !== null) return;
+    try {
+      await recordPlacesUsage('text');
+      const response = await withTimeout(
+        fetch(`https://places.googleapis.com/v1/places/${encodeURIComponent(placeDetailsLookupId(card))}?languageCode=en`, {
+          headers: {
+            'X-Goog-Api-Key': GOOGLE_API_KEY,
+            'X-Goog-FieldMask': PLACE_HOURS_FIELDS.join(','),
+          },
+          cache: 'no-store',
+        }),
+        12000,
+        'Google Places hours lookup',
+      );
+      if (!response.ok) throw new Error(`Google Places hours status ${response.status}`);
+      const hours = readPlaceHours(await response.json());
+      if (request !== placeDetailRequestRef.current) return;
+      setPlaceDetailCard((current) => current?.id === card.id
+        ? cardForActivePlanTiming({ ...current, ...hours }) : current);
+      setCards((previous) => previous.map((item) => item.id === card.id
+        ? cardForActivePlanTiming({ ...item, ...hours }) : item));
+    } catch {
+      if (request !== placeDetailRequestRef.current) return;
+      // Do not retain a cached green badge when fresh verification failed.
+      setPlaceDetailCard((current) => current?.id === card.id
+        ? cardForActivePlanTiming({ ...current, openNow: null, hoursFetchedAt: undefined }) : current);
+      addLog('Google Places hours refresh failed');
+    }
   };
 
   const hydrateCardWebsite = (cardId: string, websiteUri: string) => {
@@ -9919,7 +9952,7 @@ function NomNomGoApp() {
                 <View style={styles.placeCardMedia}>
                   <TouchableOpacity
                     style={styles.placeCardMediaTap}
-                    onPress={() => setPlaceDetailCard(card)}
+                    onPress={() => { void openPlaceDetails(card); }}
                     accessibilityRole="button"
                     accessibilityLabel={`Open details for ${card.title}`}
                   >
@@ -9937,7 +9970,7 @@ function NomNomGoApp() {
                   </TouchableOpacity>
                   <TouchableOpacity
                     style={styles.placeCardInfoTouchTarget}
-                    onPress={() => setPlaceDetailCard(card)}
+                    onPress={() => { void openPlaceDetails(card); }}
                     accessibilityRole="button"
                     accessibilityLabel={`Show information for ${card.title}`}
                   >

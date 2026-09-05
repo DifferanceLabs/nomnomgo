@@ -19,18 +19,22 @@ function parseTimeWindow(value: string) {
   return { start, end: end <= start ? end + 24 * 60 : end };
 }
 
-function mondayFirstIndex(dateKey: string) {
+function weekdayForDate(dateKey: string) {
   const date = new Date(`${dateKey}T12:00:00`);
   if (Number.isNaN(date.getTime())) return undefined;
-  const day = date.getDay();
-  return day === 0 ? 6 : day - 1;
+  return ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][date.getDay()];
 }
 
 export function hoursLineForDate(weeklyHours: string[] | undefined, dateKey: string) {
   if (!weeklyHours?.length) return undefined;
-  const index = mondayFirstIndex(dateKey);
-  if (typeof index !== 'number') return undefined;
-  return weeklyHours[index];
+  const weekday = weekdayForDate(dateKey);
+  if (!weekday) return undefined;
+  // Google localizes the order as well as the text. Requests use English;
+  // match the label rather than assuming the array starts on Monday.
+  return weeklyHours.find((line) => {
+    const label = line.slice(0, line.indexOf(':')).trim().toLowerCase();
+    return label === weekday.toLowerCase() || label === weekday.slice(0, 3).toLowerCase();
+  });
 }
 
 export function placeOpenDuringWindow(
