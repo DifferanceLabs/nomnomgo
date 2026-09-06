@@ -12,7 +12,7 @@ NomNomGo must remain capable of later moving to `nomnomgo.com` without architect
 
 ## What It Does
 
-Real-user alpha setup and the two-phone acceptance test are documented in [docs/REAL_USER_ALPHA.md](docs/REAL_USER_ALPHA.md). The implementation requires an approved Supabase migration and server configuration before release; it has not yet been activated in production.
+Real-user alpha setup and the two-phone acceptance test are documented in [docs/REAL_USER_ALPHA.md](docs/REAL_USER_ALPHA.md). The approved Supabase migrations and production server configuration are complete. Follow the production release runbook and verify the real Google/two-phone flow before expanding access.
 
 - Helps users choose food, activities, or both.
 - Builds a simple plan with route, share, map, favorites, saved plans, and quick add flows.

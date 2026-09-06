@@ -27,7 +27,7 @@ Users can trust identity, profiles, sessions, and planning data while the team c
 
 ## Technical Backlog
 
-- ISSUE-0093: real-user alpha accounts and shared planning; temporary DL federation, personal cloud saves, synchronized RSVPs/suggestions/votes, organizer permissions and aggregate metrics. Production activation approved through the mobile conversation on 2026-09-05; database ready, operator setting and publishing pending.
+- ISSUE-0093: real-user alpha accounts and shared planning; temporary DL federation, personal cloud saves, synchronized RSVPs/suggestions/votes, organizer permissions and aggregate metrics. Production activation approved through the mobile conversation on 2026-09-05; backend configured, real two-phone acceptance pending.
 
 - Auth architecture selection.
 - User profile model.

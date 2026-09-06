@@ -3,7 +3,7 @@
 - Epic: EPIC-005 Platform
 - Backlog: NOW
 - Priority: P0
-- Status: Implemented and release approved; production database ready, operator setting and publishing pending
+- Status: Implemented and release approved; production backend configured, real two-phone acceptance pending
 
 ## Acceptance criteria
 

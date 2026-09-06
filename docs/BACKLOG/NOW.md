@@ -6,7 +6,7 @@ The NOW backlog should stay small enough to execute. Each item should map to a G
 
 ## Priority 1: Planning MVP
 
-- Real-user alpha invitations, personal cloud saves and operator usage (`ISSUE-0093`, EPIC-005; activation pending).
+- Real-user alpha invitations, personal cloud saves and operator usage (`ISSUE-0093`, EPIC-005; production backend configured, real two-phone acceptance pending).
 
 - Auth.
 - Planning sessions.

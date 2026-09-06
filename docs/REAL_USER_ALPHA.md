@@ -1,6 +1,6 @@
 # Real-user alpha activation and testing
 
-Implementation: ISSUE-0093, EPIC-005, NOW. **Not activated in production yet.**
+Implementation: ISSUE-0093, EPIC-005, NOW. Production backend configured under the approved release; real Google/two-phone acceptance remains to be completed.
 
 ## What this release supports
 
@@ -21,7 +21,7 @@ This release needs a migration in the existing Differance Labs Supabase project 
 
 All approvals must be requested in this conversation so the user can respond from mobile while away from the computer. A chat approval authorizes the described migration/deployment; it does not substitute for external service authentication. If service authentication is needed, provide a mobile-accessible login/device authorization link when available. Never require a desktop-only approval dialog or ask for secrets in chat.
 
-Approval received in the mobile conversation on 2026-09-05 for both migrations, server configuration and the alpha production release. GitHub, Vercel and Supabase authentication are available. Both migrations have been applied to the existing Differance Labs database; the server database variables are configured in NomNomGo's production environment. The operator email setting and GitHub production push remain pending. Do not request deployment approval again for this unchanged scope.
+Approval received in the mobile conversation on 2026-09-05 for both migrations, server configuration and the alpha production release. GitHub, Vercel and Supabase authentication are available. Both migrations have been applied to the existing Differance Labs database; all three server account variables, including the user-confirmed operator account, are configured in NomNomGo's production environment. Publishing follows the GitHub-to-Vercel runbook below; check both commit statuses before declaring a release live. Do not request deployment approval again for this unchanged scope.
 
 1. Review and approve both `supabase/migrations/001_real_user_alpha.sql` and `002_shared_alpha_plans.sql`. Together they add eight NNG tables, indexes and service-only functions for accounts and shared planning. They do not alter existing DL tables or Google OAuth. Inviting a person later inserts their email into DL `users` if absent and grants only the `nomnomgo` app.
 2. Both migrations were applied in order to the existing DL project on 2026-09-05. The `nomnomgo` app is active. Each migration is transactional and intended to be applied once; do not reapply them. All eight NNG tables have RLS enabled and deny reads to `anon` and `authenticated` roles.
