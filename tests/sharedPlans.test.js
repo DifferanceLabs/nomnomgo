@@ -41,6 +41,15 @@ before(async () => {
   process.env.SUPABASE_SERVICE_ROLE_KEY = 'local-test-key';
   process.env.NNG_ADMIN_EMAILS = 'owner@example.com';
   global.fetch = async (url, options) => {
+    if (url.includes('/nng_shared_members?')) {
+      const query = new URL(url).searchParams;
+      const email = query.get('email').slice(3);
+      const ids = query.get('plan_id').slice(4, -1).split(',');
+      const rows = (await db.query(`select m.plan_id, jsonb_build_object('revision',p.revision,'participants',
+        (select jsonb_agg(jsonb_build_object('account_id',other.account_id,'email',other.email,'rsvp',other.rsvp,'joined_at',other.joined_at)) from public.nng_shared_members other where other.plan_id=p.id)) as plan
+        from public.nng_shared_members m join public.nng_shared_plans p on p.id=m.plan_id where m.email=$1 and m.plan_id=any($2::uuid[])`, [email, ids])).rows;
+      return {ok:true,json:async()=>rows};
+    }
     const args = JSON.parse(options.body);
     try {
       const result = await rpc(url.endsWith('/nng_shared') ? 'nng_shared' : 'nng_alpha', args.p_email, args.p_action, args.p_data, args.p_admin);
@@ -82,6 +91,9 @@ test('RSVP changes propagate between accounts and cannot write another member re
   plan = (await ok('owner@example.com','plan.get',{planId:plan.id})).plan;
   assert.equal(plan.participants.find((p) => p.role === 'owner').rsvp, 'going');
   assert.equal(plan.participants.find((p) => p.userId === friendId).rsvp, 'maybe');
+  const organizerList = (await ok('owner@example.com','plan.list')).plans;
+  assert.equal(organizerList[0].participants.find((p) => p.userId === friendId).rsvp, 'maybe');
+  assert.equal((await ok('outsider@example.com','plan.list')).plans.length, 0);
   assert.ok(plan.revision > staleRevision);
   assert.equal((await ok('friend@example.com','plan.rsvp',{planId:plan.id,rsvp:'maybe'})).plan.revision, plan.revision);
   await Promise.all([

@@ -22,6 +22,7 @@ import { StatusBar } from 'expo-status-bar';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import AsyncStorage, { getAlphaAccount, initializeAlphaAccount, signOutAlphaAccount, subscribeAccountSaveError } from './src/data/accountStorage';
 import { AlphaAccountPanel } from './src/ui/AlphaAccountPanel';
+import { SharedPlanActivity } from './src/ui/SharedPlanActivity';
 import { SharedPlansScreen } from './src/ui/SharedPlansScreen';
 import { createSharedPlan, planIdFromUrl, type SharedPlan, type SharedPlanDraft } from './src/data/sharedPlans';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
@@ -8105,6 +8106,8 @@ function NomNomGoApp() {
           <Text style={styles.toastText}>{toastMessage}</Text>
         </View>
       ) : null}
+
+      {getAlphaAccount() ? <SharedPlanActivity onOpenPlan={(id) => setSharedWorkspace({ id })} /> : null}
 
       <Modal
         visible={accountMenuOpen}

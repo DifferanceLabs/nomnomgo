@@ -26,3 +26,9 @@ Phone browser testing includes real shared planning and synchronized RSVPs. Lega
 ## Manual verification
 
 See `docs/REAL_USER_ALPHA.md` for setup and the two-phone test.
+
+## Alpha feedback: organizer RSVP visibility
+
+The first real invitee signed in and opened the plan. Production records confirm their Going RSVP was saved, but the organizer did not see an update. The shared list currently shows only the viewer's own RSVP, and the main app has no shared-plan status. Invitation composition also needs a later usability pass.
+
+Follow-up acceptance: show member RSVP counts in the shared list and main app; show clear saved feedback to the respondent and announce changed participant responses while viewing a plan. Resume refresh on phone focus, visibility, restored connectivity and page restoration, including refreshes skipped during a write. Keep participant data member-only and preserve private drafts. Email, SMS and push delivery of RSVP notifications remain outside this repair.

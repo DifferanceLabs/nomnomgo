@@ -2,7 +2,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Linking, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { getAlphaAccount } from '../data/accountStorage';
-import { changeSharedPlan, createSharedPlan, getSharedPlan, listSharedPlans, newerSharedPlan, sharedPlanUrl, type SharedPlan, type SharedPlanDraft, type SharedPlanSummary } from '../data/sharedPlans';
+import { changeSharedPlan, changedSharedRsvps, createSharedPlan, getSharedPlan, listSharedPlans, newerSharedPlan, sharedPlanUrl, sharedRsvpLabel, sharedRsvpSummary, type SharedPlan, type SharedPlanDraft, type SharedPlanSummary } from '../data/sharedPlans';
+import { startForegroundRefresh } from '../data/foregroundRefresh';
 import { ActionButton as Button } from './primitives';
 import { ShareMessage } from './ShareMessage';
 
@@ -17,6 +18,7 @@ export function SharedPlansScreen({ initialPlan, initialPlanId, onClose }: { ini
   const account = getAlphaAccount()!;
   const [selectedId, setSelectedId] = useState(initialPlan?.id || initialPlanId || '');
   const [plan, setPlan] = useState<SharedPlan | null>(initialPlan || null);
+  const planRef = useRef(plan);
   const [plans, setPlans] = useState<SharedPlanSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [syncError, setSyncError] = useState('');
@@ -46,16 +48,16 @@ export function SharedPlansScreen({ initialPlan, initialPlanId, onClose }: { ini
 
   useEffect(() => {
     let active = true;
-    let inFlight = false;
-    let timer: ReturnType<typeof setTimeout>;
     const refresh = async () => {
-      if (!active || inFlight || busyRef.current || (typeof document !== 'undefined' && document.hidden)) return;
-      clearTimeout(timer);
-      inFlight = true;
       try {
         if (selectedId) {
           const incoming = await getSharedPlan(selectedId);
-          if (active) setPlan((current) => newerSharedPlan(current, incoming));
+          if (active) {
+            const latest = newerSharedPlan(planRef.current, incoming);
+            const changes = changedSharedRsvps(planRef.current, latest, account.id);
+            planRef.current = latest; setPlan(latest);
+            if (changes.length) setNotice(`RSVP updated · ${changes.join(' · ')}`);
+          }
         } else {
           const incoming = await listSharedPlans();
           if (active) setPlans(incoming);
@@ -64,41 +66,36 @@ export function SharedPlansScreen({ initialPlan, initialPlanId, onClose }: { ini
       } catch (error) {
         if (active) {
           setSyncError(errorText(error));
-          if ([401, 403, 404].includes(statusOf(error) || 0)) { setPlan(null); setPlans([]); }
+          if ([401, 403, 404].includes(statusOf(error) || 0)) { planRef.current = null; setPlan(null); setPlans([]); }
         }
       } finally {
-        inFlight = false;
-        if (active) { setLoading(false); timer = setTimeout(() => { void refresh(); }, 5000); }
+        if (active) setLoading(false);
       }
     };
-    refreshRef.current = () => { void refresh(); };
     setLoading(true);
-    void refresh();
-    const onVisible = () => { if (typeof document === 'undefined' || !document.hidden) void refresh(); };
-    if (typeof window !== 'undefined') window.addEventListener('focus', onVisible);
-    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisible);
+    const poller = startForegroundRefresh(refresh, { ready: () => !busyRef.current });
+    refreshRef.current = poller.refresh;
     return () => {
-      active = false; clearTimeout(timer);
-      if (typeof window !== 'undefined') window.removeEventListener('focus', onVisible);
-      if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisible);
+      active = false; poller.stop();
     };
-  }, [selectedId]);
+  }, [selectedId, account.id]);
 
   const mutate = async (action: string, data: Record<string, unknown> = {}, base = plan) => {
     if (!base || busyRef.current || syncError) return false;
     busyRef.current = true; setBusy(true); setNotice('');
     try {
       const incoming = await changeSharedPlan(base, action, data);
-      setPlan((current) => newerSharedPlan(current, incoming));
+      planRef.current = newerSharedPlan(planRef.current, incoming); setPlan(planRef.current);
       setUpdated(new Date().toLocaleTimeString());
+      if (action === 'plan.rsvp') setNotice(`RSVP saved: ${sharedRsvpLabel(String(data.rsvp))}. The organizer can see your response.`);
       return true;
     } catch (error) {
       setNotice(errorText(error));
-      if ([401, 403, 404].includes(statusOf(error) || 0)) { setSyncError(errorText(error)); setPlan(null); }
+      if ([401, 403, 404].includes(statusOf(error) || 0)) { setSyncError(errorText(error)); planRef.current = null; setPlan(null); }
       return false;
     } finally { busyRef.current = false; setBusy(false); refreshRef.current(); }
   };
-  const openPlan = (id: string) => { setPlan(null); setNotice(''); setPreparedEmail(''); setEditing(false); setSelectedId(id); };
+  const openPlan = (id: string) => { planRef.current = null; setPlan(null); setNotice(''); setPreparedEmail(''); setEditing(false); setSelectedId(id); };
   const edit = () => { if (plan) { setDraft(plan); setEditBase(plan); setEditing(true); } };
   const saveDetails = async () => {
     if (plan) {
@@ -109,7 +106,7 @@ export function SharedPlansScreen({ initialPlan, initialPlanId, onClose }: { ini
     busyRef.current = true; setBusy(true); setNotice('');
     try {
       const created = await createSharedPlan(sourceKey.current, draft);
-      setPlan(created); setSelectedId(created.id); setEditing(false); sourceKey.current = `shared-${requestId()}`;
+      planRef.current = created; setPlan(created); setSelectedId(created.id); setEditing(false); sourceKey.current = `shared-${requestId()}`;
     } catch (error) { setNotice(errorText(error)); }
     finally { busyRef.current = false; setBusy(false); }
   };
@@ -129,6 +126,7 @@ export function SharedPlansScreen({ initialPlan, initialPlanId, onClose }: { ini
   return <SafeAreaView style={styles.screen}>
     <View style={styles.header}>
       <Text style={styles.heading}>Shared plans</Text>
+      {plan ? <Text accessibilityLiveRegion="polite" style={styles.notice}>{sharedRsvpSummary(plan.participants)}</Text> : null}
       <Button label="Back to NomNomGo" size="compact" onPress={onClose} disabled={busy} />
     </View>
     <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
@@ -148,6 +146,7 @@ export function SharedPlansScreen({ initialPlan, initialPlanId, onClose }: { ini
           <Text style={styles.title}>{item.title}</Text>
           <Text style={styles.copy}>{item.dateStart} · {item.locationLabel} · {item.status === 'locked' ? 'Locked' : 'Planning'}</Text>
           <Text style={styles.muted}>Your RSVP: {rsvps.find((rsvp) => rsvp.value === item.rsvp)?.label || 'Not answered'}</Text>
+          <Text accessibilityLiveRegion="polite" style={styles.notice}>{sharedRsvpSummary(item.participants)}</Text>
           <Button label={`Open ${item.title}`} onPress={() => openPlan(item.id)} size="compact" />
         </View>)}
       </> : null}
