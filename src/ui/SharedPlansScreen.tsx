@@ -15,7 +15,7 @@ const requestId = () => typeof crypto !== 'undefined' && crypto.randomUUID ? cry
 const errorText = (error: unknown) => error instanceof Error ? error.message : 'The plan could not be reached. Please try again.';
 const statusOf = (error: unknown) => (error as { status?: number })?.status;
 
-export function SharedPlansScreen({ initialPlan, initialPlanId, onClose }: { initialPlan?: SharedPlan | null; initialPlanId?: string | null; onClose: () => void }) {
+export function SharedPlansScreen({ initialPlan, initialPlanId, onClose, onOpenFriends }: { initialPlan?: SharedPlan | null; initialPlanId?: string | null; onClose: () => void; onOpenFriends?: () => void }) {
   const account = getAlphaAccount()!;
   const [selectedId, setSelectedId] = useState(initialPlan?.id || initialPlanId || '');
   const [plan, setPlan] = useState<SharedPlan | null>(initialPlan || null);
@@ -129,6 +129,7 @@ export function SharedPlansScreen({ initialPlan, initialPlanId, onClose }: { ini
       <Text style={styles.heading}>Shared plans</Text>
       {plan ? <Text accessibilityLiveRegion="polite" style={styles.notice}>{sharedRsvpSummary(plan.participants)}</Text> : null}
       <Button label="Back to NomNomGo" size="compact" onPress={onClose} disabled={busy} />
+      {onOpenFriends ? <Button label="Friends" size="compact" onPress={onOpenFriends} disabled={busy} /> : null}
     </View>
     <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
       <View style={styles.row}>

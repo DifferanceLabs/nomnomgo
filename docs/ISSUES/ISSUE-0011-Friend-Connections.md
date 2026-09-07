@@ -22,6 +22,7 @@ Create accepted friend connections that make repeat planning faster without addi
 - Previously accepted alpha invitations receive the same friendship when the migration is activated.
 - Friends refresh while the list is open and can be invited to a shared plan without retyping their email.
 - Users can view accepted friends.
+- Profile exposes an immediately visible Friends tab. Home, the account menu and shared plans link directly to that tab without requiring users to scroll through settings.
 - Friend connections can be used as invite targets.
 - Private planning history is not exposed through friend lists.
 - Removing or blocking behavior is considered in the data model.

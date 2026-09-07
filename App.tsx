@@ -22,6 +22,7 @@ import { StatusBar } from 'expo-status-bar';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import AsyncStorage, { getAlphaAccount, initializeAlphaAccount, signOutAlphaAccount, subscribeAccountSaveError } from './src/data/accountStorage';
 import { AlphaAccountPanel } from './src/ui/AlphaAccountPanel';
+import { FriendsPanel } from './src/ui/FriendsPanel';
 import { SharedPlanActivity } from './src/ui/SharedPlanActivity';
 import { SharedPlansScreen } from './src/ui/SharedPlansScreen';
 import { createSharedPlan, planIdFromUrl, type SharedPlan, type SharedPlanDraft } from './src/data/sharedPlans';
@@ -3051,6 +3052,7 @@ function NomNomGoApp() {
   const [toastMessage, setToastMessage] = useState('');
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
+  const [accountTab, setAccountTab] = useState<'account' | 'friends'>('account');
   const [peopleGroupsOpen, setPeopleGroupsOpen] = useState(false);
   const [planPeopleOpen, setPlanPeopleOpen] = useState(false);
   const [authLoaded, setAuthLoaded] = useState(false);
@@ -4053,6 +4055,7 @@ function NomNomGoApp() {
     closeTransientSurfaces();
     setNowMode('closed');
     if (getAlphaAccount()) {
+      setAccountTab('friends');
       setAccountSettingsOpen(true);
       return;
     }
@@ -7777,13 +7780,18 @@ function NomNomGoApp() {
   }
 
   if (sharedWorkspace && getAlphaAccount() && authLoaded) {
-    return <SharedPlansScreen initialPlan={sharedWorkspace.plan} initialPlanId={sharedWorkspace.id} onClose={() => {
+    const closeSharedWorkspace = () => {
       setSharedWorkspace(null);
       if (Platform.OS === 'web') {
         const url = new URL(window.location.href);
         url.searchParams.delete('plan');
         window.history.replaceState({}, '', url.toString());
       }
+    };
+    return <SharedPlansScreen initialPlan={sharedWorkspace.plan} initialPlanId={sharedWorkspace.id} onClose={closeSharedWorkspace} onOpenFriends={() => {
+      closeSharedWorkspace();
+      setAccountTab('friends');
+      setAccountSettingsOpen(true);
     }} />;
   }
 
@@ -8134,10 +8142,12 @@ function NomNomGoApp() {
             </View>
             <View style={styles.accountActions}>
               {getAlphaAccount() ? <Button label="Shared plans & RSVPs" onPress={() => { setAccountMenuOpen(false); setSharedWorkspace({}); }} compact /> : null}
+              {getAlphaAccount() ? <Button label="Friends" onPress={() => { setAccountMenuOpen(false); setAccountTab('friends'); setAccountSettingsOpen(true); }} compact /> : null}
               <Button
-                label={getAlphaAccount() ? 'Account, friends, invites & usage' : 'User settings'}
+                label={getAlphaAccount() ? 'Account, invites & usage' : 'User settings'}
                 onPress={() => {
                   setAccountMenuOpen(false);
+                  setAccountTab('account');
                   setAccountSettingsOpen(true);
                 }}
                 compact
@@ -8164,8 +8174,20 @@ function NomNomGoApp() {
       >
         <TouchableOpacity style={styles.accountOverlay} activeOpacity={1} onPress={() => setAccountSettingsOpen(false)}>
           <TouchableOpacity style={[styles.accountCard, isDarkMode && styles.darkModalCard]} activeOpacity={1} onPress={(event) => event.stopPropagation()}>
-            <Text style={[styles.accountName, isDarkMode && styles.darkText]}>User settings</Text>
-            <ScrollView style={{ maxHeight: 420 }} keyboardShouldPersistTaps="handled">
+            <Text style={[styles.accountName, isDarkMode && styles.darkText]}>{getAlphaAccount() ? 'Your profile' : 'User settings'}</Text>
+            {getAlphaAccount() ? <View style={styles.accountActions} accessibilityRole="tablist">
+              {(['account', 'friends'] as const).map((tab) => <TouchableOpacity
+                key={tab} accessibilityRole="tab" accessibilityLabel={tab === 'account' ? 'Account' : 'Friends'}
+                accessibilityState={{ selected: accountTab === tab }} onPress={() => setAccountTab(tab)}
+                style={{ flex: 1, minHeight: 44, padding: 12, borderRadius: 10, backgroundColor: accountTab === tab ? colors.teal : '#25323d' }}
+              ><Text style={{ color: '#fff', fontWeight: '700', textAlign: 'center' }}>{tab === 'account' ? 'Account' : 'Friends'}</Text></TouchableOpacity>)}
+            </View> : null}
+            <ScrollView key={accountTab} style={{ maxHeight: 420 }} keyboardShouldPersistTaps="handled">
+            {getAlphaAccount() && accountTab === 'friends' ? <View style={{ gap: 12, marginVertical: 12 }}>
+              <FriendsPanel />
+              <Button label="Invite someone new" onPress={() => setAccountTab('account')} compact />
+              <Button label="Make a plan with friends" onPress={() => { setAccountSettingsOpen(false); setSharedWorkspace({}); }} compact />
+            </View> : <>
             <View style={styles.accountSettingList}>
               <View>
                 <Text style={[styles.accountSettingLabel, isDarkMode && styles.darkMutedText]}>Active user</Text>
@@ -8187,10 +8209,11 @@ function NomNomGoApp() {
                 }}
                 compact
               />
-              <Button label="Close" onPress={() => setAccountSettingsOpen(false)} compact />
             </View>
             <AlphaAccountPanel onOpenSharedPlans={() => { setAccountSettingsOpen(false); setSharedWorkspace({}); }} />
+            </>}
             </ScrollView>
+            <Button label="Close profile" onPress={() => setAccountSettingsOpen(false)} compact />
           </TouchableOpacity>
         </TouchableOpacity>
       </Modal>

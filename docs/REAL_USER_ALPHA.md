@@ -27,6 +27,8 @@ Local validation: 110 automated tests pass, including seven friendship scenarios
 
 After activation: refresh the two real alpha accounts, open **Friends**, and confirm each sees the other from the earlier accepted invitation. On a second plan, invite the friend from the picker and verify the existing cross-phone RSVP refresh. Then invite a new Google account by email or text; confirm friendship appears only after that account first opens NNG.
 
+Friend-list navigation follow-up: **Profile → Friends** now uses a visible tab next to **Account**, above the scrolling content. Home, the user menu and the shared-plan header also open that Friends tab directly. The close control remains outside the scrolling list. Verified Profile-to-Friends, account-menu-to-Friends and shared-plans-to-Friends with a fictional accepted friend at 390×844. This is a UI-only correction and requires no further database migration.
+
 ### Original account and shared-plan activation
 
 This release needs a migration in the existing Differance Labs Supabase project because the alpha invitation adapter creates DL app grants. DL's `AGENTS.md` requires approval before applying production schema changes. NNG's `AGENTS.md` requires an explicit request before pushing to production.

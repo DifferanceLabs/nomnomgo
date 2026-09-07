@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import { Linking, Platform, Share, StyleSheet, Text, TextInput, View } from 'react-native';
 import { accountRequest, getAlphaAccount } from '../data/accountStorage';
 import { ActionButton as Button } from './primitives';
-import { FriendsPanel } from './FriendsPanel';
 
 const metricsLabels: Record<string, string> = {
   friendships: 'Active friendships',
@@ -70,7 +69,6 @@ export function AlphaAccountPanel({ onOpenSharedPlans }: { onOpenSharedPlans?: (
   };
   return (
     <View style={styles.panel}>
-      <FriendsPanel />
       <Text style={styles.title}>Invite someone to alpha</Text>
       <Text style={styles.copy}>Use their Google account email, even when sending a text. New users become your friends after their first NomNomGo sign-in. You send the message. Up to 10 invitations per day.</Text>
       <TextInput
