@@ -35,7 +35,7 @@ before(async () => {
     insert into public.users values ('owner@example.com'),('outsider@example.com');
     insert into public.app_grants values ('owner@example.com','nomnomgo','member',null),('outsider@example.com','nomnomgo','member',null);
     grant select, insert on public.users, public.app_grants to service_role; grant select on public.apps to service_role;`);
-  for (const file of ['001_real_user_alpha.sql', '002_shared_alpha_plans.sql']) await db.exec(readFileSync(`supabase/migrations/${file}`, 'utf8'));
+  for (const file of ['001_real_user_alpha.sql', '002_shared_alpha_plans.sql', '003_invitation_friendships.sql']) await db.exec(readFileSync(`supabase/migrations/${file}`, 'utf8'));
   process.env.DL_APP_LAUNCH_SECRET = secret;
   process.env.SUPABASE_URL = 'https://local-test.example.invalid';
   process.env.SUPABASE_SERVICE_ROLE_KEY = 'local-test-key';

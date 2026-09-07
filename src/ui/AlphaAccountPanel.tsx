@@ -2,8 +2,10 @@ import React, { useState } from 'react';
 import { Linking, Platform, Share, StyleSheet, Text, TextInput, View } from 'react-native';
 import { accountRequest, getAlphaAccount } from '../data/accountStorage';
 import { ActionButton as Button } from './primitives';
+import { FriendsPanel } from './FriendsPanel';
 
 const metricsLabels: Record<string, string> = {
+  friendships: 'Active friendships',
   accounts: 'Accounts', active7Days: 'Active in 7 days', invitations: 'Invitations created',
   acceptedInvitations: 'Invitations accepted', accountLoads: 'Account loads',
   saveOperations: 'Cloud save operations', savedPlans: 'Saved plan copies',
@@ -24,7 +26,7 @@ export function AlphaAccountPanel({ onOpenSharedPlans }: { onOpenSharedPlans?: (
   const [metrics, setMetrics] = useState<Record<string, number> | null>(null);
   if (!account) return null;
   const url = Platform.OS === 'web' && typeof window !== 'undefined' ? window.location.origin : '';
-  const invitation = `Join me on NomNomGo to test making plans. Open ${url}, choose Open with Differance Labs, and sign in with Google using ${invitedEmail}. Then choose NomNomGo in your apps. Your alpha access is ready.`;
+  const invitation = `Join me on NomNomGo to test making plans. Open ${url}, choose Open with Differance Labs, and sign in with Google using ${invitedEmail}. Then choose NomNomGo in your apps. Your alpha access is ready. Your first NomNomGo sign-in connects us as friends for future plans.`;
   const invite = async () => {
     if (busy) return;
     setBusy(true);
@@ -57,18 +59,20 @@ export function AlphaAccountPanel({ onOpenSharedPlans }: { onOpenSharedPlans?: (
   };
   const loadMetrics = async () => {
     try {
-      const [accounts, plans] = await Promise.all([
+      const [accounts, plans, friends] = await Promise.all([
         accountRequest<Record<string, number>>({ action: 'metrics' }),
         accountRequest<Record<string, number>>({ action: 'plan.metrics' }),
+        accountRequest<Record<string, number>>({ action: 'friend.metrics' }),
       ]);
-      setMetrics({ ...accounts, ...plans });
+      setMetrics({ ...accounts, ...plans, ...friends });
     }
     catch (error) { setMessage(error instanceof Error ? error.message : 'Could not load usage.'); }
   };
   return (
     <View style={styles.panel}>
+      <FriendsPanel />
       <Text style={styles.title}>Invite someone to alpha</Text>
-      <Text style={styles.copy}>Use their Google account email. This grants NomNomGo access; you send the message. Up to 10 invitations per day.</Text>
+      <Text style={styles.copy}>Use their Google account email, even when sending a text. New users become your friends after their first NomNomGo sign-in. You send the message. Up to 10 invitations per day.</Text>
       <TextInput
         style={styles.input} value={email} onChangeText={setEmail} placeholder="Their Google account email"
         placeholderTextColor="#a8b2bf" accessibilityLabel="Invitee Google account email"

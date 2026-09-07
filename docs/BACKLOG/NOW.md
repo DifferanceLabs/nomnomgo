@@ -6,6 +6,7 @@ The NOW backlog should stay small enough to execute. Each item should map to a G
 
 ## Priority 1: Planning MVP
 
+- Invitation friendships (`ISSUE-0011`, EPIC-002; automatic mutual connection on first login, friends list and repeat plan invitations).
 - Real-user alpha invitations, personal cloud saves and operator usage (`ISSUE-0093`, EPIC-005; production backend configured, real two-phone acceptance pending).
 
 - Auth.

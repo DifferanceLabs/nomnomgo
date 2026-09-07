@@ -6,6 +6,7 @@ import { changeSharedPlan, changedSharedRsvps, createSharedPlan, getSharedPlan, 
 import { startForegroundRefresh } from '../data/foregroundRefresh';
 import { ActionButton as Button } from './primitives';
 import { ShareMessage } from './ShareMessage';
+import { FriendsPanel } from './FriendsPanel';
 
 const rsvps = [{ value: 'going', label: 'Going' }, { value: 'maybe', label: 'Maybe' }, { value: 'cant_make_it', label: "Can't make it" }];
 const today = () => new Date().toISOString().slice(0, 10);
@@ -110,8 +111,8 @@ export function SharedPlansScreen({ initialPlan, initialPlanId, onClose }: { ini
     } catch (error) { setNotice(errorText(error)); }
     finally { busyRef.current = false; setBusy(false); }
   };
-  const invite = async () => {
-    const email = inviteEmail.trim().toLowerCase();
+  const invite = async (target = inviteEmail) => {
+    const email = target.trim().toLowerCase();
     if (await mutate('plan.invite', { email })) { setPreparedEmail(email); setInviteEmail(''); setNotice('Access is ready. Send the invitation below.'); }
   };
   const suggest = async () => {
@@ -188,10 +189,11 @@ export function SharedPlansScreen({ initialPlan, initialPlanId, onClose }: { ini
         </View>
         <View style={styles.card}>
           <Text style={styles.title}>Invite someone to this plan</Text>
-          <Text style={styles.copy}>Enter their Google account email. If needed, this also invites them to NomNomGo alpha.</Text>
+          <FriendsPanel onInvite={invite} excludedEmails={plan.participants.map((member) => member.displayName)} disabled={busy || !!syncError} />
+          <Text style={styles.copy}>Or enter their Google account email, even when sending a text. New users also receive alpha access and become your friends after their first NomNomGo sign-in.</Text>
           <TextInput accessibilityLabel="Plan invitee Google email" style={styles.input} value={inviteEmail} onChangeText={setInviteEmail} keyboardType="email-address" autoCapitalize="none" autoCorrect={false} editable={!busy} />
-          <Button label="Prepare plan invitation" onPress={invite} disabled={busy || !!syncError || !inviteEmail.trim()} />
-          {preparedEmail ? <ShareMessage email={preparedEmail} message={`Join me for ${plan.title}: ${sharedPlanUrl(plan.id)} . Sign in through Differance Labs with Google using ${preparedEmail}, then open NomNomGo. You can RSVP and help choose our stops. Your access is ready.`} /> : null}
+          <Button label="Prepare plan invitation" onPress={() => invite()} disabled={busy || !!syncError || !inviteEmail.trim()} />
+          {preparedEmail ? <ShareMessage email={preparedEmail} message={`Join me for ${plan.title}: ${sharedPlanUrl(plan.id)} . Sign in through Differance Labs with Google using ${preparedEmail}, then open NomNomGo. You can RSVP and help choose our stops. Your access is ready. If you are new to NomNomGo, your first sign-in connects us as friends for future plans.`} /> : null}
         </View>
         <View style={styles.card}>
           <Text style={styles.title}>Itinerary</Text>

@@ -4,7 +4,7 @@ async function accountRpc(args) {
   const base = process.env.SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!base || !key) throw Object.assign(new Error('Account storage is not configured.'), { status: 503 });
-  const rpc = args.p_action.startsWith('plan.') ? 'nng_shared' : 'nng_alpha';
+  const rpc = args.p_action.startsWith('friend.') ? 'nng_friends' : args.p_action.startsWith('plan.') ? 'nng_shared' : 'nng_alpha';
   const response = await fetch(`${base.replace(/\/$/, '')}/rest/v1/rpc/${rpc}`, {
     method: 'POST',
     headers: { apikey: key, Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },

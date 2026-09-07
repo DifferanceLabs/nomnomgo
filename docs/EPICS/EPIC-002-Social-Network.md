@@ -16,7 +16,7 @@ Users can reconnect with people and groups they plan with, reuse social context,
 
 | ID | Story | Priority | Acceptance Signal |
 | --- | --- | --- | --- |
-| SN-001 | As a user, I want friends so inviting repeat participants is faster. | Next | Users can create and view accepted friend connections. |
+| SN-001 | As a user, I want friends so inviting repeat participants is faster. | Now (alpha slice) | First login accepts invitation friendships; both users can view friends and invite them to another plan. |
 | SN-002 | As a user, I want friend requests so relationships require consent. | Next | Friend requests can be sent, accepted, declined, and blocked. |
 | SN-003 | As a user, I want mutual friend context so I know why someone appears. | Later | Profiles show safe mutual context without exposing private data. |
 | SN-004 | As a user, I want groups so recurring planning circles are easy to reuse. | Next | A group can be created from repeat participants or from scratch. |

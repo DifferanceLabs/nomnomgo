@@ -6,7 +6,7 @@ NEXT contains work that improves repeat behavior once the core planning loop has
 
 ## Product Priorities
 
-- Friends.
+- Full friend requests (automatic invitation friendships moved to NOW for alpha, ISSUE-0011).
 - Group history.
 - Shared preferences.
 - Recommendation engine.

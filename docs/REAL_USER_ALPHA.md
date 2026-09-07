@@ -17,6 +17,18 @@ Implementation: ISSUE-0093, EPIC-005, NOW. Production backend configured under t
 
 ## Activation approval
 
+### Invitation friendships (ISSUE-0011): approved for production
+
+`supabase/migrations/003_invitation_friendships.sql` was approved with the production push request in mobile chat on 2026-09-07 and applied successfully before the matching API/UI release. It adds one NNG-owned relationship table, service-only list/remove/aggregate functions and a trigger on first invitation acceptance. The existing accepted alpha invitation was backfilled into one active mutual friendship. RLS is enabled and anonymous/authenticated database roles cannot read the table or call the privileged API. It does not change DL OAuth, grants, private saves, shared plans or RSVPs. All three migrations are applied; never reapply them. No new server variables or service credentials are required.
+
+First login into NomNomGo connects a new account to its original alpha inviter and any direct plan inviters whose invitations preceded that login. Co-participants do not become friends just by sharing a plan. The list uses account IDs and email labels, refreshes every five seconds while visible, and is available from **Friends** on Home and account settings. Shared plans offer **Invite a friend**, excluding members already invited. Removing a friendship removes it for both people, preserves existing plan memberships, and leaves a tombstone so future logins cannot silently restore it. Admin usage includes active friendship count. The full friend-request/blocking lifecycle remains a separate issue.
+
+Local validation: 110 automated tests pass, including seven friendship scenarios exercising SQL backfill, pending/mismatched identity, direct multi-inviter attribution, mutual removal, private-data isolation, scoped APIs and service-only permissions. Browser test at 390×844: pending inviter list was empty, invitee's first login showed the inviter, returning to the organizer showed the friend automatically, and **Invite a friend** on a second plan added membership and prepared email/text/share controls without typing the email. These used fictional accounts and a local database, not production Google authentication.
+
+After activation: refresh the two real alpha accounts, open **Friends**, and confirm each sees the other from the earlier accepted invitation. On a second plan, invite the friend from the picker and verify the existing cross-phone RSVP refresh. Then invite a new Google account by email or text; confirm friendship appears only after that account first opens NNG.
+
+### Original account and shared-plan activation
+
 This release needs a migration in the existing Differance Labs Supabase project because the alpha invitation adapter creates DL app grants. DL's `AGENTS.md` requires approval before applying production schema changes. NNG's `AGENTS.md` requires an explicit request before pushing to production.
 
 All approvals must be requested in this conversation so the user can respond from mobile while away from the computer. A chat approval authorizes the described migration/deployment; it does not substitute for external service authentication. If service authentication is needed, provide a mobile-accessible login/device authorization link when available. Never require a desktop-only approval dialog or ask for secrets in chat.

@@ -53,10 +53,16 @@ module.exports = async function account(req, res) {
     try { body = await bodyOf(req); } catch { return res.status(400).json({ error: 'Invalid or oversized request.' }); }
   }
   const action = req.method === 'GET' ? 'load' : body.action;
-  if (!['load', 'save', 'invite', 'metrics'].includes(action) && !ACTIONS.has(action)) return res.status(400).json({ error: 'Unknown action.' });
+  if (!['load', 'save', 'invite', 'metrics', 'friend.list', 'friend.remove', 'friend.metrics'].includes(action) && !ACTIONS.has(action)) return res.status(400).json({ error: 'Unknown action.' });
   const admin = isAccountAdmin(identity.email);
-  if (['metrics', 'plan.metrics'].includes(action) && !admin) return res.status(403).json({ error: 'Admin access required.' });
+  if (['metrics', 'plan.metrics', 'friend.metrics'].includes(action) && !admin) return res.status(403).json({ error: 'Admin access required.' });
   let data = {};
+  if (action === 'friend.remove') {
+    if (typeof body.friendId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(body.friendId)) {
+      return res.status(400).json({ error: 'Choose a friend to remove.' });
+    }
+    data = { friendId: body.friendId };
+  }
   if (ACTIONS.has(action)) {
     try { data = sharedData(action, body); }
     catch (error) { return res.status(400).json({ error: error.message }); }

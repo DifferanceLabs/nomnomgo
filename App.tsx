@@ -4052,6 +4052,10 @@ function NomNomGoApp() {
   const openPeopleGroupsHomeAction = () => {
     closeTransientSurfaces();
     setNowMode('closed');
+    if (getAlphaAccount()) {
+      setAccountSettingsOpen(true);
+      return;
+    }
     if (GROUP_SESSION_ENABLED) {
       setPlanSetupOpen(false);
       setHomeOpen(false);
@@ -8131,7 +8135,7 @@ function NomNomGoApp() {
             <View style={styles.accountActions}>
               {getAlphaAccount() ? <Button label="Shared plans & RSVPs" onPress={() => { setAccountMenuOpen(false); setSharedWorkspace({}); }} compact /> : null}
               <Button
-                label={getAlphaAccount() ? 'Account, invites & usage' : 'User settings'}
+                label={getAlphaAccount() ? 'Account, friends, invites & usage' : 'User settings'}
                 onPress={() => {
                   setAccountMenuOpen(false);
                   setAccountSettingsOpen(true);
@@ -8245,18 +8249,18 @@ function NomNomGoApp() {
                   <Text style={styles.homeUtilityButtonText}>Saved plans</Text>
                 </TouchableOpacity>
               </View>
-              {BETA_FEATURES.peopleGroups ? (
+              {getAlphaAccount() || BETA_FEATURES.peopleGroups ? (
                 <TouchableOpacity
                   style={[styles.peopleGroupsEntry, isDarkMode && styles.darkChip]}
                   onPress={openPeopleGroupsHomeAction}
                   accessibilityRole="button"
-                  accessibilityLabel="People and groups. Plan with friends, family, and groups."
+                  accessibilityLabel={getAlphaAccount() ? 'Friends. View friends and invitations.' : 'People and groups. Plan with friends, family, and groups.'}
                 >
                   <View style={styles.peopleGroupsIcon}>
                     <Ionicons name="people-outline" size={21} color={colors.teal} />
                   </View>
                   <View style={styles.peopleGroupsTextBlock}>
-                    <Text style={[styles.peopleGroupsTitle, isDarkMode && styles.darkText]}>People & Groups</Text>
+                    <Text style={[styles.peopleGroupsTitle, isDarkMode && styles.darkText]}>{getAlphaAccount() ? 'Friends' : 'People & Groups'}</Text>
                     <Text style={[styles.peopleGroupsSubtitle, isDarkMode && styles.darkMutedText]}>
                       Plan with friends, family, and groups
                     </Text>

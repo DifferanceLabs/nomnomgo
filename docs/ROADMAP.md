@@ -34,6 +34,8 @@ Primary documents:
 
 ## Phase 1: Planning MVP
 
+ISSUE-0011 brings invitation friendships into alpha: first login connects new invitees to their inviters, with a private friends list and repeat plan invitations. Full friend requests and groups remain in Phase 2.
+
 Immediate alpha slice: ISSUE-0093 adds verified DL identity, private cloud saves, email-bound invitations, shared plans with synchronized RSVPs/suggestions/votes, organizer controls and aggregate operator metrics. Native distribution remains separate. See `REAL_USER_ALPHA.md` for mobile approval, activation and the two-phone test.
 
 Goal: Small groups can create plans and decide where to go.

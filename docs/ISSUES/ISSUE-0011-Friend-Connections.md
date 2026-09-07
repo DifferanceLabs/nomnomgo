@@ -2,7 +2,7 @@
 
 - Title: Friend Connections
 - Epic: EPIC-002 Social Network
-- Priority: P2
+- Priority: P1 (alpha invitation slice)
 - MVP: No
 - Milestone: M3 - Friends & Groups
 - Story ID: SN-001
@@ -17,6 +17,10 @@ Create accepted friend connections that make repeat planning faster without addi
 
 ## Acceptance Criteria
 
+- A new user's first verified NomNomGo login creates a mutual friendship with their alpha inviter and people who directly invited them to a plan before that login, whether the message was sent by email or text.
+- Pending invitations and other plan participants do not become friends automatically. Repeated logins do not duplicate or restore removed friendships.
+- Previously accepted alpha invitations receive the same friendship when the migration is activated.
+- Friends refresh while the list is open and can be invited to a shared plan without retyping their email.
 - Users can view accepted friends.
 - Friend connections can be used as invite targets.
 - Private planning history is not exposed through friend lists.
@@ -24,7 +28,7 @@ Create accepted friend connections that make repeat planning faster without addi
 
 ## Technical Notes
 
-- Model friendship as consented relationship data.
+- Alpha invitations explain that first login connects inviter and invitee as friends. Either person can remove the connection; removal does not alter existing plan membership.
 - Keep relationship data independent from Differance Labs auth.
 
 ## Dependencies
