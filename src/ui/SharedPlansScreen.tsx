@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Linking, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { getAlphaAccount } from '../data/accountStorage';
@@ -18,17 +18,16 @@ const requestId = () => typeof crypto !== 'undefined' && crypto.randomUUID ? cry
 const errorText = (error: unknown) => error instanceof Error ? error.message : 'The plan could not be reached. Please try again.';
 const statusOf = (error: unknown) => (error as { status?: number })?.status;
 
-export function SharedPlansScreen({ initialPlan, initialPlanId, onClose, onOpenFriends, onNavigate }: { initialPlan?: SharedPlan | null; initialPlanId?: string | null; onClose: () => void; onOpenFriends?: () => void; onNavigate?: (key: 'home' | 'saved' | 'profile') => void }) {
+export function SharedPlansScreen({ initialPlan, initialPlanId, initialSection, onOpenEditor, onClose, onOpenFriends, onNavigate }: { initialSection?: 'plan' | 'people'; onOpenEditor?: (plan: SharedPlan) => void; initialPlan?: SharedPlan | null; initialPlanId?: string | null; onClose: () => void; onOpenFriends?: () => void; onNavigate?: (key: 'home' | 'saved' | 'profile') => void }) {
   const account = getAlphaAccount()!;
   const [selectedId, setSelectedId] = useState(initialPlan?.id || initialPlanId || '');
   const [plan, setPlan] = useState<SharedPlan | null>(initialPlan || null);
   const planRef = useRef(plan);
   const [plans, setPlans] = useState<SharedPlanSummary[]>([]);
-  const [section, setSection] = useState<'plan' | 'people'>('plan');
+  const [section, setSection] = useState<'plan' | 'people'>(initialSection || 'plan');
   const [search, setSearch] = useState('');
   const [removingMember, setRemovingMember] = useState('');
   const [inviteOpen, setInviteOpen] = useState(false);
-  const [editingStop, setEditingStop] = useState('');
   const [pendingNavigation, setPendingNavigation] = useState<(() => void) | null>(null);
   const draftSnapshot = useRef('');
   const [loading, setLoading] = useState(true);
@@ -50,6 +49,9 @@ export function SharedPlansScreen({ initialPlan, initialPlanId, onClose, onOpenF
   const suggestionKey = useRef(requestId());
   const owner = plan?.ownerId === account.id;
   const locked = plan?.status === 'locked';
+  useEffect(() => {
+    if (plan && section === 'plan' && !editing && !loading && !syncError && onOpenEditor) onOpenEditor(plan);
+  }, [plan, section, editing, loading, syncError, onOpenEditor]);
 
   useEffect(() => {
     if (typeof window === 'undefined' || !editing || JSON.stringify(draft) === draftSnapshot.current) return;
@@ -119,7 +121,7 @@ export function SharedPlansScreen({ initialPlan, initialPlanId, onClose, onOpenF
     if (editing && JSON.stringify(draft) !== draftSnapshot.current) { setPendingNavigation(() => action); return; }
     action();
   };
-  const openPlan = (id: string) => { planRef.current = null; setPlan(null); setNotice(''); setPreparedEmail(''); setEditing(false); setFormError(''); setSelectedId(id); setSection('plan'); setRemovingMember(''); setInviteOpen(false); setEditingStop(''); };
+  const openPlan = (id: string) => { planRef.current = null; setPlan(null); setNotice(''); setPreparedEmail(''); setEditing(false); setFormError(''); setSelectedId(id); setSection('plan'); setRemovingMember(''); setInviteOpen(false); };
   const create = () => { openPlan(''); const next = emptyDraft(); draftSnapshot.current = JSON.stringify(next); setDraft(next); setEditBase(null); setEditing(true); };
   const edit = () => { if (plan) { draftSnapshot.current = JSON.stringify(plan); setDraft(plan); setEditBase(plan); setEditing(true); } };
   const saveDetails = async () => {
@@ -215,7 +217,7 @@ export function SharedPlansScreen({ initialPlan, initialPlanId, onClose, onOpenF
           </View> : null}
           {owner && section === 'plan' && !locked && !plan.stops.length ? <Text style={styles.muted}>Add a stop to lock the plan.</Text> : null}
         </View>
-        {section === 'plan' ? <View style={styles.card}>
+        {section === 'people' ? <View style={styles.card}>
           <Text style={styles.title}>Your RSVP</Text>
           <RsvpControl value={plan.participants.find((p) => p.userId === account.id)?.rsvp || undefined} disabled={busy || !!syncError} onChange={async (rsvp) => { await mutate('plan.rsvp', { rsvp }); }} />
         </View> : null}
@@ -240,23 +242,6 @@ export function SharedPlansScreen({ initialPlan, initialPlanId, onClose, onOpenF
             </> : <Button label="Manage" accessibilityLabel={`Manage ${person.displayName}`} size="compact" disabled={busy || !!syncError} onPress={() => setRemovingMember(person.displayName)} /> : null}
           </View>)}
         </View>
-        </> : <>
-        <View style={styles.card}>
-          <Text style={styles.title}>Itinerary</Text>
-          {!plan.stops.length ? <Text style={styles.copy}>Suggest a place below. The organizer can add it to the itinerary.</Text> : null}
-          {plan.stops.map((stop, index) => <View key={stop.id} style={styles.person}>
-            <Text style={styles.copy}>{index + 1}. {stop.place.title}</Text>
-            {stop.arrivalTime ? <Text style={styles.muted}>{stop.arrivalTime}</Text> : null}
-            {stop.place.address ? <Text style={styles.muted}>{stop.place.address}</Text> : null}
-            <View style={styles.row}><Button label="Map" accessibilityLabel={`Map ${stop.place.title}`} size="compact" onPress={async () => { try { await Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(stop.place.latitude !== undefined && stop.place.longitude !== undefined ? `${stop.place.latitude},${stop.place.longitude}` : [stop.place.title, stop.place.address || plan.locationLabel].join(' '))}`); } catch { setNotice('Could not open the map.'); } }} />
-              {owner && !locked ? <Button label={editingStop === stop.id ? 'Done' : 'Edit stop'} accessibilityLabel={`Edit ${stop.place.title}`} size="compact" onPress={() => setEditingStop(editingStop === stop.id ? '' : stop.id)} /> : null}</View>
-            {owner && !locked && editingStop === stop.id ? <View style={styles.row}>
-              <Button label="Move up" accessibilityLabel={`Move ${stop.place.title} up`} size="compact" disabled={busy || !!syncError || index === 0} onPress={async () => { await mutate('plan.moveStop', { stopId: stop.id, direction: -1 }); }} />
-              <Button label="Move down" accessibilityLabel={`Move ${stop.place.title} down`} size="compact" disabled={busy || !!syncError || index === plan.stops.length - 1} onPress={async () => { await mutate('plan.moveStop', { stopId: stop.id, direction: 1 }); }} />
-              <Button label="Remove stop" accessibilityLabel={`Remove stop ${stop.place.title}`} tone="danger" size="compact" disabled={busy || !!syncError} onPress={async () => { await mutate('plan.removeStop', { stopId: stop.id }); }} />
-            </View> : null}
-          </View>)}
-        </View>
         <View style={styles.card}>
           <Text style={styles.title}>Suggestions & votes</Text>
           {!locked ? <>
@@ -278,7 +263,7 @@ export function SharedPlansScreen({ initialPlan, initialPlanId, onClose, onOpenF
             </View>;
           })}
         </View>
-        </>}
+        </> : null}
       </> : null}
       {updated && !syncError ? <Text style={styles.muted}>Updated {updated} · Syncs automatically while open</Text> : null}
     </ScrollView>

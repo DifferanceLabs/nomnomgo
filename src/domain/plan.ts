@@ -40,6 +40,7 @@ export type PlanSuggestion = {
 };
 
 export type PlanStop = {
+  kind?: 'food' | 'activity' | 'dessert' | 'idea';
   id: string;
   planId: string;
   position: number;

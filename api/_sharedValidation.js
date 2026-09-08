@@ -37,7 +37,7 @@ function place(value) {
   }
   return result;
 }
-function details(value, includeStops) {
+function details(value, includeStops, preserveIds = false) {
   need(value && typeof value === 'object');
   const result = { title: text(value.title, 160), intent: value.intent, locationLabel: text(value.locationLabel, 300),
     dateStart: date(value.dateStart), dateEnd: date(value.dateEnd), timeWindow: text(value.timeWindow, 100, true) };
@@ -47,11 +47,14 @@ function details(value, includeStops) {
     need(Array.isArray(value.stops) && value.stops.length <= 30);
     result.stops = value.stops.map((stop, index) => {
       const result = { id: `initial-${index}`, planId: '', position: index, place: place(stop.place) };
+      if (preserveIds) result.id = text(stop.id, 100);
+      if (stop.kind) { need(['food', 'activity', 'dessert', 'idea'].includes(stop.kind)); result.kind = stop.kind; }
       if (stop.travelMode) { need(['car', 'walk', 'bike', 'train', 'plane'].includes(stop.travelMode)); result.travelMode = stop.travelMode; }
       if (stop.arrivalTime) result.arrivalTime = text(stop.arrivalTime, 100);
       if (stop.durationMinutes !== undefined) { need(Number.isFinite(stop.durationMinutes) && stop.durationMinutes > 0 && stop.durationMinutes <= 10080); result.durationMinutes = stop.durationMinutes; }
       return result;
     });
+    need(new Set(result.stops.map((stop) => stop.id)).size === result.stops.length, 'Each stop needs a unique ID.');
   }
   return result;
 }
@@ -70,7 +73,7 @@ function sharedData(action, body) {
   if (['plan.suggest', 'plan.vote', 'plan.pick'].includes(action)) { need(UUID.test(body.suggestionId)); data.suggestionId = body.suggestionId; }
   if (action === 'plan.suggest') { need(['food', 'activity'].includes(body.slot)); data.slot = body.slot; data.place = place(body.place); }
   if (action === 'plan.vote') { need(typeof body.voted === 'boolean'); data.voted = body.voted; }
-  if (action === 'plan.update') data.details = details(body.details, false);
+  if (action === 'plan.update') data.details = details(body.details, body.replaceItinerary === true, true);
   if (['plan.removeStop', 'plan.moveStop'].includes(action)) data.stopId = text(body.stopId, 100);
   if (action === 'plan.moveStop') { need([-1, 1].includes(body.direction)); data.direction = body.direction; }
   return data;

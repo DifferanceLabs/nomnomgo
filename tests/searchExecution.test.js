@@ -291,6 +291,22 @@ function areaSelectionHarness(overrides = {}) {
   return { context, events, base, select: appHandler('selectSearchArea', context), load: appHandler('loadSearchAreas', context) };
 }
 
+test('shared editor restores stable stops, typed activity icons, single-clock time, and locked arrivals', () => {
+  const context = {};
+  for (const name of ['clockMinutes', 'clockTimeFromMinutes', 'formatClockTime', 'clockTimePlusMinutes', 'timeWindowFromStartClock', 'parseClockMinutes']) context[name] = appHandler(name, context);
+  const restore = appHandler('confirmedPlanFromSharedPlan', context);
+  const result = restore({ title: 'Lunch', ownerId: 'owner', status: 'locked', intent: 'both', locationLabel: 'Downtown', dateStart: '2026-09-08', dateEnd: '2026-09-08', timeWindow: '1pm', suggestions: [], stops: [
+    { id: 'stable', kind: 'food', place: { title: 'Tacos', provider: 'google_places', providerId: 'provider-id', latitude: 35, longitude: -82 }, durationMinutes: 75, arrivalTime: '1:20 PM' },
+  ] });
+  assert.equal(result.stops[0].key, 'stable');
+  assert.equal(result.stops[0].visualType, 'food');
+  assert.equal(result.stops[0].item.lat, 35);
+  assert.equal(result.timeWindow, '1:00 PM - 4:00 PM');
+  assert.equal(result.status, 'locked');
+  assert.equal(result.lockedArrivalTimes.stable.hours, 13);
+  assert.equal(result.lockedArrivalTimes.stable.minutes, 20);
+});
+
 test('date picker moves a multi-day plan across month boundaries without changing its time or locked plans', () => {
   const context = {
     isPlanLocked: false,

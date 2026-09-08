@@ -194,3 +194,27 @@ test('a participant can invite the configured operator even when the DL operator
   assert.equal(invited.participants.length,2);
   assert.equal((await ok('owner@example.com','plan.get',{planId:own.id})).plan.id,own.id);
 });
+
+test('full itinerary saves preserve IDs and shared membership, reject stale edits, and enforce owner and lock rules', async () => {
+  let shared = (await ok('owner@example.com', 'plan.create', { sourceKey: 'full-editor-test', details })).plan;
+  shared = (await ok('owner@example.com', 'plan.invite', { planId: shared.id, email: 'friend@example.com' })).plan;
+  const edit = { ...details, title: 'Full editor plan', dateStart: '2026-10-08', dateEnd: '2026-10-08', timeWindow: '4:00 PM - 7:00 PM', stops: [
+    { id: 'food-stable', kind: 'food', place: { provider: 'manual', title: 'Dinner' }, durationMinutes: 75, travelMode: 'car', arrivalTime: '4:20 PM' },
+    { id: 'activity-stable', kind: 'activity', place: { provider: 'manual', title: 'Escape room' }, durationMinutes: 90, travelMode: 'walk', arrivalTime: '5:50 PM' },
+  ] };
+  const save = { planId: shared.id, revision: shared.revision, replaceItinerary: true, details: edit };
+  assert.equal((await request('friend@example.com', 'plan.update', save)).statusCode, 403);
+  save.revision = (await ok('owner@example.com', 'plan.get', { planId: shared.id })).plan.revision;
+  shared = (await ok('owner@example.com', 'plan.update', save)).plan;
+  assert.deepEqual(shared.stops.map((stop) => stop.id), ['food-stable', 'activity-stable']);
+  assert.equal(shared.stops[1].kind, 'activity');
+  assert.equal(shared.stops[1].durationMinutes, 90);
+  assert.equal(shared.stops[1].travelMode, 'walk');
+  assert.equal(shared.participants.length, 2);
+  assert.equal(shared.dateStart, '2026-10-08');
+  assert.equal((await request('owner@example.com', 'plan.update', save)).statusCode, 409);
+  assert.equal((await ok('friend@example.com', 'plan.get', { planId: shared.id })).plan.stops[0].arrivalTime, '4:20 PM');
+  assert.equal((await request('owner@example.com', 'plan.update', { ...save, revision: shared.revision, details: { ...edit, stops: [edit.stops[0], edit.stops[0]] } })).statusCode, 400);
+  shared = (await ok('owner@example.com', 'plan.lock', { planId: shared.id, revision: shared.revision })).plan;
+  assert.equal((await request('owner@example.com', 'plan.update', { ...save, revision: shared.revision })).statusCode, 409);
+});

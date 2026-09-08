@@ -26,7 +26,7 @@ import { FriendsPanel } from './src/ui/FriendsPanel';
 import { RsvpBadge, RsvpSummary } from './src/ui/RsvpSummary';
 import { SharedPlanActivity } from './src/ui/SharedPlanActivity';
 import { SharedPlansScreen } from './src/ui/SharedPlansScreen';
-import { createSharedPlan, planIdFromUrl, type SharedPlan, type SharedPlanDraft } from './src/data/sharedPlans';
+import { changeSharedPlan, createSharedPlan, getSharedPlan, planIdFromUrl, type SharedPlan, type SharedPlanDraft } from './src/data/sharedPlans';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import Sortable, { type DropIndicatorComponentProps, type SortableFlexDragEndParams } from 'react-native-sortables';
 import Animated, { useAnimatedRef, useAnimatedStyle } from 'react-native-reanimated';
@@ -2924,11 +2924,41 @@ function ItineraryInsertionIndicator({ activeAnimationProgress, style }: DropInd
   return <Animated.View style={[style, styles.itineraryInsertionIndicator, animatedStyle]} />;
 }
 
+function confirmedPlanFromSharedPlan(shared: SharedPlan): ConfirmedPlan {
+  const windowStart = shared.timeWindow ? parseClockMinutes(shared.timeWindow) : undefined;
+  const lockedArrivalTimes: Record<string, StopTime> = {};
+  const stops: ItineraryStop[] = shared.stops.map((stop) => {
+    const slot = shared.suggestions.find((suggestion) => suggestion.id === stop.id)?.slot ||
+      (stop.kind === 'food' || stop.kind === 'dessert' || shared.intent === 'food' ? 'food' : 'activity');
+    const arrival = stop.arrivalTime ? parseClockMinutes(stop.arrivalTime) : undefined;
+    if (arrival !== undefined) lockedArrivalTimes[stop.id] = clockTimeFromMinutes(arrival);
+    return {
+      key: stop.id, slot, visualType: stop.kind,
+      item: { id: stop.place.providerId || stop.id, title: stop.place.title, subtitle: stop.place.subtitle || '',
+        address: stop.place.address, lat: stop.place.latitude, lng: stop.place.longitude,
+        kind: stop.place.provider === 'ticketmaster' ? 'event' : 'place', websiteUri: stop.place.sourceUrl },
+      durationMinutes: stop.durationMinutes, travelMode: stop.travelMode,
+    };
+  });
+  return { stops, title: shared.title, owner: shared.ownerId, intent: shared.intent,
+    status: shared.status === 'locked' ? 'locked' : 'draft',
+    dateWindow: 'custom', customDateRange: { start: shared.dateStart, end: shared.dateEnd },
+    planDateStart: shared.dateStart, planDateEnd: shared.dateEnd,
+    timeWindow: windowStart !== undefined ? timeWindowFromStartClock(clockTimeFromMinutes(windowStart)) : shared.timeWindow,
+    searchLocationLabel: shared.locationLabel, lockedArrivalTimes };
+}
+
 function NomNomGoApp() {
-  const [sharedWorkspace, setSharedWorkspace] = useState<{ id?: string; plan?: SharedPlan } | null>(() => {
+  const [sharedWorkspace, setSharedWorkspace] = useState<{ id?: string; plan?: SharedPlan; section?: 'plan' | 'people' } | null>(() => {
     const id = getAlphaAccount() ? planIdFromUrl() : null;
     return id ? { id } : null;
   });
+  const [sharedEditor, setSharedEditor] = useState<SharedPlan | null>(null);
+  const sharedEditorSnapshot = useRef('');
+  const [sharedEditorSaving, setSharedEditorSaving] = useState(false);
+  const sharedEditorSavingRef = useRef(false);
+  const [sharedReloadConfirm, setSharedReloadConfirm] = useState(false);
+  const [sharedEditorAccessError, setSharedEditorAccessError] = useState('');
   const sharedPublishingRef = useRef(false);
   const [accountSaveError, setAccountSaveError] = useState('');
   useEffect(() => subscribeAccountSaveError(setAccountSaveError), []);
@@ -3217,7 +3247,7 @@ function NomNomGoApp() {
     const now = new Date();
     return localDateClockMs(activePlanDateRange.start, now.getHours() * 60 + now.getMinutes());
   })();
-  const activePlanPeopleSummary = (plan.invitees || []).length ? unique([currentTesterName, ...(plan.invitees || [])]).join(', ') : 'Just me';
+  const activePlanPeopleSummary = sharedEditor ? `${sharedEditor.participants.length} people` : (plan.invitees || []).length ? unique([currentTesterName, ...(plan.invitees || [])]).join(', ') : 'Just me';
   const activePlanTimeLabel = activePlanTimePreference || 'Time TBD';
   const activePlanDateToken = conciseDateTitle(activePlanDateWindow, activePlanDateRange.start, activePlanCustomDateRange);
   const activePlanTimingLabel = activePlanDateWindow === 'today'
@@ -3282,7 +3312,19 @@ function NomNomGoApp() {
     return plan.stops.map((stop, index) => {
       const travelMode = effectiveTravelModeForStop(stop, index);
       const walkableAfterTesla = travelMode === 'walk' && isWalkableAfterTeslaStop(plan.stops[index - 1], stop);
-      const travelMinutes = estimateTravelMinutes(from, stop.item, travelMode);
+      let travelMinutes = estimateTravelMinutes(from, stop.item, travelMode);
+      const originalIndex = sharedEditor?.stops.findIndex((item) => item.id === stop.key) ?? -1;
+      const original = sharedEditor?.stops[originalIndex];
+      const previous = sharedEditor?.stops[originalIndex - 1];
+      if (original && original.travelMode === stop.travelMode &&
+          (previous?.id === plan.stops[index - 1]?.key)) {
+        const arrival = original.arrivalTime ? parseClockMinutes(original.arrivalTime) : undefined;
+        const before = previous?.arrivalTime ? parseClockMinutes(previous.arrivalTime) :
+          (sharedEditor?.timeWindow ? parsePlanningTimeWindow(sharedEditor.timeWindow)?.start ?? parseClockMinutes(sharedEditor.timeWindow) : undefined);
+        if (arrival !== undefined && before !== undefined) {
+          travelMinutes = Math.max(0, (arrival - before + 1440) % 1440 - (previous?.durationMinutes || 0));
+        }
+      }
       const currentCoords = stopCoords(stop.item);
       from = walkableAfterTesla && previousCoords ? previousCoords : currentCoords;
       previousCoords = currentCoords;
@@ -3351,7 +3393,7 @@ function NomNomGoApp() {
   const planFinishTimeLabel = finalStop
     ? formatClockAfterMinutes(planTotalMinutes, activePlanTimelineBaseMs)
     : 'Not set';
-  const planStartTimeLabel = finalStop
+  const planStartTimeLabel = finalStop || sharedEditor
     ? formatClockAfterMinutes(0, activePlanTimelineBaseMs)
     : 'Not set';
   const activePlanDateTimeLabel = firstStop
@@ -3584,7 +3626,11 @@ function NomNomGoApp() {
     setRouteImportOpen(false);
   };
 
-  const openHome = () => {
+  const openHome = (fromShared = false): void => {
+    if (sharedEditor && fromShared !== true) {
+      void saveSharedEditor().then((saved) => { if (saved) { setSharedEditor(null); openHome(true); } });
+      return;
+    }
     cancelSearch();
     closeTransientSurfaces();
     setHomeOpen(true);
@@ -3779,7 +3825,11 @@ function NomNomGoApp() {
     });
   };
 
-  const openPlanSetup = (timing: 'now' | 'later') => {
+  const openPlanSetup = (timing: 'now' | 'later', fromShared = false): void => {
+    if (sharedEditor && !fromShared) {
+      void saveSharedEditor().then((saved) => { if (saved) { setSharedEditor(null); openPlanSetup(timing, true); } });
+      return;
+    }
     closeTransientSurfaces();
     setNowMode('closed');
     const nextDateWindow: DateWindowId = timing === 'now' ? 'today' : 'tomorrow';
@@ -4015,9 +4065,13 @@ function NomNomGoApp() {
     addLog('Navigation: current plan');
   };
 
-  const handleMainNavigation = (key: MainNavigationKey) => {
+  const handleMainNavigation = (key: MainNavigationKey, fromShared = false): void => {
+    if (sharedEditor && !fromShared) {
+      void saveSharedEditor().then((saved) => { if (saved) { setSharedEditor(null); handleMainNavigation(key, true); } });
+      return;
+    }
     if (key === 'home') {
-      openHome();
+      openHome(fromShared);
       return;
     }
     if (key === 'plans') {
@@ -6434,7 +6488,91 @@ function NomNomGoApp() {
   };
 
   const planTitle = plan.title || activeBetaPlan?.title || titleForPlanStops(plan.stops);
-  const isPlanLocked = plan.status === 'locked';
+  const sharedEditorReadOnly = Boolean(sharedEditor && sharedEditor.ownerId !== getAlphaAccount()?.id);
+  const isPlanLocked = plan.status === 'locked' || sharedEditorReadOnly;
+  const sharedEditorDirty = Boolean(sharedEditor && JSON.stringify(plan) !== sharedEditorSnapshot.current);
+  useEffect(() => {
+    if (!sharedEditorDirty || typeof window === 'undefined') return;
+    const preventUnload = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ''; };
+    window.addEventListener('beforeunload', preventUnload);
+    return () => window.removeEventListener('beforeunload', preventUnload);
+  }, [sharedEditorDirty]);
+  const openSharedPlanEditor = (shared: SharedPlan) => {
+    const restored = confirmedPlanFromSharedPlan(shared);
+    cancelSearch();
+    sharedEditorSnapshot.current = JSON.stringify(restored);
+    setSharedReloadConfirm(false); setSharedEditorAccessError('');
+    setSharedEditor(shared); setPlan(restored); setSharedWorkspace(null);
+    setPlanTimes({}); setArrivalTimes({}); setExpandedStopKey(null); setTimeEditorKey(null);
+    setActiveBetaPlanId(null); setActivePlanningSessionId(null);
+    setSelectedDateWindow('custom'); selectedDateWindowRef.current = 'custom';
+    const range = { start: shared.dateStart, end: shared.dateEnd };
+    setCustomDateRange(range); customDateRangeRef.current = range;
+    setCustomDateStartInput(range.start); setCustomDateEndInput(range.end);
+    setSearchLocationOverride(shared.locationLabel); setSearchLocation(null);
+    setSelectedTime(timePreferenceForWindow(restored.timeWindow, restored.timeWindow || 'Now'));
+    setHomeOpen(false); setNowMode('closed'); setPlanSetupOpen(false);
+    setSavedPlansLandingOpen(false); setSavedPlansOpen(false); setPreferencesOpen(false);
+    setPlanSettingsOpen(false); setAddStopMenuOpen(false); setCards([]); setHasInitiatedSearch(false);
+    scrollToPlan();
+  };
+  const saveSharedEditor = async (): Promise<SharedPlan | null> => {
+    if (!sharedEditor || sharedEditorSavingRef.current) return null;
+    if (!sharedEditorDirty || sharedEditorReadOnly || sharedEditor.status === 'locked') return sharedEditor;
+    sharedEditorSavingRef.current = true; setSharedEditorSaving(true);
+    const snapshot = JSON.stringify(plan);
+    try {
+      const details: SharedPlanDraft = {
+        title: plan.title || sharedEditor.title, intent: plan.intent || sharedEditor.intent,
+        locationLabel: searchLocationLabel || sharedEditor.locationLabel,
+        dateStart: activePlanDateRange.start, dateEnd: activePlanDateRange.end,
+        timeWindow: activePlanTimeWindow,
+        stops: plan.stops.map((stop, index) => {
+          const original = sharedEditor.stops.find((item) => item.id === stop.key);
+          const item = stop.item;
+          return { id: stop.key, planId: sharedEditor.id, position: index, kind: itineraryKindForStop(stop),
+            place: original?.place || (typeof item === 'string' ? { title: item, provider: 'manual' as const } : {
+              provider: item.kind === 'event' ? 'ticketmaster' as const : 'google_places' as const,
+              providerId: item.id, title: item.title, subtitle: item.subtitle, address: item.address,
+              latitude: item.lat, longitude: item.lng, sourceUrl: item.websiteUri || item.eventUrl }),
+            durationMinutes: durationForStop(stop), travelMode: stop.travelMode,
+            arrivalTime: formatClockTime(displayedArrivalTimeForStop(stop, index)) };
+        }),
+      };
+      const saved = await changeSharedPlan(sharedEditor, 'plan.update', { details, replaceItinerary: true });
+      sharedEditorSnapshot.current = snapshot;
+      setSharedEditor(saved); showToast('Shared plan saved');
+      return saved;
+    } catch (error) {
+      showAppNotice('Shared plan not saved', `${compactError(error)} Your edits are still here. Reload the shared plan to review its latest version before trying again.`);
+      return null;
+    } finally { sharedEditorSavingRef.current = false; setSharedEditorSaving(false); }
+  };
+  const openSharedPeople = async () => {
+    const saved = await saveSharedEditor();
+    if (!saved) return;
+    setSharedEditor(null); setSharedWorkspace({ plan: saved, section: 'people' });
+  };
+  useEffect(() => {
+    if (!sharedEditor) return;
+    let active = true;
+    const refresh = async () => {
+      if (sharedEditorSavingRef.current) return;
+      try {
+        const latest = await getSharedPlan(sharedEditor.id);
+        if (!active) return;
+        setSharedEditorAccessError('');
+        if (latest.revision !== sharedEditor.revision && !sharedEditorDirty) openSharedPlanEditor(latest);
+      } catch (error) {
+        if (active && [401, 403, 404].includes((error as { status?: number }).status || 0)) setSharedEditorAccessError(compactError(error));
+      }
+    };
+    const timer = setInterval(() => { void refresh(); }, 15000);
+    if (typeof window !== 'undefined') window.addEventListener('focus', refresh);
+    return () => { active = false; clearInterval(timer); if (typeof window !== 'undefined') window.removeEventListener('focus', refresh); };
+    // Local edits stay intact; the server rejects stale revisions on save.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sharedEditor?.id, sharedEditor?.revision, sharedEditorDirty]);
   const savePlanStartDate = (date: Date) => {
     if (isPlanLocked || !Number.isFinite(date.getTime())) return;
     const start = formatDateInput(date);
@@ -6509,7 +6647,7 @@ function NomNomGoApp() {
       selectedFeatures: stop.selectedFeatures || [],
     })),
   });
-  const isCurrentPlanSaved = Boolean(plan.savedPlanId) ||
+  const isCurrentPlanSaved = sharedEditor ? !sharedEditorDirty : Boolean(plan.savedPlanId) ||
     visibleSavedPlans.some((saved) =>
     saved.source === 'saved' && savedPlanContentSignature(saved) === currentPlanContentSignature,
   );
@@ -6734,6 +6872,14 @@ function NomNomGoApp() {
   };
 
   const lockPlan = async () => {
+    if (sharedEditor) {
+      if (sharedEditorReadOnly || !plan.stops.length) return;
+      const saved = await saveSharedEditor();
+      if (!saved) return;
+      try { openSharedPlanEditor(await changeSharedPlan(saved, 'plan.lock')); }
+      catch (error) { showAppNotice('Could not lock shared plan', compactError(error)); }
+      return;
+    }
     cancelSearch();
     if (!plan.stops.length) {
       showAppNotice('Choose a final option', 'Add a food place, activity, or participant suggestion before finalizing.');
@@ -6773,6 +6919,12 @@ function NomNomGoApp() {
   };
 
   const unlockPlan = () => {
+    if (sharedEditor) {
+      if (sharedEditorReadOnly) return;
+      void changeSharedPlan(sharedEditor, 'plan.reopen').then(openSharedPlanEditor)
+        .catch((error) => showAppNotice('Could not reopen shared plan', compactError(error)));
+      return;
+    }
     setPlan((prev) => ({ ...prev, status: 'draft', lockedArrivalTimes: undefined, savedPlanId: undefined }));
     if (activeBetaPlanId) {
       void patchBetaPlan(activeBetaPlanId, (record) => ({ ...record, status: 'planning' }));
@@ -6959,6 +7111,7 @@ function NomNomGoApp() {
   };
 
   const saveCurrentPlan = async () => {
+    if (sharedEditor) { await saveSharedEditor(); return; }
     if (!plan.stops.length) return;
     const saved = makeSavedPlan(plan.stops, 'saved');
     const signature = savedPlanContentSignature(saved);
@@ -7433,6 +7586,7 @@ function NomNomGoApp() {
   };
 
   const openCurrentSharedPlan = async () => {
+    if (sharedEditor) { await openSharedPeople(); return; }
     if (sharedPublishingRef.current) return;
     sharedPublishingRef.current = true;
     try {
@@ -7442,6 +7596,7 @@ function NomNomGoApp() {
         dateStart: record.planDateStart || activePlanDateRange.start,
         dateEnd: record.planDateEnd || activePlanDateRange.end, timeWindow: record.timeWindow,
         stops: record.stops.map((stop, index) => ({
+          kind: itineraryKindForStop(stop),
           id: stop.key, planId: '', position: index,
           place: typeof stop.item === 'string' ? { provider: 'manual', title: stop.item } : {
             provider: stop.item.kind === 'event' ? 'ticketmaster' : 'google_places',
@@ -7801,6 +7956,11 @@ function NomNomGoApp() {
     );
   }
 
+  if (sharedEditor && sharedEditorAccessError) return <SafeAreaView style={styles.safeArea}>
+    <Text style={styles.authHint}>{sharedEditorAccessError}</Text>
+    <Button label="Back to plans" onPress={() => { setSharedEditor(null); setSharedEditorAccessError(''); setSharedWorkspace({}); }} />
+  </SafeAreaView>;
+
   if (sharedWorkspace && getAlphaAccount() && authLoaded) {
     const closeSharedWorkspace = () => {
       setSharedWorkspace(null);
@@ -7810,7 +7970,7 @@ function NomNomGoApp() {
         window.history.replaceState({}, '', url.toString());
       }
     };
-    return <SharedPlansScreen initialPlan={sharedWorkspace.plan} initialPlanId={sharedWorkspace.id} onClose={() => { closeSharedWorkspace(); openHome(); }} onNavigate={(key) => {
+    return <SharedPlansScreen initialPlan={sharedWorkspace.plan} initialPlanId={sharedWorkspace.id} initialSection={sharedWorkspace.section} onOpenEditor={openSharedPlanEditor} onClose={() => { closeSharedWorkspace(); openHome(); }} onNavigate={(key) => {
       closeSharedWorkspace();
       handleMainNavigation(key);
     }} onOpenFriends={() => {
@@ -8143,6 +8303,7 @@ function NomNomGoApp() {
           <Text style={styles.toastText}>{toastMessage}</Text>
         </View>
       ) : null}
+      <Modal visible={sharedEditorSaving} transparent><View style={{ flex: 1, backgroundColor: colors.overlay, alignItems: 'center', justifyContent: 'center' }}><ActivityIndicator color={colors.cyan} /><Text style={styles.authHint}>Saving shared plan…</Text></View></Modal>
 
       {getAlphaAccount() && homeOpen && !planSetupOpen ? <SharedPlanActivity onOpenPlan={(id) => setSharedWorkspace({ id })} /> : null}
 
@@ -8921,6 +9082,20 @@ function NomNomGoApp() {
         style={[styles.planBox, isDarkMode && styles.darkPanel]}
         onLayout={(event) => { planBoxYRef.current = event.nativeEvent.layout.y; }}
       >
+        {sharedEditor ? <View style={{ gap: spacing.xs }}>
+          <View style={styles.buttonRow} accessibilityRole="tablist">
+            <TouchableOpacity accessibilityRole="tab" accessibilityLabel="Plan" accessibilityState={{ selected: true }} style={styles.itineraryAddStopButton}><Text style={styles.itineraryAddStopText}>Plan</Text></TouchableOpacity>
+            <TouchableOpacity accessibilityRole="tab" accessibilityLabel="People" accessibilityState={{ selected: false, disabled: sharedEditorSaving }} disabled={sharedEditorSaving} onPress={() => { void openSharedPeople(); }} style={styles.itineraryAddStopButton}><Text style={styles.itineraryAddStopText}>People ({sharedEditor.participants.length})</Text></TouchableOpacity>
+          </View>
+          <RsvpSummary participants={sharedEditor.participants} />
+          <Text style={styles.itinerarySectionHint}>{sharedEditorReadOnly ? 'The organizer edits this itinerary. Use People to suggest places and RSVP.' : sharedEditorDirty ? 'Unsaved shared plan changes' : 'Shared plan saved'}</Text>
+          {!sharedEditorReadOnly && !isPlanLocked && !plan.stops.length ? <Button label={sharedEditorSaving ? 'Saving…' : 'Save shared plan'} onPress={() => { void saveSharedEditor(); }} disabled={sharedEditorSaving || !sharedEditorDirty} compact /> : null}
+          <Button label="Reload shared plan" onPress={() => {
+            if (sharedEditorDirty) { setSharedReloadConfirm(true); return; }
+            void getSharedPlan(sharedEditor.id).then(openSharedPlanEditor).catch((error) => showAppNotice('Could not reload plan', compactError(error)));
+          }} compact />
+          {sharedReloadConfirm ? <View><Text style={styles.itinerarySectionHint}>Discard unsaved edits and load the current shared plan?</Text><Button label="Keep editing" onPress={() => setSharedReloadConfirm(false)} compact /><Button label="Discard edits and reload" onPress={() => { void getSharedPlan(sharedEditor.id).then(openSharedPlanEditor).catch((error) => showAppNotice('Could not reload plan', compactError(error))); }} compact /></View> : null}
+        </View> : null}
         {!isPlanLocked ? (
           <View style={styles.itineraryBuilder}>
             <View style={styles.itineraryPlanHeader}>
@@ -8938,7 +9113,7 @@ function NomNomGoApp() {
               </Text>
             </View>
 
-            {getAlphaAccount() ? (
+            {getAlphaAccount() && !sharedEditor ? (
               <View style={styles.itineraryCollaborationStrip}>
                 <Text style={styles.itineraryCollaborationSummary}>Invite people and manage live RSVPs in your shared plan. Once shared, edit the group itinerary there.</Text>
                 <Button label="Open shared plan & RSVPs" onPress={openCurrentSharedPlan} compact />
@@ -9157,7 +9332,7 @@ function NomNomGoApp() {
                   </View>
                 ) : null}
 
-                {betaPlanSuggestions.length ? (
+                {!sharedEditor && betaPlanSuggestions.length ? (
                   <View style={styles.itineraryCandidateList}>
                     <Text style={styles.itineraryCandidateHeading}>Suggestions</Text>
                     {betaPlanSuggestions.map((suggestion) => {
@@ -9191,7 +9366,7 @@ function NomNomGoApp() {
                   </View>
                 ) : null}
 
-                <View style={styles.itineraryGroupSuggestion}>
+                {!sharedEditor ? <View style={styles.itineraryGroupSuggestion}>
                   <Text style={styles.itineraryCandidateHeading}>Suggest to the group</Text>
                   <TextInput
                     style={styles.itineraryIdeaInput}
@@ -9226,14 +9401,14 @@ function NomNomGoApp() {
                       style={[styles.itinerarySuggestionButton, !betaSuggestionInput.trim() && styles.itineraryControlDisabled]}
                     >
                       <Ionicons name="walk-outline" size={iconSizes.xs} color={semanticTones.activity.accent} />
-                      <Text style={styles.itinerarySuggestionButtonText}>Activity</Text>
+                    <Text style={styles.itinerarySuggestionButtonText}>Activity</Text>
                     </TouchableOpacity>
                   </View>
-                </View>
+                </View> : null}
               </View>
             ) : null}
 
-            {plan.stops.length ? (
+            {plan.stops.length || sharedEditor ? (
               <>
                 <View style={styles.itinerarySummary}>
                   <View style={styles.itinerarySummaryValues}>
@@ -9352,7 +9527,7 @@ function NomNomGoApp() {
           </View>
         ) : null}
 
-        {hasAnyActiveStop && isPlanLocked ? (
+        {(hasAnyActiveStop || sharedEditor) && isPlanLocked ? (
           <>
           <View style={[styles.lockedPlanCard, isDarkMode && styles.darkCard]}>
             <View style={styles.lockedPlanCardHeader}>
@@ -9397,7 +9572,7 @@ function NomNomGoApp() {
               <RsvpControl value={currentBetaRsvp} onChange={setActiveBetaRsvp} />
             </View>
             </> : <View style={styles.lockedPlanRsvp}>
-              <Text style={[styles.lockedPlanMeta, isDarkMode && styles.darkMutedText]}>Personal saved copy. Open the shared plan for current RSVPs and group changes.</Text>
+              <Text style={[styles.lockedPlanMeta, isDarkMode && styles.darkMutedText]}>{sharedEditor ? 'Shared itinerary. Open People for RSVPs and group suggestions.' : 'Personal saved copy. Open the shared plan for current RSVPs and group changes.'}</Text>
               <Button label="Open shared plan & RSVPs" onPress={openCurrentSharedPlan} compact />
             </View>}
             <View style={styles.lockedStopList}>
@@ -9435,7 +9610,7 @@ function NomNomGoApp() {
             <Button label="Add to Calendar" onPress={addActiveBetaPlanToCalendar} success compact />
             <Button label="Share" onPress={() => { if (getAlphaAccount()) void openCurrentSharedPlan(); else setSharePreviewOpen(true); }} compact />
             {!isCurrentPlanSaved ? <Button label="Save" onPress={saveCurrentPlan} compact /> : null}
-            <Button label="Unlock/Edit" onPress={unlockPlan} compact />
+            {!sharedEditorReadOnly ? <Button label="Unlock/Edit" onPress={unlockPlan} compact /> : null}
           </View>
           </>
         ) : null}
@@ -9698,7 +9873,7 @@ function NomNomGoApp() {
           style={[styles.savedPlansBox, isLightMode && styles.lightPanel, isDarkMode && styles.darkPanel]}
           onLayout={(event) => { savedPlansYRef.current = event.nativeEvent.layout.y; }}
         >
-          <TouchableOpacity style={styles.savedPlansHeader} onPress={openHome} accessibilityRole="button" accessibilityLabel="Open NomNomGo home">
+          <TouchableOpacity style={styles.savedPlansHeader} onPress={() => openHome()} accessibilityRole="button" accessibilityLabel="Open NomNomGo home">
             <View style={styles.sectionHeaderTextBlock}>
               <Text style={[styles.sectionTitle, isLightMode && styles.lightSectionTitle, isDarkMode && styles.darkText]}>
                 {getAlphaAccount() ? 'Saved plans' : savedPlansNavigationSource === 'plans' ? 'Plans' : 'Saved/Shared Plans'}
