@@ -335,7 +335,12 @@ test('the first Friends action opens RSVPs directly after creating the shared pl
 });
 
 test('shared editor restores stable stops, typed activity icons, single-clock time, and locked arrivals', () => {
-  const context = { scheduleFromFirstArrival: require('../.route-import-test-build/src/domain/itinerary').scheduleFromFirstArrival };
+  const context = { ...require('../.route-import-test-build/src/domain/itinerary') };
+  const sharedModule = { exports: {}, require: (name) => name === '../domain/itinerary' ? context : {} };
+  vm.runInNewContext(ts.transpileModule(fs.readFileSync('src/data/sharedPlans.ts', 'utf8'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
+  }).outputText, sharedModule);
+  context.sharedPlanStopKind = sharedModule.exports.sharedPlanStopKind;
   for (const name of ['clockMinutes', 'clockTimeFromMinutes', 'formatClockTime', 'clockTimePlusMinutes', 'timeWindowFromStartClock', 'parseClockMinutes']) context[name] = appHandler(name, context);
   const restore = appHandler('confirmedPlanFromSharedPlan', context);
   const result = restore({ title: 'Lunch', ownerId: 'owner', status: 'locked', intent: 'both', locationLabel: 'Downtown', dateStart: '2026-09-08', dateEnd: '2026-09-08', timeWindow: '1pm', suggestions: [], stops: [

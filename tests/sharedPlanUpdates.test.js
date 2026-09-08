@@ -10,6 +10,49 @@ function load(path, dependencies = {}) {
   return context.exports;
 }
 const updates = load('src/data/sharedPlans.ts', { '../domain/itinerary': load('src/domain/itinerary.ts') });
+const { planLocationLabel } = load('src/domain/planLocation.ts');
+
+test('plan location uses the common destination area, or the first stop when areas differ or span more than 25 km', () => {
+  const food = { title: 'Dali food', address: '123 Main St, Murfreesboro, TN 37130, USA', latitude: 35.846, longitude: -86.39 };
+  const activity = { title: 'Radical Escape Rooms', address: '456 Main St, Murfreesboro, TN 37130', latitude: 35.86, longitude: -86.4 };
+  const before = JSON.stringify([food, activity]);
+  assert.equal(planLocationLabel([food, activity]), 'Murfreesboro, TN');
+  assert.equal(planLocationLabel([food]), 'Murfreesboro, TN');
+  assert.equal(JSON.stringify([food, activity]), before);
+  const far = { ...activity, address: '123 Main St, Nashville, TN 37201', latitude: 36.16, longitude: -86.78 };
+  assert.equal(planLocationLabel([food, far]), 'Dali food · Murfreesboro, TN');
+  assert.equal(planLocationLabel([far, food]), 'Radical Escape Rooms · Nashville, TN');
+  assert.equal(planLocationLabel([food, { ...far, address: food.address }]), 'Dali food · Murfreesboro, TN');
+  assert.equal(planLocationLabel([food, { ...activity, address: 'Murfreesboro, AR 71958', latitude: undefined }]), 'Dali food · Murfreesboro, TN');
+});
+
+test('location handles missing coordinates and addresses without exposing an origin or inventing a city from a venue name', () => {
+  const first = { title: 'Dali food', subtitle: 'Murfreesboro, TN - Local search' };
+  assert.equal(planLocationLabel([first, { title: 'Escape room', address: '123 Main St, Murfreesboro, TN' }]), 'Murfreesboro, TN');
+  assert.equal(planLocationLabel([{ ...first, latitude: NaN, longitude: Infinity }]), 'Murfreesboro, TN');
+  assert.equal(planLocationLabel([{ title: 'Dali food' }, { title: 'Radical Escape Rooms' }]), 'Dali food');
+  assert.equal(planLocationLabel([{ title: 'Dali food', address: '123 Main St' }]), 'Dali food');
+  assert.equal(planLocationLabel([]), 'Location to be decided');
+});
+
+test('older shared plans recover food icons without changing stops, explicit categories, or activity suggestions', () => {
+  const plan = { intent: 'both', suggestions: [] };
+  const stop = { id: 'initial-1', kind: 'activity', place: { title: 'Dali food', provider: 'google_places' }, durationMinutes: 60, arrivalTime: '2:31 PM' };
+  const before = JSON.stringify(stop);
+  assert.equal(updates.sharedPlanStopKind(plan, stop), 'food');
+  assert.equal(updates.sharedPlanStopKind(plan, { ...stop, kind: undefined }), 'food');
+  assert.equal(JSON.stringify(stop), before);
+  const titled = (title) => ({ ...stop, place: { ...stop.place, title } });
+  for (const title of ['Radical Escape Rooms', 'Food Museum', 'Food Tour', 'Cooking Class']) {
+    assert.equal(updates.sharedPlanStopKind(plan, titled(title)), 'activity');
+  }
+  assert.equal(updates.sharedPlanStopKind(plan, { ...stop, kind: 'idea' }), 'idea');
+  assert.equal(updates.sharedPlanStopKind(plan, { ...stop, kind: 'dessert' }), 'dessert');
+  assert.equal(updates.sharedPlanStopKind(plan, { ...stop, place: { ...stop.place, provider: 'ticketmaster' } }), 'activity');
+  assert.equal(updates.sharedPlanStopKind({ ...plan, suggestions: [{ id: stop.id, slot: 'activity' }] }, stop), 'activity');
+  assert.equal(updates.sharedPlanStopKind({ ...plan, suggestions: [{ id: stop.id, slot: 'food' }] }, titled('Gyros King')), 'food');
+  assert.equal(updates.sharedPlanStopKind(plan, { ...titled('Gyros King'), id: 'food-place-123' }), 'food');
+});
 
 test('shared header reports the first arrival and actual finish without modifying a locked plan', () => {
   const plan = { status: 'locked', dateStart: '2026-09-09', dateEnd: '2026-09-09', timeWindow: '1:00 PM - 4:00 PM', stops: [

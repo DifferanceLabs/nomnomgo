@@ -1,10 +1,24 @@
 import { accountRequest } from './accountStorage';
-import type { Plan, PlanParticipant } from '../domain/plan';
-import { itineraryArrivalRange, scheduleFromFirstArrival } from '../domain/itinerary';
+import type { Plan, PlanParticipant, PlanStop } from '../domain/plan';
+import { inferItineraryStopKind, itineraryArrivalRange, scheduleFromFirstArrival } from '../domain/itinerary';
 
 export type SharedPlan = Omit<Plan, 'participants'> & { revision: number; participants: (PlanParticipant & { joined: boolean })[] };
 export type SharedPlanDraft = Pick<Plan, 'title' | 'intent' | 'locationLabel' | 'dateStart' | 'dateEnd' | 'timeWindow' | 'stops'>;
 export type SharedPlanSummary = Pick<SharedPlan, 'id' | 'title' | 'status' | 'dateStart' | 'locationLabel' | 'ownerId'> & { dateEnd?: string; timeWindow?: string; rsvp?: string; revision?: number; participants?: SharedPlan['participants'] };
+
+export function sharedPlanStopKind(plan: Pick<Plan, 'intent' | 'suggestions'>, stop: PlanStop) {
+  if (stop.kind && stop.kind !== 'activity') return stop.kind;
+  const suggestion = plan.suggestions.find((item) => item.id === stop.id);
+  // Early shared plans omitted stop categories; reopening could then save the
+  // generic activity fallback. Recover food from its original slot or a clear
+  // dining title, without turning food-related activities into restaurant stops.
+  const title = stop.place.title;
+  const diningTitle = /\b(food|restaurant|diner|pizzeria|taqueria|bistro|grill|cafe|coffee|bakery|dessert)\b/i.test(title) &&
+    !/\b(museum|tour|class|workshop|festival|escape|arcade|bowling)\b/i.test(title);
+  const slot = suggestion?.slot || (/^(food|activity)-/.exec(stop.id)?.[1] as 'food' | 'activity' | undefined) ||
+    (stop.place.provider !== 'ticketmaster' && diningTitle ? 'food' : stop.kind === 'activity' ? 'activity' : plan.intent === 'food' ? 'food' : 'activity');
+  return inferItineraryStopKind({ slot, title });
+}
 
 export function sharedPlanSchedule(plan: SharedPlan) {
   const schedule = scheduleFromFirstArrival({ ...plan, firstArrival: plan.stops[0]?.arrivalTime });

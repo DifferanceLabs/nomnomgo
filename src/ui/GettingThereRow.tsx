@@ -36,8 +36,9 @@ async function getCurrentJourneyOrigin(): Promise<Origin> {
 
 // Each person's approach journey is account-scoped local data, separate from
 // shared stops. It remains editable when the organizer locks the itinerary.
-export function GettingThereRow({ tripKey, arrivalMs, initialOrigin, initialMode = 'car', destinationLocated, estimateMinutes, resolveOrigin, onChange }: {
+export function GettingThereRow({ tripKey, arrivalMs, initialOrigin, initialMode = 'car', editing = false, destinationLocated, estimateMinutes, resolveOrigin, onChange }: {
   tripKey: string; arrivalMs: number; initialOrigin?: Origin; initialMode?: TravelMode;
+  editing?: boolean;
   destinationLocated: boolean;
   estimateMinutes: (origin: Origin | undefined, mode: TravelMode) => number;
   resolveOrigin: (query: string) => Promise<Origin | undefined>;
@@ -128,7 +129,7 @@ export function GettingThereRow({ tripKey, arrivalMs, initialOrigin, initialMode
     setAddressKind(kind); setAddress(kind === 'home' ? home?.label || '' : journey.source === 'custom' ? origin?.label || '' : ''); setError('');
   };
 
-  return <View style={styles.container}>
+  return <View style={[styles.container, editing && styles.editingContainer]}>
     <TouchableOpacity accessibilityRole="button" accessibilityLabel="Edit travel to first stop" accessibilityState={{ expanded, disabled: !ready }}
       disabled={!ready} onPress={() => { setExpanded(!expanded); setMinutesDraft(String(minutes)); }} style={styles.summary}>
       <Ionicons name={mode.icon} size={20} color={colors.cyan} />
@@ -175,7 +176,8 @@ function Choice({ label, selected, disabled, onPress }: { label: string; selecte
     style={[styles.choice, selected && styles.selected, disabled && { opacity: 0.5 }]}><Text style={styles.copy}>{label}</Text></TouchableOpacity>;
 }
 const styles = StyleSheet.create({
-  container: { borderLeftWidth: 2, borderColor: colors.cyan, marginLeft: 28, backgroundColor: colors.surface, borderRadius: 10 },
+  container: { borderLeftWidth: 2, borderColor: colors.cyan, backgroundColor: colors.surface, borderRadius: 10 },
+  editingContainer: { marginLeft: 28 },
   summary: { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 12, minHeight: 58 },
   summaryText: { flex: 1, gap: 4 }, title: { color: colors.cyan, fontSize: 13, lineHeight: 18, fontWeight: '700' },
   travelDetails: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 8, rowGap: 2 },

@@ -325,7 +325,7 @@ export function ItineraryStopRow({
     <View
       accessible
       accessibilityLabel={`${travelDuration} ${travelLabel} to next stop`}
-      style={styles.travelConnector}
+      style={[styles.travelConnector, readOnly && styles.travelConnectorReadOnly]}
       testID={testID ? `${testID}-travel-to-next` : undefined}
     >
       <View style={styles.travelLine} />
@@ -363,7 +363,7 @@ export function ItineraryStopRow({
               ))}
             </View>
           </View>
-        </Sortable.Handle> : <View style={styles.handle} />}
+        </Sortable.Handle> : null}
 
         <Animated.View
           style={[
@@ -756,6 +756,9 @@ const styles = StyleSheet.create({
     backgroundColor: semanticTones.travel.border,
     flex: 1,
     height: borders.thin,
+  },
+  travelConnectorReadOnly: {
+    marginLeft: 0,
   },
   travelDuration: {
     color: colors.cyan,

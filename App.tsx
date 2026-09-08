@@ -28,8 +28,9 @@ import { SharedPlanActivity } from './src/ui/SharedPlanActivity';
 import { SharedPlansScreen } from './src/ui/SharedPlansScreen';
 import { PlanWorkspaceHeader } from './src/ui/PlanWorkspaceHeader';
 import { GettingThereRow, type GettingThereSummary } from './src/ui/GettingThereRow';
+import { planLocationLabel } from './src/domain/planLocation';
 import { startForegroundRefresh } from './src/data/foregroundRefresh';
-import { changeSharedItinerary, createSharedPlan, getSharedPlan, newerSharedPlan, sharedItinerarySignature, planIdFromUrl, planDateRangeLabel, type SharedPlan, type SharedPlanDraft } from './src/data/sharedPlans';
+import { changeSharedItinerary, createSharedPlan, getSharedPlan, newerSharedPlan, sharedItinerarySignature, sharedPlanStopKind, planIdFromUrl, planDateRangeLabel, type SharedPlan, type SharedPlanDraft } from './src/data/sharedPlans';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import Sortable, { type DropIndicatorComponentProps, type SortableFlexDragEndParams } from 'react-native-sortables';
 import Animated, { useAnimatedRef, useAnimatedStyle } from 'react-native-reanimated';
@@ -2933,12 +2934,12 @@ function confirmedPlanFromSharedPlan(shared: SharedPlan): ConfirmedPlan {
   const schedule = scheduleFromFirstArrival({ ...shared, firstArrival: shared.stops[0]?.arrivalTime });
   const lockedArrivalTimes: Record<string, StopTime> = {};
   const stops: ItineraryStop[] = shared.stops.map((stop) => {
-    const slot = shared.suggestions.find((suggestion) => suggestion.id === stop.id)?.slot ||
-      (stop.kind === 'food' || stop.kind === 'dessert' || shared.intent === 'food' ? 'food' : 'activity');
+    const kind = sharedPlanStopKind(shared, stop);
+    const slot = kind === 'food' || kind === 'dessert' ? 'food' : 'activity';
     const arrival = stop.arrivalTime ? parseClockMinutes(stop.arrivalTime) : undefined;
     if (arrival !== undefined) lockedArrivalTimes[stop.id] = clockTimeFromMinutes(arrival);
     return {
-      key: stop.id, slot, visualType: stop.kind,
+      key: stop.id, slot, visualType: kind,
       item: { id: stop.place.providerId || stop.id, title: stop.place.title, subtitle: stop.place.subtitle || '',
         address: stop.place.address, lat: stop.place.latitude, lng: stop.place.longitude,
         kind: stop.place.provider === 'ticketmaster' ? 'event' : 'place', websiteUri: stop.place.sourceUrl },
@@ -3265,11 +3266,14 @@ function NomNomGoApp() {
     ? activePlanTimeLabel
     : [activePlanTimeLabel, activePlanDateToken].filter(Boolean).join(' ');
   const activePlanContextLabel = [activePlanTimingLabel, activePlanPeopleSummary].filter(Boolean).join(' | ');
+  const planLocation = planLocationLabel(plan.stops.map(({ item }) => typeof item === 'string'
+    ? { title: item }
+    : { title: item.title, address: item.address, subtitle: item.subtitle, latitude: item.lat, longitude: item.lng }));
   const planHeaderMeta = [
     plan.routeProvider === 'google_maps' ? 'Google Maps draft route' : undefined,
     activeRoadTripMode ? 'Road trip' : undefined,
     activePlanContextLabel,
-    searchLocationLabel,
+    planLocation,
     plan.stops.length ? `${plan.stops.length} stop${plan.stops.length === 1 ? '' : 's'}` : undefined,
   ].filter(Boolean).join(' | ');
   const showChargingStopIdeas = BETA_FEATURES.roadTrips &&
@@ -8297,7 +8301,7 @@ function NomNomGoApp() {
     >
       {showPlanWorkspace ? <PlanWorkspaceHeader section="plan" count={sharedEditor?.participants.length}
         title={plan.title ?? planTitle} dateLabel={planDateRangeLabel(activePlanDateRange.start, activePlanDateRange.end)}
-        timeLabel={firstStop ? `${planStartTimeLabel} – ${planFinishTimeLabel}` : activePlanTimeWindow || 'Time to be decided'} locationLabel={searchLocationLabel}
+        timeLabel={firstStop ? `${planStartTimeLabel} – ${planFinishTimeLabel}` : activePlanTimeWindow || 'Time to be decided'} locationLabel={planLocation}
         stopCount={plan.stops.length} locked={plan.status === 'locked'} participants={sharedEditor?.participants}
         statusLabel={sharedEditorReadOnly ? 'Organizer edits' : sharedEditorDirty ? 'Unsaved changes' : undefined}
         onTitleChange={!isPlanLocked ? renamePlan : undefined} disabled={sharedEditorSaving || sharedStatusChanging}
@@ -9167,6 +9171,7 @@ function NomNomGoApp() {
             </View>
 
             {firstStop ? <GettingThereRow key={firstStopTripKey} tripKey={firstStopTripKey}
+              editing={!isPlanLocked}
               arrivalMs={activePlanTimelineBaseMs} initialOrigin={routeStartLocation}
               destinationLocated={!!stopCoords(firstStop.item)}
               initialMode={effectiveTravelModeForStop(firstStop, 0)}
@@ -9174,7 +9179,7 @@ function NomNomGoApp() {
               resolveOrigin={resolveLocationInput} onChange={setGettingThere} /> : null}
 
             <View
-              style={styles.itineraryList}
+              style={[styles.itineraryList, isPlanLocked && styles.itineraryListReadOnly]}
               onLayout={(event) => {
                 const { width, y } = event.nativeEvent.layout;
                 timelineYRef.current = y;
@@ -9309,7 +9314,7 @@ function NomNomGoApp() {
                     onPress={() => searchFromPlan('activity', 'activity')}
                     style={[styles.itineraryTypeButton, styles.itineraryTypeButtonActivity]}
                   >
-                    <Ionicons name="walk-outline" size={iconSizes.md} color={semanticTones.activity.accent} />
+                    <Ionicons name="sparkles-outline" size={iconSizes.md} color={semanticTones.activity.accent} />
                     <Text style={[styles.itineraryTypeText, { color: semanticTones.activity.accent }]}>Activity</Text>
                   </TouchableOpacity>
                   <TouchableOpacity
@@ -13073,6 +13078,9 @@ const styles = StyleSheet.create({
   itineraryList: {
     marginHorizontal: -spacing.sm,
     minHeight: controls.minimumTouchTarget,
+  },
+  itineraryListReadOnly: {
+    marginHorizontal: 0,
   },
   itinerarySortableItem: {
     width: '100%',

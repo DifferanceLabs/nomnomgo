@@ -12,6 +12,7 @@ import { DateField } from './DateField';
 import { ShareMessage } from './ShareMessage';
 import { FriendsPanel } from './FriendsPanel';
 import { PlanWorkspaceHeader } from './PlanWorkspaceHeader';
+import { planLocationLabel } from '../domain/planLocation';
 
 const today = () => { const date = new Date(); return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`; };
 const emptyDraft = (): SharedPlanDraft => ({ title: '', intent: 'both', locationLabel: '', dateStart: today(), dateEnd: today(), timeWindow: '', stops: [] });
@@ -172,7 +173,7 @@ export function SharedPlansScreen({ initialPlan, initialPlanId, initialSection, 
     <ScrollView contentContainerStyle={[styles.content, plan && !editing && styles.planContent]} keyboardShouldPersistTaps="handled">
       {plan && !editing ? <PlanWorkspaceHeader section={section === 'plan' ? 'plan' : 'friends'} count={plan.participants.length}
         title={plan.title} dateLabel={planDateRangeLabel(schedule!.dateStart, schedule!.dateEnd)} timeLabel={schedule!.timeLabel || 'Time to be decided'}
-        locationLabel={plan.locationLabel} stopCount={plan.stops.length} locked={locked} participants={plan.participants}
+        locationLabel={planLocationLabel(plan.stops.map((stop) => stop.place))} stopCount={plan.stops.length} locked={locked} participants={plan.participants}
         statusLabel={!owner ? 'Organizer edits' : undefined} disabled={busy}
         onBack={() => navigate(() => openPlan(''))} onPlan={() => setSection('plan')} onFriends={() => setSection('people')} /> : null}
       {loading ? <ActivityIndicator color="#ff806f" /> : null}
