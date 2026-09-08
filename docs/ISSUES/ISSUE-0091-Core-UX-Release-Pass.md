@@ -12,6 +12,7 @@ Exercise active Now, Later, plan editing, discovery, saved plans, local particip
 
 ## Acceptance Criteria
 
+- Plan-stop polish: activity stops use sparkles; travel mode and duration appear on a compact connector between stops, with no connector after the final stop. Expanding and reordering stops retain the correct travel leg.
 - September alpha follow-up: Going is green, Maybe yellow and Not going red in all RSVP controls, participant labels and plan summaries; labels/selection also communicate status without color.
 - Audit every screen family and interaction category in the source; exercise active phone flows with representative empty, busy, error and populated states and distinguish runtime evidence from source review.
 - Shared plans provide consistent navigation, compact Plan/People sections and clear recovery. Invitations, profile/friends, saves and discovery minimize repeated instructions and unnecessary steps.
@@ -26,4 +27,5 @@ Exercise active Now, Later, plan editing, discovery, saved plans, local particip
 
 ## Validation
 
+- Local plan-stop follow-up: typecheck, focused component lint, and all 72 route/planning tests passed. At a 390px web viewport, verified a 24px travel connector between two manual stops, expanded-card placement, Drive-to-Walk updates, and Move down reordering with no connector after the final stop. Physical native drag gestures remain untested for this follow-up.
 See the [September 7 alpha audit](../UX_AUDIT_2026-09-07.md) for the screen inventory, RSVP/shared-plan improvements, current runtime coverage and remaining physical-device/beta checks. The earlier [UX release review](../UX_RELEASE_REVIEW_2026-09-04.md) records the wider discovery/preset matrix. Production completion additionally requires successful GitHub/Vercel checks and an unauthenticated launch-gate probe.

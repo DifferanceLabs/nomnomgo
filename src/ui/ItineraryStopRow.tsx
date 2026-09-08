@@ -77,7 +77,7 @@ export type ItineraryStopRowProps = {
 
 const KIND_ICON: Record<ItineraryStopKind, IconName> = {
   food: 'restaurant-outline',
-  activity: 'walk-outline',
+  activity: 'sparkles-outline',
   dessert: 'ice-cream-outline',
   idea: 'bulb-outline',
 };
@@ -317,303 +317,308 @@ export function ItineraryStopRow({
     </View>
   );
 
-  const travelChipContent = travelDuration ? (
+  const travelConnector = travelDuration ? (
     <View
+      accessible
       accessibilityLabel={`${travelDuration} ${travelLabel} to next stop`}
-      style={styles.travelChip}
+      style={styles.travelConnector}
+      testID={testID ? `${testID}-travel-to-next` : undefined}
     >
+      <View style={styles.travelLine} />
       <Ionicons color={colors.cyan} name={nextTravelMeta.icon} size={iconSizes.sm} />
-      <View style={styles.travelChipCopy}>
-        <Text numberOfLines={1} style={styles.travelDuration}>{travelDuration}</Text>
-        <Text numberOfLines={1} style={styles.travelLabel}>{travelLabel}</Text>
-      </View>
+      <Text style={styles.travelDuration}>{travelDuration} {travelLabel}</Text>
+      <Ionicons color={colors.textTertiary} name="arrow-down" size={12} />
+      <View style={styles.travelLine} />
     </View>
   ) : null;
 
   return (
     <Animated.View
       entering={animateEntrance ? FadeInDown.duration(220) : undefined}
-      style={[styles.row, style]}
+      style={[styles.stop, style]}
       testID={testID}
     >
-      <Sortable.Handle style={styles.handle}>
-        <View
-          accessible
-          accessibilityActions={[
-            ...(onMoveUp ? [{ name: 'decrement', label: `Move ${name} up` }] : []),
-            ...(onMoveDown ? [{ name: 'increment', label: `Move ${name} down` }] : []),
+      <View style={styles.row}>
+        <Sortable.Handle style={styles.handle}>
+          <View
+            accessible
+            accessibilityActions={[
+              ...(onMoveUp ? [{ name: 'decrement', label: `Move ${name} up` }] : []),
+              ...(onMoveDown ? [{ name: 'increment', label: `Move ${name} down` }] : []),
+            ]}
+            accessibilityHint="Drag to reorder. Move up and Move down are also available in More."
+            accessibilityLabel={`Reorder stop ${number}, ${name}`}
+            accessibilityRole="adjustable"
+            accessibilityValue={{ text: `Stop ${number}` }}
+            onAccessibilityAction={handleReorderAccessibilityAction}
+            style={styles.handleTarget}
+          >
+            <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={styles.grip}>
+              {Array.from({ length: 6 }, (_, index) => (
+                <View key={index} style={styles.gripDot} />
+              ))}
+            </View>
+          </View>
+        </Sortable.Handle>
+
+        <Animated.View
+          style={[
+            styles.card,
+            expanded && styles.cardExpanded,
+            animatedCardStyle,
           ]}
-          accessibilityHint="Drag to reorder. Move up and Move down are also available in More."
-          accessibilityLabel={`Reorder stop ${number}, ${name}`}
-          accessibilityRole="adjustable"
-          accessibilityValue={{ text: `Stop ${number}` }}
-          onAccessibilityAction={handleReorderAccessibilityAction}
-          style={styles.handleTarget}
         >
-          <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={styles.grip}>
-            {Array.from({ length: 6 }, (_, index) => (
-              <View key={index} style={styles.gripDot} />
-            ))}
-          </View>
-        </View>
-      </Sortable.Handle>
-
-      <Animated.View
-        style={[
-          styles.card,
-          expanded && styles.cardExpanded,
-          animatedCardStyle,
-        ]}
-      >
-        <View pointerEvents="none" style={[styles.typeRail, { backgroundColor: tone.solid }]} />
-
-        <TouchableOpacity
-          activeOpacity={0.78}
-          accessible={false}
-          onPress={handleRowPress}
-          style={[styles.summary, narrowSummary && styles.summaryNarrow]}
-          testID={testID ? `${testID}-summary` : undefined}
-        >
-          <View style={[styles.numberBadge, { backgroundColor: tone.solid }]}>
-            <Text style={[styles.numberText, { color: tone.foreground }]}>{number}</Text>
-          </View>
-
-          <View style={[styles.kindIcon, { borderColor: tone.border }]}>
-            <Ionicons color={tone.accent} name={KIND_ICON[kind]} size={iconSizes.sm} />
-          </View>
-
-          <View style={styles.summaryCopy}>
-            <Text numberOfLines={1} style={styles.name}>
-              {name}
-            </Text>
-            {!narrowSummary ? timingContent : null}
-          </View>
-
-          {!narrowSummary ? travelChipContent : null}
+          <View pointerEvents="none" style={[styles.typeRail, { backgroundColor: tone.solid }]} />
 
           <TouchableOpacity
-            activeOpacity={0.72}
-            accessibilityHint={expanded ? 'Collapses stop details' : 'Expands stop details'}
-            accessibilityLabel={`${expanded ? 'Collapse' : 'Expand'} ${kindLabel} stop ${number}, ${name}`}
-            accessibilityRole="button"
-            accessibilityState={{ expanded }}
-            onPress={(event) => {
-              event.stopPropagation();
-              handleRowPress();
-            }}
-            style={styles.chevron}
+            activeOpacity={0.78}
+            accessible={false}
+            onPress={handleRowPress}
+            style={[styles.summary, narrowSummary && styles.summaryNarrow]}
+            testID={testID ? `${testID}-summary` : undefined}
           >
-            <Ionicons
-              color={colors.textTertiary}
-              name={expanded ? 'chevron-up' : 'chevron-forward'}
-              size={iconSizes.sm}
-            />
-          </TouchableOpacity>
-
-          {narrowSummary ? (
-            <View style={styles.narrowTimingStrip}>
-              {timingContent}
-              {travelChipContent}
+            <View style={[styles.numberBadge, { backgroundColor: tone.solid }]}>
+              <Text style={[styles.numberText, { color: tone.foreground }]}>{number}</Text>
             </View>
-          ) : null}
-        </TouchableOpacity>
 
-        {expanded ? (
-          <View style={styles.expandedContent}>
-            {location ? (
-              <View style={styles.locationRow}>
-                <Ionicons color={tone.accent} name="location-outline" size={iconSizes.sm} />
-                <Text numberOfLines={2} style={styles.location}>{location}</Text>
+            <View style={[styles.kindIcon, { borderColor: tone.border }]}>
+              <Ionicons color={tone.accent} name={KIND_ICON[kind]} size={iconSizes.sm} />
+            </View>
+
+            <View style={styles.summaryCopy}>
+              <Text numberOfLines={1} style={styles.name}>
+                {name}
+              </Text>
+              {!narrowSummary ? timingContent : null}
+            </View>
+
+            <TouchableOpacity
+              activeOpacity={0.72}
+              accessibilityHint={expanded ? 'Collapses stop details' : 'Expands stop details'}
+              accessibilityLabel={`${expanded ? 'Collapse' : 'Expand'} ${kindLabel} stop ${number}, ${name}`}
+              accessibilityRole="button"
+              accessibilityState={{ expanded }}
+              onPress={(event) => {
+                event.stopPropagation();
+                handleRowPress();
+              }}
+              style={styles.chevron}
+            >
+              <Ionicons
+                color={colors.textTertiary}
+                name={expanded ? 'chevron-up' : 'chevron-forward'}
+                size={iconSizes.sm}
+              />
+            </TouchableOpacity>
+
+            {narrowSummary ? (
+              <View style={styles.narrowTimingStrip}>
+                {timingContent}
               </View>
             ) : null}
+          </TouchableOpacity>
 
-            <View style={styles.timeSection}>
-              <TouchableOpacity
-                activeOpacity={0.74}
-                accessibilityLabel={`Time here, ${formatItineraryDuration(safeDurationMinutes)}`}
-                accessibilityRole="button"
-                accessibilityState={{ expanded: durationEditorOpen }}
-                onPress={() => setDurationEditorOpen(!durationEditorOpen)}
-                style={styles.timeHeader}
-              >
-                <Text style={styles.timeHeaderLabel}>Time here</Text>
-                <View style={styles.timeHeaderValue}>
-                  <Text style={[styles.timeHeaderDuration, { color: tone.accent }]}>
-                    {formatItineraryDuration(safeDurationMinutes)}
-                  </Text>
-                  <Ionicons
-                    color={colors.textTertiary}
-                    name={durationEditorOpen ? 'chevron-up' : 'chevron-down'}
-                    size={iconSizes.xs}
-                  />
+          {expanded ? (
+            <View style={styles.expandedContent}>
+              {location ? (
+                <View style={styles.locationRow}>
+                  <Ionicons color={tone.accent} name="location-outline" size={iconSizes.sm} />
+                  <Text numberOfLines={2} style={styles.location}>{location}</Text>
                 </View>
-              </TouchableOpacity>
+              ) : null}
 
-              {durationEditorOpen ? (
-                <View style={styles.durationEditor}>
-                  <TouchableOpacity
-                    activeOpacity={0.72}
-                    accessibilityLabel="Decrease time here by 15 minutes"
-                    accessibilityRole="button"
-                    accessibilityState={{ disabled: safeDurationMinutes <= MIN_STOP_DURATION_MINUTES }}
-                    disabled={safeDurationMinutes <= MIN_STOP_DURATION_MINUTES}
-                    onPress={() => changeDuration(-1)}
-                    style={[
-                      styles.stepperButton,
-                      safeDurationMinutes <= MIN_STOP_DURATION_MINUTES && styles.controlDisabled,
-                    ]}
-                    testID={testID ? `${testID}-duration-decrease` : undefined}
-                  >
-                    <Ionicons color={colors.textPrimary} name="remove" size={iconSizes.md} />
-                  </TouchableOpacity>
-
-                  <View accessibilityLiveRegion="polite" style={styles.durationEditorValue}>
-                    <Text style={styles.durationEditorText}>
+              <View style={styles.timeSection}>
+                <TouchableOpacity
+                  activeOpacity={0.74}
+                  accessibilityLabel={`Time here, ${formatItineraryDuration(safeDurationMinutes)}`}
+                  accessibilityRole="button"
+                  accessibilityState={{ expanded: durationEditorOpen }}
+                  onPress={() => setDurationEditorOpen(!durationEditorOpen)}
+                  style={styles.timeHeader}
+                >
+                  <Text style={styles.timeHeaderLabel}>Time here</Text>
+                  <View style={styles.timeHeaderValue}>
+                    <Text style={[styles.timeHeaderDuration, { color: tone.accent }]}>
                       {formatItineraryDuration(safeDurationMinutes)}
                     </Text>
-                    <Text style={styles.durationEditorHint}>Adjust in 15 min</Text>
+                    <Ionicons
+                      color={colors.textTertiary}
+                      name={durationEditorOpen ? 'chevron-up' : 'chevron-down'}
+                      size={iconSizes.xs}
+                    />
+                  </View>
+                </TouchableOpacity>
+
+                {durationEditorOpen ? (
+                  <View style={styles.durationEditor}>
+                    <TouchableOpacity
+                      activeOpacity={0.72}
+                      accessibilityLabel="Decrease time here by 15 minutes"
+                      accessibilityRole="button"
+                      accessibilityState={{ disabled: safeDurationMinutes <= MIN_STOP_DURATION_MINUTES }}
+                      disabled={safeDurationMinutes <= MIN_STOP_DURATION_MINUTES}
+                      onPress={() => changeDuration(-1)}
+                      style={[
+                        styles.stepperButton,
+                        safeDurationMinutes <= MIN_STOP_DURATION_MINUTES && styles.controlDisabled,
+                      ]}
+                      testID={testID ? `${testID}-duration-decrease` : undefined}
+                    >
+                      <Ionicons color={colors.textPrimary} name="remove" size={iconSizes.md} />
+                    </TouchableOpacity>
+
+                    <View accessibilityLiveRegion="polite" style={styles.durationEditorValue}>
+                      <Text style={styles.durationEditorText}>
+                        {formatItineraryDuration(safeDurationMinutes)}
+                      </Text>
+                      <Text style={styles.durationEditorHint}>Adjust in 15 min</Text>
+                    </View>
+
+                    <TouchableOpacity
+                      activeOpacity={0.72}
+                      accessibilityLabel="Increase time here by 15 minutes"
+                      accessibilityRole="button"
+                      onPress={() => changeDuration(1)}
+                      style={styles.stepperButton}
+                      testID={testID ? `${testID}-duration-increase` : undefined}
+                    >
+                      <Ionicons color={colors.textPrimary} name="add" size={iconSizes.md} />
+                    </TouchableOpacity>
+                  </View>
+                ) : null}
+              </View>
+
+              <View style={styles.compactActions}>
+                <CompactAction
+                  accessibilityLabel={`Open ${name} in Maps`}
+                  icon="map-outline"
+                  label="Map"
+                  onPress={onMapPress}
+                  testID={testID ? `${testID}-map` : undefined}
+                />
+                <CompactAction
+                  accessibilityLabel={`Open ${name} website`}
+                  icon="globe-outline"
+                  label="Website"
+                  onPress={onWebsitePress}
+                  testID={testID ? `${testID}-website` : undefined}
+                />
+                <CompactAction
+                  accessibilityLabel={`Share ${name}`}
+                  icon="share-outline"
+                  label="Share"
+                  onPress={onSharePress}
+                  testID={testID ? `${testID}-share` : undefined}
+                />
+                <CompactAction
+                  accessibilityLabel={moreExpanded ? 'Hide edit options' : 'Show stop edit options'}
+                  expanded={moreExpanded}
+                  icon="ellipsis-horizontal"
+                  label="Edit"
+                  onPress={() => setMoreExpanded((current) => !current)}
+                  testID={testID ? `${testID}-more` : undefined}
+                />
+                <CompactAction
+                  accessibilityLabel={`Delete ${name}`}
+                  danger
+                  icon="trash-outline"
+                  label="Delete"
+                  onPress={onDeletePress}
+                  testID={testID ? `${testID}-delete` : undefined}
+                />
+              </View>
+
+              {moreExpanded ? (
+                <View style={styles.moreArea}>
+                  <Text style={styles.moreAreaTitle}>Stop options</Text>
+                  <View style={styles.moreActionRow}>
+                    {onEditPress ? (
+                      <MoreAction icon="create-outline" label="Edit stop" onPress={onEditPress} />
+                    ) : null}
+                    <MoreAction
+                      disabled={!onMoveUp}
+                      icon="arrow-up-outline"
+                      label="Move up"
+                      onPress={onMoveUp}
+                    />
+                    <MoreAction
+                      disabled={!onMoveDown}
+                      icon="arrow-down-outline"
+                      label="Move down"
+                      onPress={onMoveDown}
+                    />
                   </View>
 
-                  <TouchableOpacity
-                    activeOpacity={0.72}
-                    accessibilityLabel="Increase time here by 15 minutes"
-                    accessibilityRole="button"
-                    onPress={() => changeDuration(1)}
-                    style={styles.stepperButton}
-                    testID={testID ? `${testID}-duration-increase` : undefined}
-                  >
-                    <Ionicons color={colors.textPrimary} name="add" size={iconSizes.md} />
-                  </TouchableOpacity>
+                  {onTravelModeChange ? (
+                    <View style={styles.moreGroup}>
+                      <Text style={styles.moreGroupLabel}>Travel to next stop</Text>
+                      <View style={styles.moreActionRow}>
+                        {TRAVEL_MODES.map((option) => (
+                          <MoreAction
+                            key={option.mode}
+                            icon={option.icon}
+                            label={option.label}
+                            onPress={() => onTravelModeChange(option.mode)}
+                            selected={nextTravelMode === option.mode}
+                          />
+                        ))}
+                      </View>
+                    </View>
+                  ) : null}
+
+                  {featureOptions.length ? (
+                    <View style={styles.moreGroup}>
+                      <Text style={styles.moreGroupLabel}>Things here</Text>
+                      <View style={styles.featureList}>
+                        {featureOptions.map((feature) => {
+                          const selected = selectedFeatures.includes(feature);
+                          return (
+                            <TouchableOpacity
+                              key={feature}
+                              activeOpacity={0.72}
+                              accessibilityLabel={feature}
+                              accessibilityRole="button"
+                              accessibilityState={{ disabled: !onToggleFeature, selected }}
+                              disabled={!onToggleFeature}
+                              onPress={() => onToggleFeature?.(feature)}
+                              style={[
+                                styles.featureChip,
+                                selected && { backgroundColor: tone.soft, borderColor: tone.border },
+                                !onToggleFeature && styles.controlDisabled,
+                              ]}
+                            >
+                              <Ionicons
+                                color={selected ? tone.accent : colors.textTertiary}
+                                name={selected ? 'checkmark-circle' : 'add-circle-outline'}
+                                size={iconSizes.sm}
+                              />
+                              <Text
+                                numberOfLines={2}
+                                style={[styles.featureChipLabel, selected && { color: tone.accent }]}
+                              >
+                                {feature}
+                              </Text>
+                            </TouchableOpacity>
+                          );
+                        })}
+                      </View>
+                    </View>
+                  ) : null}
                 </View>
               ) : null}
             </View>
-
-            <View style={styles.compactActions}>
-              <CompactAction
-                accessibilityLabel={`Open ${name} in Maps`}
-                icon="map-outline"
-                label="Map"
-                onPress={onMapPress}
-                testID={testID ? `${testID}-map` : undefined}
-              />
-              <CompactAction
-                accessibilityLabel={`Open ${name} website`}
-                icon="globe-outline"
-                label="Website"
-                onPress={onWebsitePress}
-                testID={testID ? `${testID}-website` : undefined}
-              />
-              <CompactAction
-                accessibilityLabel={`Share ${name}`}
-                icon="share-outline"
-                label="Share"
-                onPress={onSharePress}
-                testID={testID ? `${testID}-share` : undefined}
-              />
-              <CompactAction
-                accessibilityLabel={moreExpanded ? 'Hide edit options' : 'Show stop edit options'}
-                expanded={moreExpanded}
-                icon="ellipsis-horizontal"
-                label="Edit"
-                onPress={() => setMoreExpanded((current) => !current)}
-                testID={testID ? `${testID}-more` : undefined}
-              />
-              <CompactAction
-                accessibilityLabel={`Delete ${name}`}
-                danger
-                icon="trash-outline"
-                label="Delete"
-                onPress={onDeletePress}
-                testID={testID ? `${testID}-delete` : undefined}
-              />
-            </View>
-
-            {moreExpanded ? (
-              <View style={styles.moreArea}>
-                <Text style={styles.moreAreaTitle}>Stop options</Text>
-                <View style={styles.moreActionRow}>
-                  {onEditPress ? (
-                    <MoreAction icon="create-outline" label="Edit stop" onPress={onEditPress} />
-                  ) : null}
-                  <MoreAction
-                    disabled={!onMoveUp}
-                    icon="arrow-up-outline"
-                    label="Move up"
-                    onPress={onMoveUp}
-                  />
-                  <MoreAction
-                    disabled={!onMoveDown}
-                    icon="arrow-down-outline"
-                    label="Move down"
-                    onPress={onMoveDown}
-                  />
-                </View>
-
-                {onTravelModeChange ? (
-                  <View style={styles.moreGroup}>
-                    <Text style={styles.moreGroupLabel}>Travel to next stop</Text>
-                    <View style={styles.moreActionRow}>
-                      {TRAVEL_MODES.map((option) => (
-                        <MoreAction
-                          key={option.mode}
-                          icon={option.icon}
-                          label={option.label}
-                          onPress={() => onTravelModeChange(option.mode)}
-                          selected={nextTravelMode === option.mode}
-                        />
-                      ))}
-                    </View>
-                  </View>
-                ) : null}
-
-                {featureOptions.length ? (
-                  <View style={styles.moreGroup}>
-                    <Text style={styles.moreGroupLabel}>Things here</Text>
-                    <View style={styles.featureList}>
-                      {featureOptions.map((feature) => {
-                        const selected = selectedFeatures.includes(feature);
-                        return (
-                          <TouchableOpacity
-                            key={feature}
-                            activeOpacity={0.72}
-                            accessibilityLabel={feature}
-                            accessibilityRole="button"
-                            accessibilityState={{ disabled: !onToggleFeature, selected }}
-                            disabled={!onToggleFeature}
-                            onPress={() => onToggleFeature?.(feature)}
-                            style={[
-                              styles.featureChip,
-                              selected && { backgroundColor: tone.soft, borderColor: tone.border },
-                              !onToggleFeature && styles.controlDisabled,
-                            ]}
-                          >
-                            <Ionicons
-                              color={selected ? tone.accent : colors.textTertiary}
-                              name={selected ? 'checkmark-circle' : 'add-circle-outline'}
-                              size={iconSizes.sm}
-                            />
-                            <Text
-                              numberOfLines={2}
-                              style={[styles.featureChipLabel, selected && { color: tone.accent }]}
-                            >
-                              {feature}
-                            </Text>
-                          </TouchableOpacity>
-                        );
-                      })}
-                    </View>
-                  </View>
-                ) : null}
-              </View>
-            ) : null}
-          </View>
-        ) : null}
-      </Animated.View>
+          ) : null}
+        </Animated.View>
+      </View>
+      {travelConnector}
     </Animated.View>
   );
 }
 
 const styles = StyleSheet.create({
+  stop: {
+    width: '100%',
+  },
   row: {
     alignItems: 'stretch',
     flexDirection: 'row',
@@ -734,30 +739,26 @@ const styles = StyleSheet.create({
   durationLabel: {
     ...typography.caption,
   },
-  travelChip: {
+  travelConnector: {
     alignItems: 'center',
-    backgroundColor: colors.cyanSoft,
-    borderColor: semanticTones.travel.border,
-    borderRadius: radii.sm,
-    borderWidth: borders.thin,
     flexDirection: 'row',
-    minHeight: controls.minimumTouchTarget,
-    paddingHorizontal: spacing.micro,
+    gap: spacing.micro,
+    marginLeft: controls.minimumTouchTarget,
+    minHeight: 24,
+    paddingHorizontal: spacing.xs,
+    paddingTop: spacing.micro,
   },
-  travelChipCopy: {
-    marginLeft: spacing.hairline,
-    maxWidth: 44,
+  travelLine: {
+    backgroundColor: semanticTones.travel.border,
+    flex: 1,
+    height: borders.thin,
   },
   travelDuration: {
     color: colors.cyan,
     fontSize: 11,
     fontWeight: '700',
+    flexShrink: 1,
     lineHeight: 14,
-  },
-  travelLabel: {
-    color: colors.textSecondary,
-    fontSize: 10,
-    lineHeight: 13,
   },
   chevron: {
     alignItems: 'center',
