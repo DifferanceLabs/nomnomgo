@@ -27,6 +27,7 @@ import { RsvpBadge, RsvpSummary } from './src/ui/RsvpSummary';
 import { SharedPlanActivity } from './src/ui/SharedPlanActivity';
 import { SharedPlansScreen } from './src/ui/SharedPlansScreen';
 import { PlanWorkspaceHeader } from './src/ui/PlanWorkspaceHeader';
+import { GettingThereRow, type GettingThereSummary } from './src/ui/GettingThereRow';
 import { startForegroundRefresh } from './src/data/foregroundRefresh';
 import { changeSharedItinerary, createSharedPlan, getSharedPlan, newerSharedPlan, sharedItinerarySignature, planIdFromUrl, planDateRangeLabel, type SharedPlan, type SharedPlanDraft } from './src/data/sharedPlans';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
@@ -54,6 +55,8 @@ import { areaSearchRadius, findSearchAreas, isInsideSearchArea, superchargerForS
 import { SearchAreaPicker } from './src/ui/SearchAreaPicker';
 import {
   calculateItineraryTimeline,
+  departureForArrival,
+  scheduleFromFirstArrival,
   defaultItineraryStopDurationMinutes,
   inferItineraryStopKind,
   snapStopDurationMinutes,
@@ -2927,7 +2930,7 @@ function ItineraryInsertionIndicator({ activeAnimationProgress, style }: DropInd
 }
 
 function confirmedPlanFromSharedPlan(shared: SharedPlan): ConfirmedPlan {
-  const windowStart = shared.timeWindow ? parseClockMinutes(shared.timeWindow) : undefined;
+  const schedule = scheduleFromFirstArrival({ ...shared, firstArrival: shared.stops[0]?.arrivalTime });
   const lockedArrivalTimes: Record<string, StopTime> = {};
   const stops: ItineraryStop[] = shared.stops.map((stop) => {
     const slot = shared.suggestions.find((suggestion) => suggestion.id === stop.id)?.slot ||
@@ -2944,13 +2947,14 @@ function confirmedPlanFromSharedPlan(shared: SharedPlan): ConfirmedPlan {
   });
   return { stops, title: shared.title, owner: shared.ownerId, intent: shared.intent,
     status: shared.status === 'locked' ? 'locked' : 'draft',
-    dateWindow: 'custom', customDateRange: { start: shared.dateStart, end: shared.dateEnd },
-    planDateStart: shared.dateStart, planDateEnd: shared.dateEnd,
-    timeWindow: windowStart !== undefined ? timeWindowFromStartClock(clockTimeFromMinutes(windowStart)) : shared.timeWindow,
+    dateWindow: 'custom', customDateRange: { start: schedule.dateStart, end: schedule.dateEnd },
+    planDateStart: schedule.dateStart, planDateEnd: schedule.dateEnd,
+    timeWindow: schedule.timeWindow,
     searchLocationLabel: shared.locationLabel, lockedArrivalTimes };
 }
 
 function NomNomGoApp() {
+  const [gettingThere, setGettingThere] = useState<GettingThereSummary | null>(null);
   const [sharedWorkspace, setSharedWorkspace] = useState<{ id?: string; plan?: SharedPlan; section?: 'plan' | 'people' } | null>(() => {
     const id = getAlphaAccount() ? planIdFromUrl() : null;
     return id ? { id } : null;
@@ -3354,12 +3358,13 @@ function NomNomGoApp() {
     return `Est. ${arrival} - ${stay} stop`;
   };
   const travelMetaForStop = (stop: ItineraryStop, index: number) => {
-    const mode = effectiveTravelModeForStop(stop, index);
+    const mode = index === 0 && personalJourney ? personalJourney.mode : effectiveTravelModeForStop(stop, index);
+    const minutes = index === 0 && personalJourney ? personalJourney.minutes : travelMinutesForStop(stop, index);
     return {
       mode,
       icon: travelModeIconName(mode),
       label: travelModeLabel(mode),
-      duration: formatStopTime(stopTimeFromMinutes(travelMinutesForStop(stop, index))) || '0 min',
+      duration: formatStopTime(stopTimeFromMinutes(minutes)) || '0 min',
     };
   };
   const searchRouteBiasForAnchorIndex = (anchorIndex: number): SearchRouteBias | undefined => {
@@ -3387,10 +3392,14 @@ function NomNomGoApp() {
     return next;
   };
   const firstStop = plan.stops[0];
-  const firstStopArrivalMinutes = firstStop ? itineraryArrivalMinutes(0) : undefined;
   const firstStopTravelMinutes = firstStop ? travelMinutesForStop(firstStop, 0) : undefined;
-  const leaveForFirstStopText = firstStop && typeof firstStopArrivalMinutes === 'number' && typeof firstStopTravelMinutes === 'number'
-    ? `Leave around ${formatClockAfterMinutes(Math.max(0, firstStopArrivalMinutes - firstStopTravelMinutes), activePlanTimelineBaseMs)} from ${startingLocationLabel}`
+  const firstStopTripKey = `${sharedEditor?.id || plan.sharedPlanId || plan.savedPlanId || 'draft'}:${firstStop ? cardToId(firstStop.item) : ''}`;
+  const personalJourney = gettingThere?.tripKey === firstStopTripKey ? gettingThere : undefined;
+  const departureMs = departureForArrival(activePlanTimelineBaseMs, personalJourney?.minutes ?? firstStopTravelMinutes ?? 0);
+  const departureDate = new Date(departureMs);
+  const departureLabel = `${departureDate.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}${departureDate.toDateString() !== new Date(activePlanTimelineBaseMs).toDateString() ? ` · ${departureDate.toLocaleDateString([], { month: 'short', day: 'numeric' })}` : ''}`;
+  const leaveForFirstStopText = firstStop
+    ? `Leave around ${departureLabel} from ${personalJourney?.originLabel || startingLocationLabel}`
     : undefined;
   const finalStop = plan.stops[plan.stops.length - 1];
   const planTotalMinutes = finalStop ? itineraryTimeline.totalMinutes : 0;
@@ -6514,7 +6523,7 @@ function NomNomGoApp() {
     setPlanTimes({}); setArrivalTimes({}); setExpandedStopKey(null); setTimeEditorKey(null);
     setActiveBetaPlanId(null); setActivePlanningSessionId(null);
     setSelectedDateWindow('custom'); selectedDateWindowRef.current = 'custom';
-    const range = { start: shared.dateStart, end: shared.dateEnd };
+    const range = { start: restored.planDateStart!, end: restored.planDateEnd! };
     setCustomDateRange(range); customDateRangeRef.current = range;
     setCustomDateStartInput(range.start); setCustomDateEndInput(range.end);
     setSearchLocationOverride(shared.locationLabel); setSearchLocation(null);
@@ -6732,7 +6741,6 @@ function NomNomGoApp() {
     try {
       const { slot, item, category } = selection;
       const effectiveDateWindow: DateWindowId = 'today';
-      const nextDateRange = dateRangeKeysForWindow(effectiveDateWindow, null, new Date());
       const nextTitle = contextualNowPlanTitle(slot, item, category);
       const selectedSearchLocation = lastSearchLocationCenter || activeSearchLocation || searchLocation || location || undefined;
       const selectedLocationLabel = selectedSearchLocation?.label || searchLocationLabel || 'Current location';
@@ -6745,6 +6753,9 @@ function NomNomGoApp() {
         featuresExpanded: false,
       };
       const nextStops = appendPlanSelection([], nextStop, searchSuperchargerStop(selectedSearchLocation));
+      const arrivalDate = new Date(Date.now() + estimateTravelMinutes(routeStartLocation, nextStops[0].item, effectivePlanStopTravelMode(nextStops, 0)) * 60_000);
+      const nextDateRange = { start: formatDateInput(arrivalDate), end: formatDateInput(arrivalDate) };
+      const nextTimeWindow = timeWindowFromStartClock(clockTimeFromDate(arrivalDate));
       const nextPlanType = inferPlanType({
         planDateStart: nextDateRange.start,
         planDateEnd: nextDateRange.end,
@@ -6758,7 +6769,7 @@ function NomNomGoApp() {
         customDateRange: null,
         planDateStart: nextDateRange.start,
         planDateEnd: nextDateRange.end,
-        timeWindow: undefined,
+        timeWindow: nextTimeWindow,
         timePreference: 'Now',
         intent: 'both',
         locationLabel: selectedLocationLabel,
@@ -6788,7 +6799,7 @@ function NomNomGoApp() {
         planDateStart: nextDateRange.start,
         planDateEnd: nextDateRange.end,
         planType: nextPlanType,
-        timeWindow: undefined,
+        timeWindow: nextTimeWindow,
         routeOriginLabel: startingLocationLabel,
         routeStartLocation,
         searchLocation: selectedSearchLocation,
@@ -7163,12 +7174,13 @@ function NomNomGoApp() {
     });
     const loadedDateRange = dateRangeForSavedPlan(saved);
     const firstLoadedArrival = loadedStops[0] ? loadedLockedArrivalTimes[loadedStops[0].key] : undefined;
-    const inferredTimelineStart = firstLoadedArrival
-      ? clockTimePlusMinutes(firstLoadedArrival, -estimateDriveMinutes(saved.routeStartLocation || saved.searchLocation, loadedStops[0].item))
-      : undefined;
+    const loadedSchedule = scheduleFromFirstArrival({ dateStart: loadedDateRange.start, dateEnd: loadedDateRange.end,
+      timeWindow: saved.timeWindow, firstArrival: firstLoadedArrival ? formatClockTime(firstLoadedArrival) : undefined });
+    loadedDateRange.start = loadedSchedule.dateStart;
+    loadedDateRange.end = loadedSchedule.dateEnd;
     const loadedDateWindow: DateWindowId = 'custom';
     const loadedCustomDateRange = loadedDateRange;
-    const loadedTimeWindow = saved.timeWindow || (inferredTimelineStart ? timeWindowFromStartClock(inferredTimelineStart) : undefined);
+    const loadedTimeWindow = loadedSchedule.timeWindow;
     const loadedPlanType = saved.planType || inferPlanType({
       planDateStart: loadedDateRange.start,
       planDateEnd: loadedDateRange.end,
@@ -8285,7 +8297,7 @@ function NomNomGoApp() {
     >
       {showPlanWorkspace ? <PlanWorkspaceHeader section="plan" count={sharedEditor?.participants.length}
         title={plan.title ?? planTitle} dateLabel={planDateRangeLabel(activePlanDateRange.start, activePlanDateRange.end)}
-        timeLabel={activePlanTimeWindow || 'Time to be decided'} locationLabel={searchLocationLabel}
+        timeLabel={firstStop ? `${planStartTimeLabel} – ${planFinishTimeLabel}` : activePlanTimeWindow || 'Time to be decided'} locationLabel={searchLocationLabel}
         stopCount={plan.stops.length} locked={plan.status === 'locked'} participants={sharedEditor?.participants}
         statusLabel={sharedEditorReadOnly ? 'Organizer edits' : sharedEditorDirty ? 'Unsaved changes' : undefined}
         onTitleChange={!isPlanLocked ? renamePlan : undefined} disabled={sharedEditorSaving || sharedStatusChanging}
@@ -9154,6 +9166,13 @@ function NomNomGoApp() {
 
             </View>
 
+            {firstStop ? <GettingThereRow key={firstStopTripKey} tripKey={firstStopTripKey}
+              arrivalMs={activePlanTimelineBaseMs} initialOrigin={routeStartLocation}
+              destinationLocated={!!stopCoords(firstStop.item)}
+              initialMode={effectiveTravelModeForStop(firstStop, 0)}
+              estimateMinutes={(origin, mode) => estimateTravelMinutes(origin, firstStop.item, mode)}
+              resolveOrigin={resolveLocationInput} onChange={setGettingThere} /> : null}
+
             <View
               style={styles.itineraryList}
               onLayout={(event) => {
@@ -9208,7 +9227,7 @@ function NomNomGoApp() {
                         <ItineraryStopRow
                           readOnly={isPlanLocked}
                           animateEntrance={recentlyAddedStopKey === stop.key}
-                          arrivalTime={formatClockAfterMinutes(itineraryArrivalMinutes(index), activePlanTimelineBaseMs)}
+                          arrivalTime={formatClockTime(displayedArrivalTimeForStop(stop, index))}
                           durationEditorExpanded={timeEditorKey === stop.key}
                           durationMinutes={durationForStop(stop)}
                           expanded={expandedStopKey === stop.key}
@@ -9430,7 +9449,7 @@ function NomNomGoApp() {
                     <View style={styles.itinerarySummaryColumn}>
                       <PlanDateTimePicker mode="date" label="Plan date" value={new Date(activePlanTimelineBaseMs)}
                         displayValue={activePlanDateLabel} disabled={isPlanLocked} onChange={savePlanStartDate} />
-                      <Text style={styles.itinerarySummaryLabel}>Est. start</Text>
+                      <Text style={styles.itinerarySummaryLabel}>Start / arrive</Text>
                       <PlanDateTimePicker mode="time" label="Plan start time" value={new Date(activePlanTimelineBaseMs)}
                         displayValue={planStartTimeLabel} disabled={isPlanLocked}
                         onChange={(date) => savePlanStartTime(`${date.getHours()}:${String(date.getMinutes()).padStart(2, '0')}`)} />

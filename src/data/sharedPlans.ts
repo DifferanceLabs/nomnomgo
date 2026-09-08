@@ -1,9 +1,16 @@
 import { accountRequest } from './accountStorage';
 import type { Plan, PlanParticipant } from '../domain/plan';
+import { itineraryArrivalRange, scheduleFromFirstArrival } from '../domain/itinerary';
 
 export type SharedPlan = Omit<Plan, 'participants'> & { revision: number; participants: (PlanParticipant & { joined: boolean })[] };
 export type SharedPlanDraft = Pick<Plan, 'title' | 'intent' | 'locationLabel' | 'dateStart' | 'dateEnd' | 'timeWindow' | 'stops'>;
 export type SharedPlanSummary = Pick<SharedPlan, 'id' | 'title' | 'status' | 'dateStart' | 'locationLabel' | 'ownerId'> & { dateEnd?: string; timeWindow?: string; rsvp?: string; revision?: number; participants?: SharedPlan['participants'] };
+
+export function sharedPlanSchedule(plan: SharedPlan) {
+  const schedule = scheduleFromFirstArrival({ ...plan, firstArrival: plan.stops[0]?.arrivalTime });
+  const last = plan.stops[plan.stops.length - 1];
+  return { ...schedule, timeLabel: itineraryArrivalRange(plan.stops[0]?.arrivalTime, last?.arrivalTime, last?.durationMinutes) || schedule.timeWindow };
+}
 
 export function planDateRangeLabel(start: string, end = start) {
   const label = (key: string) => {

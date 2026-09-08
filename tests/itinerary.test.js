@@ -7,6 +7,9 @@ const {
   MIN_STOP_DURATION_MINUTES,
   adjustStopDurationMinutes,
   calculateItineraryTimeline,
+  departureForArrival,
+  scheduleFromFirstArrival,
+  itineraryArrivalRange,
   defaultItineraryStopDurationMinutes,
   formatItineraryDuration,
   inferItineraryStopKind,
@@ -135,24 +138,24 @@ test('recalculates downstream arrivals and finish after duration or order change
     { travelMinutes: 15, durationMinutes: 60 },
     { travelMinutes: 5, durationMinutes: 30 },
   ]);
-  assert.deepEqual(original.stops.map((stop) => stop.arrivalMinutes), [10, 100, 165]);
-  assert.equal(original.totalMinutes, 195);
+  assert.deepEqual(original.stops.map((stop) => stop.arrivalMinutes), [0, 90, 155]);
+  assert.equal(original.totalMinutes, 185);
 
   const longerFirstStop = calculateItineraryTimeline([
     { travelMinutes: 10, durationMinutes: 90 },
     { travelMinutes: 15, durationMinutes: 60 },
     { travelMinutes: 5, durationMinutes: 30 },
   ]);
-  assert.deepEqual(longerFirstStop.stops.map((stop) => stop.arrivalMinutes), [10, 115, 180]);
-  assert.equal(longerFirstStop.totalMinutes, 210);
+  assert.deepEqual(longerFirstStop.stops.map((stop) => stop.arrivalMinutes), [0, 105, 170]);
+  assert.equal(longerFirstStop.totalMinutes, 200);
 
   const reordered = calculateItineraryTimeline([
     { travelMinutes: 8, durationMinutes: 30 },
     { travelMinutes: 12, durationMinutes: 75 },
     { travelMinutes: 20, durationMinutes: 60 },
   ]);
-  assert.deepEqual(reordered.stops.map((stop) => stop.arrivalMinutes), [8, 50, 145]);
-  assert.equal(reordered.totalMinutes, 205);
+  assert.deepEqual(reordered.stops.map((stop) => stop.arrivalMinutes), [0, 42, 137]);
+  assert.equal(reordered.totalMinutes, 197);
 });
 
 test('supports overlapping charging-stop activities and many compact stops', () => {
@@ -161,13 +164,45 @@ test('supports overlapping charging-stop activities and many compact stops', () 
     { travelMinutes: 3, durationMinutes: 30, overlapsPreviousArrival: true },
     { travelMinutes: 10, durationMinutes: 45 },
   ]);
-  assert.deepEqual(overlapping.stops.map((stop) => stop.arrivalMinutes), [20, 20, 90]);
-  assert.equal(overlapping.totalMinutes, 135);
+  assert.deepEqual(overlapping.stops.map((stop) => stop.arrivalMinutes), [0, 0, 70]);
+  assert.equal(overlapping.totalMinutes, 115);
 
   const manyStops = calculateItineraryTimeline(
     Array.from({ length: 20 }, () => ({ travelMinutes: 5, durationMinutes: 15 })),
   );
   assert.equal(manyStops.stops.length, 20);
-  assert.equal(manyStops.stops[19].arrivalMinutes, 385);
-  assert.equal(manyStops.totalMinutes, 400);
+  assert.equal(manyStops.stops[19].arrivalMinutes, 380);
+  assert.equal(manyStops.totalMinutes, 395);
+});
+
+test('personal travel changes departure without moving the first arrival or shared itinerary', () => {
+  const start = new Date(2026, 8, 9, 13, 0).getTime();
+  for (const travel of [0, 15, 41, 120]) {
+    const timeline = calculateItineraryTimeline([{ travelMinutes: travel, durationMinutes: 75 }, { travelMinutes: 16, durationMinutes: 90 }]);
+    assert.equal(timeline.stops[0].arrivalMinutes, 0);
+    assert.equal(timeline.stops[1].arrivalMinutes, 91);
+    assert.equal(timeline.totalMinutes, 181);
+    assert.equal(departureForArrival(start, travel), start - travel * 60_000);
+  }
+  const midnight = new Date(2026, 8, 9, 0, 10).getTime();
+  const departure = new Date(departureForArrival(midnight, 40));
+  assert.equal(departure.getDate(), 8);
+  assert.equal(departure.getHours(), 23);
+  assert.equal(departure.getMinutes(), 30);
+  assert.equal(calculateItineraryTimeline([]).totalMinutes, 0);
+});
+
+test('older plans retain recorded first arrivals and normalize only once across midnight', () => {
+  const daytime = scheduleFromFirstArrival({ dateStart: '2026-09-09', dateEnd: '2026-09-09', timeWindow: '1:00 PM - 4:00 PM', firstArrival: '1:41 PM' });
+  assert.equal(daytime.timeWindow, '1:41 PM - 4:41 PM');
+  assert.equal(daytime.dateStart, '2026-09-09');
+  const legacy = { dateStart: '2026-12-31', dateEnd: '2027-01-02', timeWindow: '11:50 PM - 2:50 AM', firstArrival: '12:20 AM' };
+  const restored = scheduleFromFirstArrival(legacy);
+  assert.equal(restored.dateStart, '2027-01-01');
+  assert.equal(restored.dateEnd, '2027-01-03');
+  assert.equal(restored.timeWindow, '12:20 AM - 3:20 AM');
+  assert.deepEqual(scheduleFromFirstArrival({ ...restored, firstArrival: legacy.firstArrival }), restored);
+  assert.equal(scheduleFromFirstArrival({ dateStart: '2026-09-09', dateEnd: '2026-09-09', timeWindow: '1pm' }).timeWindow, '1:00 PM - 4:00 PM');
+  assert.equal(itineraryArrivalRange('1:41 PM', '3:12 PM', 90), '1:41 PM – 4:42 PM');
+  assert.equal(itineraryArrivalRange('11:30 PM', '12:30 AM', 75), '11:30 PM – 1:45 AM');
 });

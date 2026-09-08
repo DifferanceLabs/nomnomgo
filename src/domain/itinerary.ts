@@ -141,12 +141,12 @@ export function calculateItineraryTimeline(inputs: readonly ItineraryTimelineInp
   let elapsedMinutes = 0;
   let previousArrivalMinutes: number | undefined;
 
-  const stops: ItineraryTimelineStop[] = inputs.map((input) => {
+  const stops: ItineraryTimelineStop[] = inputs.map((input, index) => {
     const travelMinutes = Math.max(0, Math.round(Number.isFinite(input.travelMinutes) ? input.travelMinutes : 0));
     const durationMinutes = snapStopDurationMinutes(input.durationMinutes);
     const arrivalMinutes = input.overlapsPreviousArrival && previousArrivalMinutes !== undefined
       ? previousArrivalMinutes
-      : elapsedMinutes + travelMinutes;
+      : index === 0 ? 0 : elapsedMinutes + travelMinutes;
     const finishMinutes = arrivalMinutes + durationMinutes;
 
     elapsedMinutes = input.overlapsPreviousArrival
@@ -166,6 +166,59 @@ export function calculateItineraryTimeline(inputs: readonly ItineraryTimelineInp
     stops,
     totalMinutes: stops.length ? elapsedMinutes : 0,
   };
+}
+
+// Arrival anchors the shared schedule. The journey there happens before it.
+export function departureForArrival(arrivalMs: number, travelMinutes: number) {
+  return arrivalMs - Math.max(0, Math.round(Number.isFinite(travelMinutes) ? travelMinutes : 0)) * 60_000;
+}
+
+function itineraryClock(value?: string) {
+  const match = value?.trim().match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/i);
+  if (!match) return undefined;
+  let hour = Number(match[1]);
+  const minute = Number(match[2] || 0);
+  if (minute > 59 || (match[3] ? hour < 1 || hour > 12 : hour > 23)) return undefined;
+  if (match[3]) hour = hour % 12 + (match[3].toLowerCase() === 'pm' ? 12 : 0);
+  return hour * 60 + minute;
+}
+
+export function itineraryArrivalRange(firstArrival?: string, lastArrival?: string, lastDuration?: number) {
+  const start = itineraryClock(firstArrival);
+  const last = itineraryClock(lastArrival);
+  if (start === undefined || last === undefined || !Number.isFinite(lastDuration)) return undefined;
+  const format = (minutes: number) => {
+    const normalized = ((Math.round(minutes) % 1440) + 1440) % 1440;
+    const hour = Math.floor(normalized / 60);
+    return `${hour % 12 || 12}:${String(normalized % 60).padStart(2, '0')} ${hour < 12 ? 'AM' : 'PM'}`;
+  };
+  return `${format(start)} – ${format(last + lastDuration!)}`;
+}
+
+// Older saved plans used departure as their window start. Anchor them to their
+// recorded first arrival without shifting any agreed stop, including midnight.
+export function scheduleFromFirstArrival(input: { dateStart: string; dateEnd: string; timeWindow?: string; firstArrival?: string }) {
+  const parts = input.timeWindow?.split(/\s+[–—-]\s+|\s+to\s+/i) || [];
+  const oldStart = itineraryClock(parts[0]);
+  const oldEnd = itineraryClock(parts[1]);
+  const arrival = itineraryClock(input.firstArrival);
+  const start = arrival ?? oldStart;
+  if (start === undefined) return { dateStart: input.dateStart, dateEnd: input.dateEnd, timeWindow: input.timeWindow };
+  const duration = oldStart !== undefined && oldEnd !== undefined ? (oldEnd - oldStart + 1440) % 1440 || 1440 : 180;
+  const clock = (minutes: number) => {
+    const normalized = (minutes + 1440) % 1440;
+    const hour = Math.floor(normalized / 60);
+    return `${hour % 12 || 12}:${String(normalized % 60).padStart(2, '0')} ${hour < 12 ? 'AM' : 'PM'}`;
+  };
+  const dayShift = arrival !== undefined && oldStart !== undefined && arrival < oldStart ? 1 : 0;
+  const shift = (key: string) => {
+    if (!dayShift) return key;
+    const date = new Date(`${key}T12:00:00Z`);
+    if (!Number.isFinite(date.getTime())) return key;
+    date.setUTCDate(date.getUTCDate() + dayShift);
+    return date.toISOString().slice(0, 10);
+  };
+  return { dateStart: shift(input.dateStart), dateEnd: shift(input.dateEnd), timeWindow: `${clock(start)} - ${clock(start + duration)}` };
 }
 
 export function formatItineraryDuration(totalMinutes: number) {

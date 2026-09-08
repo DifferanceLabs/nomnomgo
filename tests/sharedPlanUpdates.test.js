@@ -9,7 +9,16 @@ function load(path, dependencies = {}) {
   vm.runInNewContext(compiled, context);
   return context.exports;
 }
-const updates = load('src/data/sharedPlans.ts');
+const updates = load('src/data/sharedPlans.ts', { '../domain/itinerary': load('src/domain/itinerary.ts') });
+
+test('shared header reports the first arrival and actual finish without modifying a locked plan', () => {
+  const plan = { status: 'locked', dateStart: '2026-09-09', dateEnd: '2026-09-09', timeWindow: '1:00 PM - 4:00 PM', stops: [
+    { arrivalTime: '1:41 PM', durationMinutes: 75 }, { arrivalTime: '3:12 PM', durationMinutes: 90 },
+  ] };
+  const before = JSON.stringify(plan);
+  assert.equal(updates.sharedPlanSchedule(plan).timeLabel, '1:41 PM – 4:42 PM');
+  assert.equal(JSON.stringify(plan), before);
+});
 
 test('Future includes today and ongoing trips; Past is newest first, with local midnight boundaries', () => {
   const plans = [

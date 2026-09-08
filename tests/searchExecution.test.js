@@ -92,8 +92,8 @@ test('malformed JSON is a failure; successful empty results are not', async (t) 
 });
 
 // Exercise the actual screen handlers without mounting unrelated native UI.
-function appHandler(name, context) {
-  const source = ts.createSourceFile('App.tsx', fs.readFileSync('App.tsx', 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+function appHandler(name, context, filename = 'App.tsx') {
+  const source = ts.createSourceFile(filename, fs.readFileSync(filename, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   let initializer;
   function visit(node) {
     if (ts.isFunctionDeclaration(node) && node.name?.text === name) initializer = node;
@@ -291,6 +291,21 @@ function areaSelectionHarness(overrides = {}) {
   return { context, events, base, select: appHandler('selectSearchArea', context), load: appHandler('loadSearchAreas', context) };
 }
 
+test('Current location requests fresh GPS rather than a cached route address and handles denial', async () => {
+  let permission = 'granted', calls = 0;
+  const get = appHandler('getCurrentJourneyOrigin', { setTimeout, clearTimeout, Location: {
+    Accuracy: { Balanced: 3 }, requestForegroundPermissionsAsync: async () => ({ status: permission }),
+    getCurrentPositionAsync: async () => { calls++; return { coords: { latitude: 36, longitude: -86, accuracy: 5, altitude: 80 } }; },
+  } }, 'src/ui/GettingThereRow.tsx');
+  const origin = await get();
+  assert.equal(origin.latitude, 36); assert.equal(origin.longitude, -86); assert.equal(origin.label, 'Current location');
+  assert.equal(Object.keys(origin).length, 3);
+  await get(); assert.equal(calls, 2);
+  permission = 'denied';
+  await assert.rejects(get(), /choose an address/);
+  assert.equal(calls, 2);
+});
+
 test('a double tap on Unlock waits for one reopen request without showing a stale error', async () => {
   const pending = deferred(); let calls=0, opened, error;
   const context = {
@@ -320,7 +335,7 @@ test('the first Friends action opens RSVPs directly after creating the shared pl
 });
 
 test('shared editor restores stable stops, typed activity icons, single-clock time, and locked arrivals', () => {
-  const context = {};
+  const context = { scheduleFromFirstArrival: require('../.route-import-test-build/src/domain/itinerary').scheduleFromFirstArrival };
   for (const name of ['clockMinutes', 'clockTimeFromMinutes', 'formatClockTime', 'clockTimePlusMinutes', 'timeWindowFromStartClock', 'parseClockMinutes']) context[name] = appHandler(name, context);
   const restore = appHandler('confirmedPlanFromSharedPlan', context);
   const result = restore({ title: 'Lunch', ownerId: 'owner', status: 'locked', intent: 'both', locationLabel: 'Downtown', dateStart: '2026-09-08', dateEnd: '2026-09-08', timeWindow: '1pm', suggestions: [], stops: [
@@ -329,7 +344,7 @@ test('shared editor restores stable stops, typed activity icons, single-clock ti
   assert.equal(result.stops[0].key, 'stable');
   assert.equal(result.stops[0].visualType, 'food');
   assert.equal(result.stops[0].item.lat, 35);
-  assert.equal(result.timeWindow, '1:00 PM - 4:00 PM');
+  assert.equal(result.timeWindow, '1:20 PM - 4:20 PM');
   assert.equal(result.status, 'locked');
   assert.equal(result.lockedArrivalTimes.stable.hours, 13);
   assert.equal(result.lockedArrivalTimes.stable.minutes, 20);
@@ -536,11 +551,13 @@ test('selecting the charger itself adds it once; ordinary additions and locked p
   assert.equal(context.plan.stops.length, 1);
 });
 
-test('Use in Now mode saves the charger and chosen destination together in the new plan', async () => {
+test('Now plans leave now and save the first arrival after travel, including the next day', async () => {
   const { context } = chargerPlanHarness();
   let saved;
   let active;
   Object.assign(context, {
+    Date: class extends Date { static now() { return new Date(2026, 8, 8, 23, 50).getTime(); } },
+    estimateTravelMinutes: () => 40, effectivePlanStopTravelMode: () => 'car',
     nowPlanCreating: false, setNowPlanCreating: () => {},
     dateRangeKeysForWindow: () => ({ start: '2026-09-05', end: '2026-09-05' }),
     contextualNowPlanTitle: () => 'Lunch', inferPlanType: () => 'local_plan',
@@ -551,8 +568,13 @@ test('Use in Now mode saves the charger and chosen destination together in the n
     setPlan: (plan) => { active = plan; }, scrollToPlan: () => {},
     compactError: (error) => error.message, showAppNotice: (_, message) => assert.fail(message),
   });
+  for (const name of ['clockMinutes', 'clockTimeFromMinutes', 'formatClockTime', 'clockTimePlusMinutes', 'timeWindowFromStartClock', 'clockTimeFromDate', 'formatDateInput']) context[name] = appHandler(name, context);
   for (const name of ['setSelectedDateWindow', 'setCustomDateRange', 'setSelectedTime', 'setResultMode', 'setPlanTimes', 'setArrivalTimes', 'setTimeEditorKey', 'setNowMode', 'setPlanSetupOpen', 'setHomeOpen', 'setSavedPlansLandingOpen', 'setSavedPlansOpen', 'setPlanSettingsOpen', 'setPreferencesOpen', 'setAdvancedPreferencesOpen', 'setCards', 'setHasInitiatedSearch']) context[name] = () => {};
   await appHandler('createNowPlanFromDestination', context)({ slot: 'food', item: { id: 'lunch', title: 'Lunch' }, category: 'Lunch' });
   assert.deepEqual(Array.from(saved.stops, (stop) => stop.item.id), ['charger-one', 'lunch']);
   assert.deepEqual(Array.from(active.stops, (stop) => stop.item.id), ['charger-one', 'lunch']);
+  assert.equal(active.timeWindow, '12:30 AM - 3:30 AM');
+  assert.equal(saved.timeWindow, active.timeWindow);
+  assert.equal(active.planDateStart, '2026-09-09');
+  assert.equal(saved.planDateStart, active.planDateStart);
 });

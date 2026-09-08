@@ -3,7 +3,7 @@ import { ActivityIndicator, ScrollView, StyleSheet, Text, TextInput, TouchableOp
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { getAlphaAccount } from '../data/accountStorage';
-import { changeSharedPlan, changedSharedRsvps, createSharedPlan, getSharedPlan, groupPlansByDate, listSharedPlans, newerSharedPlan, planDateRangeLabel, sharedPlanUrl, sharedPlanDraftError, sharedRsvpLabel, type SharedPlan, type SharedPlanDraft, type SharedPlanSummary } from '../data/sharedPlans';
+import { changeSharedPlan, changedSharedRsvps, createSharedPlan, getSharedPlan, groupPlansByDate, listSharedPlans, newerSharedPlan, planDateRangeLabel, sharedPlanSchedule, sharedPlanUrl, sharedPlanDraftError, sharedRsvpLabel, type SharedPlan, type SharedPlanDraft, type SharedPlanSummary } from '../data/sharedPlans';
 import { startForegroundRefresh } from '../data/foregroundRefresh';
 import { ActionButton as Button, BottomNavigation, RsvpControl } from './primitives';
 import { RsvpBadge, RsvpSummary } from './RsvpSummary';
@@ -50,6 +50,7 @@ export function SharedPlansScreen({ initialPlan, initialPlanId, initialSection, 
   const suggestionKey = useRef(requestId());
   const owner = plan?.ownerId === account.id;
   const locked = plan?.status === 'locked';
+  const schedule = plan ? sharedPlanSchedule(plan) : undefined;
   const filteredPlans = plans.filter((item) => `${item.title} ${item.locationLabel}`.toLowerCase().includes(search.trim().toLowerCase()));
   const planGroups = groupPlansByDate(filteredPlans);
   useEffect(() => {
@@ -170,7 +171,7 @@ export function SharedPlansScreen({ initialPlan, initialPlanId, initialSection, 
     </View> : null}
     <ScrollView contentContainerStyle={[styles.content, plan && !editing && styles.planContent]} keyboardShouldPersistTaps="handled">
       {plan && !editing ? <PlanWorkspaceHeader section={section === 'plan' ? 'plan' : 'friends'} count={plan.participants.length}
-        title={plan.title} dateLabel={planDateRangeLabel(plan.dateStart, plan.dateEnd)} timeLabel={plan.timeWindow || 'Time to be decided'}
+        title={plan.title} dateLabel={planDateRangeLabel(schedule!.dateStart, schedule!.dateEnd)} timeLabel={schedule!.timeLabel || 'Time to be decided'}
         locationLabel={plan.locationLabel} stopCount={plan.stops.length} locked={locked} participants={plan.participants}
         statusLabel={!owner ? 'Organizer edits' : undefined} disabled={busy}
         onBack={() => navigate(() => openPlan(''))} onPlan={() => setSection('plan')} onFriends={() => setSection('people')} /> : null}
