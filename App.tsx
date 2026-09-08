@@ -2286,6 +2286,7 @@ function parseClockMinutes(value: string) {
   const minutes = Number(match[2] || 0);
   if (!Number.isFinite(hours) || !Number.isFinite(minutes) || minutes > 59) return undefined;
   const meridian = match[3]?.toLowerCase();
+  if (meridian && (hours < 1 || hours > 12)) return undefined;
   if (meridian === 'pm' && hours < 12) hours += 12;
   if (meridian === 'am' && hours === 12) hours = 0;
   if (hours > 23) return undefined;
@@ -2985,6 +2986,9 @@ function NomNomGoApp() {
   const [planTimes, setPlanTimes] = useState<Record<string, StopTime | undefined>>({});
   const [arrivalTimes, setArrivalTimes] = useState<Record<string, StopTime | undefined>>({});
   const [timeEditorKey, setTimeEditorKey] = useState<string | null>(null);
+  const [startTimeEditorOpen, setStartTimeEditorOpen] = useState(false);
+  const [startTimeDraft, setStartTimeDraft] = useState('');
+  const [startTimeError, setStartTimeError] = useState('');
   const [expandedStopKey, setExpandedStopKey] = useState<string | null>(null);
   const [addStopMenuOpen, setAddStopMenuOpen] = useState(false);
   const [itineraryListWidth, setItineraryListWidth] = useState<number>();
@@ -3161,7 +3165,7 @@ function NomNomGoApp() {
   const activePlanDateLabel = absoluteDateRangeLabel(activePlanDateRange.start, activePlanDateRange.end) ||
     dateWindowLabel(activePlanDateWindow, new Date(), activePlanCustomDateRange);
   const activePlanTimeWindow = plan.timeWindow || selectedPreferenceTimeWindow;
-  const activePlanTimePreference = timePreferenceForWindow(activePlanTimeWindow, selectedTime);
+  const activePlanTimePreference = timePreferenceForWindow(activePlanTimeWindow, activePlanTimeWindow || selectedTime);
   activePlanTimingRef.current = {
     dateRange: activePlanDateRange,
     timeWindow: activePlanTimeWindow,
@@ -3582,6 +3586,7 @@ function NomNomGoApp() {
   };
 
   const closeTransientSurfaces = () => {
+    setStartTimeEditorOpen(false);
     cancelSearch();
     setAccountMenuOpen(false);
     setAccountSettingsOpen(false);
@@ -6450,6 +6455,26 @@ function NomNomGoApp() {
 
   const planTitle = plan.title || activeBetaPlan?.title || titleForPlanStops(plan.stops);
   const isPlanLocked = plan.status === 'locked';
+  const savePlanStartTime = () => {
+    if (isPlanLocked) return;
+    const startMinutes = parseClockMinutes(startTimeDraft);
+    if (startMinutes === undefined) {
+      setStartTimeError('Enter a time like 3:05 PM or 15:05.');
+      return;
+    }
+    const parsedWindow = activePlanTimeWindow ? parsePlanningTimeWindow(activePlanTimeWindow) : undefined;
+    const windowDuration = parsedWindow ? parsedWindow.end - parsedWindow.start : 180;
+    const timeWindow = timeWindowFromStartClock(clockTimeFromMinutes(startMinutes), windowDuration);
+    setPlan((prev) => prev.status === 'locked' ? prev : {
+      ...prev,
+      timeWindow,
+      lockedArrivalTimes: undefined,
+      savedPlanId: undefined,
+    });
+    setArrivalTimes({});
+    setStartTimeError('');
+    setStartTimeEditorOpen(false);
+  };
   const isImportedGoogleMapsPlan = plan.routeProvider === 'google_maps';
   const planInvitees = plan.invitees || [];
   const currentContextSignature = currentPlanContext();
@@ -8936,6 +8961,108 @@ function NomNomGoApp() {
                 <Text style={styles.itinerarySectionTitle}>Plan stops</Text>
                 <Text style={styles.itinerarySectionHint}>Drag the handle to reorder · Tap a stop to expand</Text>
               </View>
+
+            </View>
+
+            <View
+              style={styles.itineraryList}
+              onLayout={(event) => {
+                const { width, y } = event.nativeEvent.layout;
+                timelineYRef.current = y;
+                setItineraryListWidth((current) => (
+                  current !== undefined && Math.abs(current - width) < 1 ? current : width
+                ));
+              }}
+            >
+              {plan.stops.length ? (
+                <Sortable.Flex
+                  activeItemOpacity={1}
+                  activeItemScale={1}
+                  activeItemShadowOpacity={0.22}
+                  alignItems="flex-start"
+                  autoScrollActivationOffset={[96, 132]}
+                  autoScrollMaxVelocity={900}
+                  customHandle
+                  dragActivationDelay={0}
+                  dragActivationFailOffset={10}
+                  DropIndicatorComponent={ItineraryInsertionIndicator}
+                  dropIndicatorStyle={{}}
+                  flexDirection="column"
+                  flexWrap="nowrap"
+                  inactiveItemOpacity={1}
+                  itemEntering={null}
+                  onDragEnd={reorderPlanStops}
+                  overDrag="vertical"
+                  rowGap={spacing.xs}
+                  scrollableRef={scrollRef}
+                  showDropIndicator
+                  strategy="insert"
+                  width={itineraryListWidth}
+                >
+                  {plan.stops.map((stop, index) => {
+                    const nextStop = plan.stops[index + 1];
+                    const nextTravelMeta = nextStop ? travelMetaForStop(nextStop, index + 1) : undefined;
+                    const stopLocation = typeof stop.item === 'string'
+                      ? undefined
+                      : stop.item.address || stop.item.subtitle || cityStateLabel(cityStateForPlace(stop.item));
+                    const kind = itineraryKindForStop(stop);
+                    return (
+                      <View
+                        key={stop.key}
+                        onLayout={(event) => { stopLayoutYRef.current[stop.key] = event.nativeEvent.layout.y; }}
+                        style={[
+                          styles.itinerarySortableItem,
+                          itineraryListWidth !== undefined && { width: itineraryListWidth },
+                        ]}
+                      >
+                        <ItineraryStopRow
+                          animateEntrance={recentlyAddedStopKey === stop.key}
+                          arrivalTime={formatClockAfterMinutes(itineraryArrivalMinutes(index), activePlanTimelineBaseMs)}
+                          durationEditorExpanded={timeEditorKey === stop.key}
+                          durationMinutes={durationForStop(stop)}
+                          expanded={expandedStopKey === stop.key}
+                          featureOptions={stop.featureOptions || []}
+                          kind={kind}
+                          location={stopLocation}
+                          name={cardToName(stop.item) || `${kind === 'idea' ? 'Idea' : kind} stop`}
+                          number={index + 1}
+                          onDeletePress={() => removeStop(stop)}
+                          onDurationChange={(minutes) => updateStopDuration(stop.key, minutes)}
+                          onDurationEditorExpandedChange={(expanded) => {
+                            setExpandedStopKey(stop.key);
+                            setTimeEditorKey(expanded ? stop.key : null);
+                          }}
+                          onMapPress={() => openStopMaps(stop)}
+                          onMoveDown={index < plan.stops.length - 1 ? () => moveStop(stop.key, 1) : undefined}
+                          onMoveUp={index > 0 ? () => moveStop(stop.key, -1) : undefined}
+                          onSharePress={() => openQuickShare({ kind: 'stop', stop, index })}
+                          onToggleExpanded={() => toggleExpandedStop(stop.key)}
+                          onToggleFeature={(feature) => toggleStopFeature(stop.key, feature)}
+                          onTravelModeChange={nextStop ? (mode) => setStopTravelMode(nextStop.key, mode) : undefined}
+                          onWebsitePress={canOpenPlaceWebsite(stop.item) ? () => openStopWebsite(stop) : undefined}
+                          selectedFeatures={stop.selectedFeatures || []}
+                          testID={`itinerary-stop-${stop.key}`}
+                          travelMode={nextTravelMeta?.mode}
+                          travelToNext={nextStop && nextTravelMeta ? {
+                            durationMinutes: travelMinutesForStop(nextStop, index + 1),
+                            label: nextTravelMeta.label.toLowerCase(),
+                            mode: nextTravelMeta.mode,
+                          } : null}
+                        />
+                      </View>
+                    );
+                  })}
+                </Sortable.Flex>
+              ) : (
+                <View style={styles.itineraryEmptyState}>
+                  <Ionicons name="list-outline" size={iconSizes.lg} color={colors.textTertiary} />
+                  <Text style={styles.itineraryEmptyTitle}>No stops yet</Text>
+                  <Text style={styles.itineraryEmptyCopy}>Add food, an activity, dessert, or an idea. New stops go to the end.</Text>
+                </View>
+              )}
+            </View>
+
+            <View style={styles.itineraryAddStopFooter}>
               <TouchableOpacity
                 activeOpacity={0.72}
                 accessibilityLabel={addStopMenuOpen ? 'Close add stop options' : 'Add stop'}
@@ -9105,112 +9232,26 @@ function NomNomGoApp() {
               </View>
             ) : null}
 
-            <View
-              style={styles.itineraryList}
-              onLayout={(event) => {
-                const { width, y } = event.nativeEvent.layout;
-                timelineYRef.current = y;
-                setItineraryListWidth((current) => (
-                  current !== undefined && Math.abs(current - width) < 1 ? current : width
-                ));
-              }}
-            >
-              {plan.stops.length ? (
-                <Sortable.Flex
-                  activeItemOpacity={1}
-                  activeItemScale={1}
-                  activeItemShadowOpacity={0.22}
-                  alignItems="flex-start"
-                  autoScrollActivationOffset={[96, 132]}
-                  autoScrollMaxVelocity={900}
-                  customHandle
-                  dragActivationDelay={0}
-                  dragActivationFailOffset={10}
-                  DropIndicatorComponent={ItineraryInsertionIndicator}
-                  dropIndicatorStyle={{}}
-                  flexDirection="column"
-                  flexWrap="nowrap"
-                  inactiveItemOpacity={1}
-                  itemEntering={null}
-                  onDragEnd={reorderPlanStops}
-                  overDrag="vertical"
-                  rowGap={spacing.xs}
-                  scrollableRef={scrollRef}
-                  showDropIndicator
-                  strategy="insert"
-                  width={itineraryListWidth}
-                >
-                  {plan.stops.map((stop, index) => {
-                    const nextStop = plan.stops[index + 1];
-                    const nextTravelMeta = nextStop ? travelMetaForStop(nextStop, index + 1) : undefined;
-                    const stopLocation = typeof stop.item === 'string'
-                      ? undefined
-                      : stop.item.address || stop.item.subtitle || cityStateLabel(cityStateForPlace(stop.item));
-                    const kind = itineraryKindForStop(stop);
-                    return (
-                      <View
-                        key={stop.key}
-                        onLayout={(event) => { stopLayoutYRef.current[stop.key] = event.nativeEvent.layout.y; }}
-                        style={[
-                          styles.itinerarySortableItem,
-                          itineraryListWidth !== undefined && { width: itineraryListWidth },
-                        ]}
-                      >
-                        <ItineraryStopRow
-                          animateEntrance={recentlyAddedStopKey === stop.key}
-                          arrivalTime={formatClockAfterMinutes(itineraryArrivalMinutes(index), activePlanTimelineBaseMs)}
-                          durationEditorExpanded={timeEditorKey === stop.key}
-                          durationMinutes={durationForStop(stop)}
-                          expanded={expandedStopKey === stop.key}
-                          featureOptions={stop.featureOptions || []}
-                          kind={kind}
-                          location={stopLocation}
-                          name={cardToName(stop.item) || `${kind === 'idea' ? 'Idea' : kind} stop`}
-                          number={index + 1}
-                          onDeletePress={() => removeStop(stop)}
-                          onDurationChange={(minutes) => updateStopDuration(stop.key, minutes)}
-                          onDurationEditorExpandedChange={(expanded) => {
-                            setExpandedStopKey(stop.key);
-                            setTimeEditorKey(expanded ? stop.key : null);
-                          }}
-                          onMapPress={() => openStopMaps(stop)}
-                          onMoveDown={index < plan.stops.length - 1 ? () => moveStop(stop.key, 1) : undefined}
-                          onMoveUp={index > 0 ? () => moveStop(stop.key, -1) : undefined}
-                          onSharePress={() => openQuickShare({ kind: 'stop', stop, index })}
-                          onToggleExpanded={() => toggleExpandedStop(stop.key)}
-                          onToggleFeature={(feature) => toggleStopFeature(stop.key, feature)}
-                          onTravelModeChange={nextStop ? (mode) => setStopTravelMode(nextStop.key, mode) : undefined}
-                          onWebsitePress={canOpenPlaceWebsite(stop.item) ? () => openStopWebsite(stop) : undefined}
-                          selectedFeatures={stop.selectedFeatures || []}
-                          testID={`itinerary-stop-${stop.key}`}
-                          travelMode={nextTravelMeta?.mode}
-                          travelToNext={nextStop && nextTravelMeta ? {
-                            durationMinutes: travelMinutesForStop(nextStop, index + 1),
-                            label: nextTravelMeta.label.toLowerCase(),
-                            mode: nextTravelMeta.mode,
-                          } : null}
-                        />
-                      </View>
-                    );
-                  })}
-                </Sortable.Flex>
-              ) : (
-                <View style={styles.itineraryEmptyState}>
-                  <Ionicons name="list-outline" size={iconSizes.lg} color={colors.textTertiary} />
-                  <Text style={styles.itineraryEmptyTitle}>No stops yet</Text>
-                  <Text style={styles.itineraryEmptyCopy}>Add food, an activity, dessert, or an idea. New stops go to the end.</Text>
-                </View>
-              )}
-            </View>
-
             {plan.stops.length ? (
               <>
                 <View style={styles.itinerarySummary}>
                   <View style={styles.itinerarySummaryValues}>
-                    <View style={styles.itinerarySummaryColumn}>
+                    <TouchableOpacity
+                      accessibilityRole="button"
+                      accessibilityLabel={`Edit start time, ${planStartTimeLabel}`}
+                      accessibilityHint="Adjusts all stop arrivals and the finish time"
+                      accessibilityState={{ expanded: startTimeEditorOpen, disabled: isPlanLocked }}
+                      disabled={isPlanLocked}
+                      onPress={() => {
+                        setStartTimeDraft(planStartTimeLabel);
+                        setStartTimeError('');
+                        setStartTimeEditorOpen((current) => !current);
+                      }}
+                      style={styles.itinerarySummaryColumn}
+                    >
                       <Text style={styles.itinerarySummaryLabel}>Est. start</Text>
-                      <Text style={styles.itinerarySummaryValue}>{planStartTimeLabel}</Text>
-                    </View>
+                      <Text style={[styles.itinerarySummaryValue, styles.itineraryStartTimeValue]}>{planStartTimeLabel}</Text>
+                    </TouchableOpacity>
                     <View style={styles.itinerarySummaryDivider} />
                     <View style={styles.itinerarySummaryColumn}>
                       <Text style={styles.itinerarySummaryLabel}>Total time</Text>
@@ -9222,6 +9263,27 @@ function NomNomGoApp() {
                       <Text style={styles.itinerarySummaryValue}>{planFinishTimeLabel}</Text>
                     </View>
                   </View>
+                  {startTimeEditorOpen && !isPlanLocked ? (
+                    <View style={styles.itineraryStartTimeEditor}>
+                      <Text style={styles.itinerarySummaryLabel}>Start time</Text>
+                      <View style={[styles.itineraryIdeaComposer, { flexWrap: 'wrap' }]}>
+                        <TextInput
+                          accessibilityLabel="Plan start time"
+                          autoFocus
+                          value={startTimeDraft}
+                          onChangeText={(value) => { setStartTimeDraft(value); setStartTimeError(''); }}
+                          placeholder="3:05 PM"
+                          placeholderTextColor={colors.textTertiary}
+                          style={[styles.itineraryIdeaInput, { flexBasis: '100%' }]}
+                          returnKeyType="done"
+                          onSubmitEditing={savePlanStartTime}
+                        />
+                        <Button label="Apply" onPress={savePlanStartTime} compact primary />
+                        <Button label="Cancel" onPress={() => setStartTimeEditorOpen(false)} compact />
+                      </View>
+                      {startTimeError ? <Text accessibilityRole="alert" style={{ color: colors.red }}>{startTimeError}</Text> : null}
+                    </View>
+                  ) : null}
                   {targetStatus ? (
                     <View style={styles.itineraryTargetStatus}>
                       <Ionicons
@@ -12770,6 +12832,9 @@ const styles = StyleSheet.create({
     minHeight: controls.minimumTouchTarget,
     paddingHorizontal: spacing.sm,
   },
+  itineraryAddStopFooter: {
+    marginLeft: controls.minimumTouchTarget,
+  },
   itineraryAddStopButtonActive: {
     backgroundColor: colors.coralSoft,
     borderColor: colors.coral,
@@ -12973,6 +13038,16 @@ const styles = StyleSheet.create({
     borderRadius: radii.md,
     borderWidth: 1,
     overflow: 'hidden',
+  },
+  itineraryStartTimeValue: {
+    color: colors.cyan,
+    textDecorationLine: 'underline',
+  },
+  itineraryStartTimeEditor: {
+    borderTopWidth: 1,
+    borderTopColor: colors.divider,
+    padding: spacing.xs,
+    gap: spacing.micro,
   },
   itinerarySummaryValues: {
     alignItems: 'stretch',

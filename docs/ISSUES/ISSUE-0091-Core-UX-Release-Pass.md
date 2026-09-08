@@ -12,6 +12,7 @@ Exercise active Now, Later, plan editing, discovery, saved plans, local particip
 
 ## Acceptance Criteria
 
+- Add stop appears directly below the final stop (or the empty state), with its options underneath. Tapping the estimated start opens an inline time editor; valid changes shift arrivals, finish, and the target window while preserving durations. Locked plans cannot edit the start time.
 - Plan-stop polish: activity stops use sparkles; travel mode and duration appear on a compact connector between stops, with no connector after the final stop. Expanding and reordering stops retain the correct travel leg.
 - September alpha follow-up: Going is green, Maybe yellow and Not going red in all RSVP controls, participant labels and plan summaries; labels/selection also communicate status without color.
 - Audit every screen family and interaction category in the source; exercise active phone flows with representative empty, busy, error and populated states and distinguish runtime evidence from source review.
@@ -27,5 +28,6 @@ Exercise active Now, Later, plan editing, discovery, saved plans, local particip
 
 ## Validation
 
+- Start-time/Add-stop follow-up: typecheck and 73 route/planning tests passed; lint retained 17 existing warnings and no errors. Local browser checks at 390px and 320px verified footer placement, readable time entry, synchronized arrivals/finish/target after changing 6:00 PM to 3:05 PM, reload persistence, and hidden edit controls after locking. Automated coverage includes midnight, invalid input, and a lock arriving while editing. Native device interaction is not yet verified.
 - Local plan-stop follow-up: typecheck, focused component lint, and all 72 route/planning tests passed. At a 390px web viewport, verified a 24px travel connector between two manual stops, expanded-card placement, Drive-to-Walk updates, and Move down reordering with no connector after the final stop. Physical native drag gestures remain untested for this follow-up.
 See the [September 7 alpha audit](../UX_AUDIT_2026-09-07.md) for the screen inventory, RSVP/shared-plan improvements, current runtime coverage and remaining physical-device/beta checks. The earlier [UX release review](../UX_RELEASE_REVIEW_2026-09-04.md) records the wider discovery/preset matrix. Production completion additionally requires successful GitHub/Vercel checks and an unauthenticated launch-gate probe.
