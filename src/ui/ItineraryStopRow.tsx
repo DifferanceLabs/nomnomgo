@@ -46,6 +46,7 @@ export type ItineraryTravelToNext = {
 };
 
 export type ItineraryStopRowProps = {
+  readOnly?: boolean;
   number: number;
   kind: ItineraryStopKind;
   name: string;
@@ -191,6 +192,7 @@ function MoreAction({ label, icon, onPress, disabled = false, selected = false }
 }
 
 export function ItineraryStopRow({
+  readOnly = false,
   number,
   kind,
   name,
@@ -224,7 +226,7 @@ export function ItineraryStopRow({
   const { activationAnimationProgress, isActive } = useItemContext();
   const [internalDurationEditorExpanded, setInternalDurationEditorExpanded] = useState(false);
   const [moreExpanded, setMoreExpanded] = useState(false);
-  const durationEditorOpen = expanded && (
+  const durationEditorOpen = !readOnly && expanded && (
     durationEditorExpanded ?? internalDurationEditorExpanded
   );
   const safeDurationMinutes = snapStopDurationMinutes(durationMinutes);
@@ -303,7 +305,9 @@ export function ItineraryStopRow({
       <Text accessibilityElementsHidden style={styles.timingDivider}>·</Text>
       <TouchableOpacity
         activeOpacity={0.72}
-        accessibilityHint="Opens the inline duration editor"
+        accessibilityHint={readOnly ? undefined : 'Opens the inline duration editor'}
+        disabled={readOnly}
+        accessibilityState={{ disabled: readOnly }}
         accessibilityLabel={`Time here ${formatItineraryDuration(safeDurationMinutes)}`}
         accessibilityRole="button"
         onPress={handleDurationPress}
@@ -339,7 +343,7 @@ export function ItineraryStopRow({
       testID={testID}
     >
       <View style={styles.row}>
-        <Sortable.Handle style={styles.handle}>
+        {!readOnly ? <Sortable.Handle style={styles.handle}>
           <View
             accessible
             accessibilityActions={[
@@ -359,7 +363,7 @@ export function ItineraryStopRow({
               ))}
             </View>
           </View>
-        </Sortable.Handle>
+        </Sortable.Handle> : <View style={styles.handle} />}
 
         <Animated.View
           style={[
@@ -427,7 +431,7 @@ export function ItineraryStopRow({
                 </View>
               ) : null}
 
-              <View style={styles.timeSection}>
+              {!readOnly ? <View style={styles.timeSection}>
                 <TouchableOpacity
                   activeOpacity={0.74}
                   accessibilityLabel={`Time here, ${formatItineraryDuration(safeDurationMinutes)}`}
@@ -486,7 +490,7 @@ export function ItineraryStopRow({
                     </TouchableOpacity>
                   </View>
                 ) : null}
-              </View>
+              </View> : null}
 
               <View style={styles.compactActions}>
                 <CompactAction
@@ -510,7 +514,7 @@ export function ItineraryStopRow({
                   onPress={onSharePress}
                   testID={testID ? `${testID}-share` : undefined}
                 />
-                <CompactAction
+                {!readOnly ? <><CompactAction
                   accessibilityLabel={moreExpanded ? 'Hide edit options' : 'Show stop edit options'}
                   expanded={moreExpanded}
                   icon="ellipsis-horizontal"
@@ -525,10 +529,10 @@ export function ItineraryStopRow({
                   label="Delete"
                   onPress={onDeletePress}
                   testID={testID ? `${testID}-delete` : undefined}
-                />
+                /></> : null}
               </View>
 
-              {moreExpanded ? (
+              {!readOnly && moreExpanded ? (
                 <View style={styles.moreArea}>
                   <Text style={styles.moreAreaTitle}>Stop options</Text>
                   <View style={styles.moreActionRow}>

@@ -291,6 +291,34 @@ function areaSelectionHarness(overrides = {}) {
   return { context, events, base, select: appHandler('selectSearchArea', context), load: appHandler('loadSearchAreas', context) };
 }
 
+test('a double tap on Unlock waits for one reopen request without showing a stale error', async () => {
+  const pending = deferred(); let calls=0, opened, error;
+  const context = {
+    sharedEditor: {id:'plan',revision:1,status:'locked'}, sharedEditorReadOnly:false,
+    sharedEditorRef:{current:{id:'plan',revision:2,status:'locked'}},
+    sharedStatusChangingRef:{current:false}, setSharedStatusChanging:()=>{},
+    changeSharedItinerary: async(base,action)=>{calls++;assert.equal(base.revision,2);assert.equal(action,'plan.reopen');return pending.promise;},
+    openSharedPlanEditor:plan=>{opened=plan;},setSharedEditorConflict:value=>{error=value;},compactError:String,
+  };
+  const unlock=appHandler('unlockPlan',context);
+  const first=unlock();await unlock();assert.equal(calls,1);
+  pending.resolve({id:'plan',revision:3,status:'planning'});await first;
+  assert.equal(opened.status,'planning');assert.equal(error,undefined);assert.equal(context.sharedStatusChangingRef.current,false);
+});
+
+test('the first Friends action opens RSVPs directly after creating the shared plan', async () => {
+  let workspace;
+  const context = {
+    sharedEditor:null,sharedPublishingRef:{current:false},
+    ensureActiveBetaPlanRecord:async()=>({id:'local',title:'Lunch',stops:[]}),
+    activePlanDateRange:{start:'2026-09-08',end:'2026-09-08'},
+    createSharedPlan:async()=>({id:'shared'}),setSharePreviewOpen:()=>{},setPlanPeopleOpen:()=>{},
+    setSharedWorkspace:value=>{workspace=value;},showAppNotice:()=>assert.fail('unexpected error'),compactError:String,
+  };
+  await appHandler('openCurrentSharedPlan',context)();
+  assert.equal(workspace.plan.id,'shared');assert.equal(workspace.section,'people');
+});
+
 test('shared editor restores stable stops, typed activity icons, single-clock time, and locked arrivals', () => {
   const context = {};
   for (const name of ['clockMinutes', 'clockTimeFromMinutes', 'formatClockTime', 'clockTimePlusMinutes', 'timeWindowFromStartClock', 'parseClockMinutes']) context[name] = appHandler(name, context);

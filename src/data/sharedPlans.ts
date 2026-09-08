@@ -3,7 +3,21 @@ import type { Plan, PlanParticipant } from '../domain/plan';
 
 export type SharedPlan = Omit<Plan, 'participants'> & { revision: number; participants: (PlanParticipant & { joined: boolean })[] };
 export type SharedPlanDraft = Pick<Plan, 'title' | 'intent' | 'locationLabel' | 'dateStart' | 'dateEnd' | 'timeWindow' | 'stops'>;
-export type SharedPlanSummary = Pick<SharedPlan, 'id' | 'title' | 'status' | 'dateStart' | 'locationLabel' | 'ownerId'> & { rsvp?: string; revision?: number; participants?: SharedPlan['participants'] };
+export type SharedPlanSummary = Pick<SharedPlan, 'id' | 'title' | 'status' | 'dateStart' | 'locationLabel' | 'ownerId'> & { dateEnd?: string; timeWindow?: string; rsvp?: string; revision?: number; participants?: SharedPlan['participants'] };
+
+// Keep today's and ongoing multi-day plans in Future until their final date ends.
+export function groupPlansByDate<T extends { dateStart: string; dateEnd?: string }>(plans: readonly T[], now = new Date()) {
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  const past = (plan: T) => (plan.dateEnd || plan.dateStart) < today;
+  return {
+    future: plans.filter((plan) => !past(plan)).sort((a, b) => a.dateStart.localeCompare(b.dateStart)),
+    past: plans.filter(past).sort((a, b) => (b.dateEnd || b.dateStart).localeCompare(a.dateEnd || a.dateStart)),
+  };
+}
+
+export function sharedItinerarySignature(plan: SharedPlan) {
+  return JSON.stringify([plan.title, plan.intent, plan.locationLabel, plan.dateStart, plan.dateEnd, plan.timeWindow, plan.stops]);
+}
 
 export function sharedPlanDraftError(draft: SharedPlanDraft): string {
   if (!draft.title.trim() || !draft.locationLabel.trim()) return 'Add a plan name and meeting place.';
@@ -36,6 +50,21 @@ export async function listSharedPlans() {
 }
 export async function changeSharedPlan(plan: SharedPlan, action: string, data: Record<string, unknown> = {}) {
   return (await accountRequest<{ plan: SharedPlan }>({ ...data, action, planId: plan.id, revision: plan.revision })).plan;
+}
+
+// RSVP/invitation changes advance the revision too. Refresh those safely without
+// replacing another organizer's itinerary edits. Reopen is an idempotent action.
+export async function changeSharedItinerary(plan: SharedPlan, action: 'plan.update' | 'plan.lock' | 'plan.reopen', data: Record<string, unknown> = {}) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const latest = await getSharedPlan(plan.id);
+    if (action === 'plan.reopen' && latest.status === 'planning') return latest;
+    if (action !== 'plan.reopen' && (sharedItinerarySignature(latest) !== sharedItinerarySignature(plan) || latest.status !== plan.status)) {
+      throw Object.assign(new Error('The itinerary changed on another device. Review the latest plan before saving.'), { status: 409, latestPlan: latest });
+    }
+    try { return await changeSharedPlan(latest, action, data); }
+    catch (error) { if ((error as { status?: number }).status !== 409 || attempt) throw error; }
+  }
+  throw new Error('The plan is busy. Please try again.');
 }
 
 export function planIdFromUrl() {

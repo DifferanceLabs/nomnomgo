@@ -3,13 +3,56 @@ const assert = require('node:assert/strict');
 const vm = require('node:vm');
 const fs = require('node:fs');
 const ts = require('typescript');
-function load(path) {
+function load(path, dependencies = {}) {
   const compiled = ts.transpileModule(fs.readFileSync(path, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText;
-  const context = { exports: {}, require: () => ({}), setTimeout, clearTimeout };
+  const context = { exports: {}, require: (name) => dependencies[name] || {}, setTimeout, clearTimeout };
   vm.runInNewContext(compiled, context);
   return context.exports;
 }
 const updates = load('src/data/sharedPlans.ts');
+
+test('Future includes today and ongoing trips; Past is newest first, with local midnight boundaries', () => {
+  const plans = [
+    {id:'later',dateStart:'2026-09-12'}, {id:'yesterday',dateStart:'2026-09-07'},
+    {id:'ongoing',dateStart:'2026-09-06',dateEnd:'2026-09-09'},
+    {id:'today',dateStart:'2026-09-08'}, {id:'old',dateStart:'2025-12-31'},
+  ];
+  const grouped = updates.groupPlansByDate(plans, new Date(2026,8,8,0,1));
+  assert.equal(grouped.future.map(p=>p.id).join(','),'ongoing,today,later');
+  assert.equal(grouped.past.map(p=>p.id).join(','),'yesterday,old');
+  assert.equal(plans[0].id,'later');
+  assert.equal(updates.groupPlansByDate(plans, new Date(2026,8,9)).past[0].id,'today');
+});
+
+test('saving after an RSVP refreshes the revision, but never overwrites changed itinerary details', async () => {
+  const base = {id:'plan',revision:1,status:'planning',title:'Lunch',stops:[]};
+  let latest = {...base,revision:2,participants:[{rsvp:'going'}]}, writes=0;
+  const client=load('src/data/sharedPlans.ts', {'./accountStorage':{accountRequest:async(body)=>{
+    if(body.action==='plan.get') return {plan:latest};
+    writes++; assert.equal(body.revision,latest.revision); return {plan:{...latest,revision:3}};
+  }}});
+  await client.changeSharedItinerary(base,'plan.update',{details:{title:'Dinner'}});
+  assert.equal(writes,1);
+  latest={...latest,title:'Someone else edited'};
+  await assert.rejects(client.changeSharedItinerary(base,'plan.update',{}),error=>error.status===409);
+  await assert.rejects(client.changeSharedItinerary(base,'plan.lock'),error=>error.status===409);
+  assert.equal(writes,1);
+});
+
+test('reopening uses current state, is idempotent, and retries a racing RSVP only once', async () => {
+  const base={id:'plan',revision:1,status:'locked',title:'Lunch',stops:[]};
+  let latest={...base,revision:2}, writes=0;
+  const client=load('src/data/sharedPlans.ts', {'./accountStorage':{accountRequest:async(body)=>{
+    if(body.action==='plan.get') return {plan:latest};
+    writes++;
+    if(writes===1) {latest={...latest,revision:3};throw Object.assign(new Error('Changed'),{status:409});}
+    assert.equal(body.revision,3);latest={...latest,status:'planning',revision:4};return {plan:latest};
+  }}});
+  assert.equal((await client.changeSharedItinerary(base,'plan.reopen')).status,'planning');
+  assert.equal(writes,2);
+  await client.changeSharedItinerary(base,'plan.reopen');
+  assert.equal(writes,2);
+});
 
 test('plan form rejects missing fields, impossible dates and reversed ranges before saving', () => {
   const draft = { title: 'Dinner', locationLabel: 'Franklin', dateStart: '2028-02-29', dateEnd: '2028-02-29' };
@@ -80,11 +123,12 @@ test('participant enrichment scopes the query to verified membership and drops c
     const query=new URL(url).searchParams;
     assert.equal(query.get('email'),'eq.owner@example.com'); assert.equal(query.get('plan_id'),'in.(kept,removed)');
     reads++;
-    return {ok:true,json:async()=>[{plan_id:'kept',plan:{revision:4,participants:[{account_id:'friend',email:'friend@example.com',rsvp:'going',joined_at:'today'}]}}]};
+    return {ok:true,json:async()=>[{plan_id:'kept',plan:{revision:4,details:{dateEnd:'2026-09-10',timeWindow:'1pm'},participants:[{account_id:'friend',email:'friend@example.com',rsvp:'going',joined_at:'today'}]}}]};
   };
   try {
     const result=await accountRpc({p_email:'owner@example.com',p_admin:false,p_action:'plan.list',p_data:{}});
     assert.equal(reads,1); assert.equal(result.plans.length,1); assert.equal(result.plans[0].participants[0].rsvp,'going');
+    assert.equal(result.plans[0].dateEnd,'2026-09-10'); assert.equal(result.plans[0].timeWindow,'1pm');
     global.fetch=async()=>({ok:true,json:async()=>({error:'Denied',status:403})});
     assert.equal((await accountRpc({p_email:'owner@example.com',p_admin:false,p_action:'plan.list',p_data:{}})).status,403);
   } finally {

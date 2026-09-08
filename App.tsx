@@ -26,7 +26,9 @@ import { FriendsPanel } from './src/ui/FriendsPanel';
 import { RsvpBadge, RsvpSummary } from './src/ui/RsvpSummary';
 import { SharedPlanActivity } from './src/ui/SharedPlanActivity';
 import { SharedPlansScreen } from './src/ui/SharedPlansScreen';
-import { changeSharedPlan, createSharedPlan, getSharedPlan, planIdFromUrl, type SharedPlan, type SharedPlanDraft } from './src/data/sharedPlans';
+import { PlanWorkspaceHeader } from './src/ui/PlanWorkspaceHeader';
+import { startForegroundRefresh } from './src/data/foregroundRefresh';
+import { changeSharedItinerary, createSharedPlan, getSharedPlan, newerSharedPlan, sharedItinerarySignature, planIdFromUrl, type SharedPlan, type SharedPlanDraft } from './src/data/sharedPlans';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import Sortable, { type DropIndicatorComponentProps, type SortableFlexDragEndParams } from 'react-native-sortables';
 import Animated, { useAnimatedRef, useAnimatedStyle } from 'react-native-reanimated';
@@ -58,7 +60,7 @@ import {
   type ItineraryStopKind,
 } from './src/domain/itinerary';
 import { colors, controls, elevations, iconSizes, layout, radii, semanticTones, spacing, typography } from './src/ui/theme';
-import { ActionButton, AppHeader, BottomNavigation, EmptyState, PersonRow, RsvpControl, Stat } from './src/ui/primitives';
+import { ActionButton, AppHeader, BottomNavigation, EmptyState, PersonRow, RsvpControl } from './src/ui/primitives';
 import { ItineraryStopRow } from './src/ui/ItineraryStopRow';
 import { PlanDateTimePicker } from './src/ui/PlanDateTimePicker';
 import {
@@ -2954,11 +2956,16 @@ function NomNomGoApp() {
     return id ? { id } : null;
   });
   const [sharedEditor, setSharedEditor] = useState<SharedPlan | null>(null);
+  const sharedEditorRef = useRef(sharedEditor);
+  sharedEditorRef.current = sharedEditor;
   const sharedEditorSnapshot = useRef('');
   const [sharedEditorSaving, setSharedEditorSaving] = useState(false);
   const sharedEditorSavingRef = useRef(false);
   const [sharedReloadConfirm, setSharedReloadConfirm] = useState(false);
   const [sharedEditorAccessError, setSharedEditorAccessError] = useState('');
+  const [sharedEditorConflict, setSharedEditorConflict] = useState('');
+  const sharedStatusChangingRef = useRef(false);
+  const [sharedStatusChanging, setSharedStatusChanging] = useState(false);
   const sharedPublishingRef = useRef(false);
   const [accountSaveError, setAccountSaveError] = useState('');
   useEffect(() => subscribeAccountSaveError(setAccountSaveError), []);
@@ -6501,7 +6508,8 @@ function NomNomGoApp() {
     const restored = confirmedPlanFromSharedPlan(shared);
     cancelSearch();
     sharedEditorSnapshot.current = JSON.stringify(restored);
-    setSharedReloadConfirm(false); setSharedEditorAccessError('');
+    setSharedReloadConfirm(false); setSharedEditorAccessError(''); setSharedEditorConflict('');
+    sharedEditorRef.current = shared;
     setSharedEditor(shared); setPlan(restored); setSharedWorkspace(null);
     setPlanTimes({}); setArrivalTimes({}); setExpandedStopKey(null); setTimeEditorKey(null);
     setActiveBetaPlanId(null); setActivePlanningSessionId(null);
@@ -6539,12 +6547,12 @@ function NomNomGoApp() {
             arrivalTime: formatClockTime(displayedArrivalTimeForStop(stop, index)) };
         }),
       };
-      const saved = await changeSharedPlan(sharedEditor, 'plan.update', { details, replaceItinerary: true });
+      const saved = await changeSharedItinerary(sharedEditor, 'plan.update', { details, replaceItinerary: true });
       sharedEditorSnapshot.current = snapshot;
-      setSharedEditor(saved); showToast('Shared plan saved');
+      sharedEditorRef.current = saved; setSharedEditor(saved); setSharedEditorConflict(''); showToast('Plan saved');
       return saved;
     } catch (error) {
-      showAppNotice('Shared plan not saved', `${compactError(error)} Your edits are still here. Reload the shared plan to review its latest version before trying again.`);
+      setSharedEditorConflict(`${compactError(error)} Your unsaved edits are still here.`);
       return null;
     } finally { sharedEditorSavingRef.current = false; setSharedEditorSaving(false); }
   };
@@ -6557,19 +6565,23 @@ function NomNomGoApp() {
     if (!sharedEditor) return;
     let active = true;
     const refresh = async () => {
-      if (sharedEditorSavingRef.current) return;
+      if (sharedEditorSavingRef.current || sharedStatusChangingRef.current) return;
       try {
         const latest = await getSharedPlan(sharedEditor.id);
-        if (!active) return;
+        if (!active || sharedStatusChangingRef.current || sharedEditorSavingRef.current) return;
         setSharedEditorAccessError('');
-        if (latest.revision !== sharedEditor.revision && !sharedEditorDirty) openSharedPlanEditor(latest);
+        const current = sharedEditorRef.current;
+        if (!current || newerSharedPlan(current, latest) !== latest || latest.revision === current.revision) return;
+        if (latest.status === current.status && sharedItinerarySignature(latest) === sharedItinerarySignature(current)) {
+          sharedEditorRef.current = latest; setSharedEditor(latest);
+        } else if (!sharedEditorDirty) openSharedPlanEditor(latest);
+        else setSharedEditorConflict('This itinerary changed on another device. Your unsaved edits are still here.');
       } catch (error) {
         if (active && [401, 403, 404].includes((error as { status?: number }).status || 0)) setSharedEditorAccessError(compactError(error));
       }
     };
-    const timer = setInterval(() => { void refresh(); }, 15000);
-    if (typeof window !== 'undefined') window.addEventListener('focus', refresh);
-    return () => { active = false; clearInterval(timer); if (typeof window !== 'undefined') window.removeEventListener('focus', refresh); };
+    const poller = startForegroundRefresh(refresh, { ready: () => !sharedEditorSavingRef.current && !sharedStatusChangingRef.current });
+    return () => { active = false; poller.stop(); };
     // Local edits stay intact; the server rejects stale revisions on save.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sharedEditor?.id, sharedEditor?.revision, sharedEditorDirty]);
@@ -6873,11 +6885,13 @@ function NomNomGoApp() {
 
   const lockPlan = async () => {
     if (sharedEditor) {
-      if (sharedEditorReadOnly || !plan.stops.length) return;
-      const saved = await saveSharedEditor();
-      if (!saved) return;
-      try { openSharedPlanEditor(await changeSharedPlan(saved, 'plan.lock')); }
-      catch (error) { showAppNotice('Could not lock shared plan', compactError(error)); }
+      if (sharedEditorReadOnly || !plan.stops.length || sharedStatusChangingRef.current) return;
+      sharedStatusChangingRef.current = true; setSharedStatusChanging(true);
+      try {
+        const saved = await saveSharedEditor();
+        if (saved) openSharedPlanEditor(await changeSharedItinerary(saved, 'plan.lock'));
+      } catch (error) { setSharedEditorConflict(compactError(error)); }
+      finally { sharedStatusChangingRef.current = false; setSharedStatusChanging(false); }
       return;
     }
     cancelSearch();
@@ -6918,11 +6932,13 @@ function NomNomGoApp() {
     addLog('Plan locked');
   };
 
-  const unlockPlan = () => {
+  const unlockPlan = async () => {
     if (sharedEditor) {
-      if (sharedEditorReadOnly) return;
-      void changeSharedPlan(sharedEditor, 'plan.reopen').then(openSharedPlanEditor)
-        .catch((error) => showAppNotice('Could not reopen shared plan', compactError(error)));
+      if (sharedEditorReadOnly || sharedStatusChangingRef.current) return;
+      sharedStatusChangingRef.current = true; setSharedStatusChanging(true);
+      try { openSharedPlanEditor(await changeSharedItinerary(sharedEditorRef.current || sharedEditor, 'plan.reopen')); }
+      catch (error) { setSharedEditorConflict(compactError(error)); }
+      finally { sharedStatusChangingRef.current = false; setSharedStatusChanging(false); }
       return;
     }
     setPlan((prev) => ({ ...prev, status: 'draft', lockedArrivalTimes: undefined, savedPlanId: undefined }));
@@ -7609,7 +7625,7 @@ function NomNomGoApp() {
       };
       const shared = await createSharedPlan(record.id, details);
       setSharePreviewOpen(false); setPlanPeopleOpen(false);
-      setSharedWorkspace({ plan: shared });
+      setSharedWorkspace({ plan: shared, section: 'people' });
     } catch (error) { showAppNotice('Could not open shared plan', compactError(error)); }
     finally { sharedPublishingRef.current = false; }
   };
@@ -7905,10 +7921,11 @@ function NomNomGoApp() {
           ? undefined
           : 'plans';
 
+  const showPlanWorkspace = Boolean(getAlphaAccount() && activeNavigationKey === 'plans' && !savedPlansLandingOpen && !nowExperienceActive);
+
   const quickShareUsers = getAlphaAccount() ? [] : unique(TEST_USERS.filter((user) => user !== currentTesterName));
   const recentPeople = quickShareUsers.slice(0, 2);
   const favoritePeople = quickShareUsers.filter((user) => !recentPeople.includes(user)).slice(0, 3);
-  const planPeopleSummary = activePlanPeopleSummary;
   const planSetupPeopleSummary = planSetupInvitees.length ? unique([currentTesterName, ...planSetupInvitees]).join(', ') : 'Just me';
   const nowPeopleSummary = nowSelectedPeople.length ? unique([currentTesterName, ...nowSelectedPeople]).join(', ') : 'Just me';
   const placeDetailIsSelected = Boolean(placeDetailCard && !nowDiscovering && plan.stops.some(
@@ -8259,6 +8276,9 @@ function NomNomGoApp() {
       keyboardVerticalOffset={0}
     >
     <View style={styles.appShell}>
+    {showPlanWorkspace ? <PlanWorkspaceHeader section="plan" count={sharedEditor?.participants.length}
+      disabled={sharedEditorSaving || sharedStatusChanging} onBack={() => handleMainNavigation('plans')}
+      onPlan={() => {}} onFriends={() => { void openCurrentSharedPlan(); }} /> : null}
     <Animated.ScrollView
       ref={scrollRef}
       style={[styles.screen, isLightMode && styles.lightScreen, isDarkMode && styles.darkScreen]}
@@ -8266,7 +8286,7 @@ function NomNomGoApp() {
       keyboardShouldPersistTaps="handled"
       keyboardDismissMode="interactive"
     >
-      <AppHeader
+      {!showPlanWorkspace ? <AppHeader
         style={[styles.appBanner, styles.darkPanel]}
         onBrandPress={openHome}
         brandAccessibilityLabel="Go to NomNomGo home"
@@ -8296,14 +8316,14 @@ function NomNomGoApp() {
             <Ionicons name="person-circle-outline" size={28} color={colors.textPrimary} />
           </TouchableOpacity>
         )}
-      />
+      /> : null}
 
       {toastMessage ? (
         <View style={styles.toastBox}>
           <Text style={styles.toastText}>{toastMessage}</Text>
         </View>
       ) : null}
-      <Modal visible={sharedEditorSaving} transparent><View style={{ flex: 1, backgroundColor: colors.overlay, alignItems: 'center', justifyContent: 'center' }}><ActivityIndicator color={colors.cyan} /><Text style={styles.authHint}>Saving shared plan…</Text></View></Modal>
+      <Modal visible={sharedEditorSaving || sharedStatusChanging} transparent><View style={{ flex: 1, backgroundColor: colors.overlay, alignItems: 'center', justifyContent: 'center' }}><ActivityIndicator color={colors.cyan} /><Text style={styles.authHint}>{sharedStatusChanging ? 'Updating plan…' : 'Saving plan…'}</Text></View></Modal>
 
       {getAlphaAccount() && homeOpen && !planSetupOpen ? <SharedPlanActivity onOpenPlan={(id) => setSharedWorkspace({ id })} /> : null}
 
@@ -8493,7 +8513,8 @@ function NomNomGoApp() {
                     onChangeText={setPlanSetupName}
                     placeholder="Give this plan a name"
                     placeholderTextColor={isLightMode ? colors.textTertiary : colors.textSecondary}
-                    accessibilityLabel="Plan name"
+                    editable={!isPlanLocked}
+                accessibilityLabel="Plan name"
                     returnKeyType="next"
                   />
                 </View>
@@ -9082,21 +9103,15 @@ function NomNomGoApp() {
         style={[styles.planBox, isDarkMode && styles.darkPanel]}
         onLayout={(event) => { planBoxYRef.current = event.nativeEvent.layout.y; }}
       >
-        {sharedEditor ? <View style={{ gap: spacing.xs }}>
-          <View style={styles.buttonRow} accessibilityRole="tablist">
-            <TouchableOpacity accessibilityRole="tab" accessibilityLabel="Plan" accessibilityState={{ selected: true }} style={styles.itineraryAddStopButton}><Text style={styles.itineraryAddStopText}>Plan</Text></TouchableOpacity>
-            <TouchableOpacity accessibilityRole="tab" accessibilityLabel="People" accessibilityState={{ selected: false, disabled: sharedEditorSaving }} disabled={sharedEditorSaving} onPress={() => { void openSharedPeople(); }} style={styles.itineraryAddStopButton}><Text style={styles.itineraryAddStopText}>People ({sharedEditor.participants.length})</Text></TouchableOpacity>
-          </View>
-          <RsvpSummary participants={sharedEditor.participants} />
-          <Text style={styles.itinerarySectionHint}>{sharedEditorReadOnly ? 'The organizer edits this itinerary. Use People to suggest places and RSVP.' : sharedEditorDirty ? 'Unsaved shared plan changes' : 'Shared plan saved'}</Text>
-          {!sharedEditorReadOnly && !isPlanLocked && !plan.stops.length ? <Button label={sharedEditorSaving ? 'Saving…' : 'Save shared plan'} onPress={() => { void saveSharedEditor(); }} disabled={sharedEditorSaving || !sharedEditorDirty} compact /> : null}
-          <Button label="Reload shared plan" onPress={() => {
+        {sharedEditorConflict ? <View style={{ gap: spacing.xs }}>
+          <Text accessibilityRole="alert" style={styles.itinerarySectionHint}>{sharedEditorConflict}</Text>
+          <Button label="Review latest plan" onPress={() => {
             if (sharedEditorDirty) { setSharedReloadConfirm(true); return; }
-            void getSharedPlan(sharedEditor.id).then(openSharedPlanEditor).catch((error) => showAppNotice('Could not reload plan', compactError(error)));
+            if (sharedEditor) void getSharedPlan(sharedEditor.id).then(openSharedPlanEditor).catch((error) => setSharedEditorConflict(compactError(error)));
           }} compact />
-          {sharedReloadConfirm ? <View><Text style={styles.itinerarySectionHint}>Discard unsaved edits and load the current shared plan?</Text><Button label="Keep editing" onPress={() => setSharedReloadConfirm(false)} compact /><Button label="Discard edits and reload" onPress={() => { void getSharedPlan(sharedEditor.id).then(openSharedPlanEditor).catch((error) => showAppNotice('Could not reload plan', compactError(error))); }} compact /></View> : null}
+          {sharedReloadConfirm ? <View><Text style={styles.itinerarySectionHint}>Discard unsaved edits and load the current plan?</Text><Button label="Keep editing" onPress={() => setSharedReloadConfirm(false)} compact /><Button label="Discard edits and reload" onPress={() => { if (sharedEditor) void getSharedPlan(sharedEditor.id).then(openSharedPlanEditor).catch((error) => setSharedEditorConflict(compactError(error))); }} compact /></View> : null}
         </View> : null}
-        {!isPlanLocked ? (
+        {(
           <View style={styles.itineraryBuilder}>
             <View style={styles.itineraryPlanHeader}>
               <TextInput
@@ -9113,12 +9128,10 @@ function NomNomGoApp() {
               </Text>
             </View>
 
-            {getAlphaAccount() && !sharedEditor ? (
-              <View style={styles.itineraryCollaborationStrip}>
-                <Text style={styles.itineraryCollaborationSummary}>Invite people and manage live RSVPs in your shared plan. Once shared, edit the group itinerary there.</Text>
-                <Button label="Open shared plan & RSVPs" onPress={openCurrentSharedPlan} compact />
-              </View>
-            ) : null}
+            {sharedEditor ? <View style={styles.itineraryWorkspaceStatus}>
+              <RsvpSummary participants={sharedEditor.participants} />
+              <Text style={styles.itinerarySectionHint}>{sharedEditorReadOnly ? 'Organizer edits · RSVP in Friends' : isPlanLocked ? 'Locked · RSVPs stay open' : sharedEditorDirty ? 'Unsaved changes' : 'Saved'}</Text>
+            </View> : isPlanLocked ? <Text style={styles.itinerarySectionHint}>Plan locked</Text> : null}
             {!getAlphaAccount() && (activeBetaPlan || plan.sharedPlanId) ? (
               <View style={styles.itineraryCollaborationStrip}>
                 <View style={styles.itineraryCollaborationHeader}>
@@ -9135,7 +9148,7 @@ function NomNomGoApp() {
             <View style={styles.itinerarySectionHeader}>
               <View style={styles.itinerarySectionCopy}>
                 <Text style={styles.itinerarySectionTitle}>Plan stops</Text>
-                <Text style={styles.itinerarySectionHint}>Drag the handle to reorder · Tap a stop to expand</Text>
+                <Text style={styles.itinerarySectionHint}>{isPlanLocked ? 'Tap a stop for details, maps, and sharing' : 'Drag to reorder · Tap a stop for details'}</Text>
               </View>
 
             </View>
@@ -9192,6 +9205,7 @@ function NomNomGoApp() {
                         ]}
                       >
                         <ItineraryStopRow
+                          readOnly={isPlanLocked}
                           animateEntrance={recentlyAddedStopKey === stop.key}
                           arrivalTime={formatClockAfterMinutes(itineraryArrivalMinutes(index), activePlanTimelineBaseMs)}
                           durationEditorExpanded={timeEditorKey === stop.key}
@@ -9233,12 +9247,12 @@ function NomNomGoApp() {
                 <View style={styles.itineraryEmptyState}>
                   <Ionicons name="list-outline" size={iconSizes.lg} color={colors.textTertiary} />
                   <Text style={styles.itineraryEmptyTitle}>No stops yet</Text>
-                  <Text style={styles.itineraryEmptyCopy}>Add food, an activity, dessert, or an idea. New stops go to the end.</Text>
+                  <Text style={styles.itineraryEmptyCopy}>{sharedEditorReadOnly ? 'Suggest a stop in Friends for the organizer to add.' : 'Add food, an activity, dessert, or an idea. New stops go to the end.'}</Text>
                 </View>
               )}
             </View>
 
-            <View style={styles.itineraryAddStopFooter}>
+            {!isPlanLocked ? <View style={styles.itineraryAddStopFooter}>
               <TouchableOpacity
                 activeOpacity={0.72}
                 accessibilityLabel={addStopMenuOpen ? 'Close add stop options' : 'Add stop'}
@@ -9253,9 +9267,9 @@ function NomNomGoApp() {
                 <Ionicons name={addStopMenuOpen ? 'close' : 'add'} size={iconSizes.sm} color={colors.coral} />
                 <Text style={styles.itineraryAddStopText}>Add stop</Text>
               </TouchableOpacity>
-            </View>
+            </View> : null}
 
-            {addStopMenuOpen ? (
+            {!isPlanLocked && addStopMenuOpen ? (
               <View style={styles.itineraryAddMenu}>
                 <View style={styles.itineraryTypeGrid}>
                   <TouchableOpacity
@@ -9458,16 +9472,17 @@ function NomNomGoApp() {
                     <Ionicons name={isCurrentPlanSaved ? 'checkmark-outline' : 'bookmark-outline'} size={iconSizes.sm} color={colors.textPrimary} />
                     <Text style={styles.itinerarySecondaryActionText}>{isCurrentPlanSaved ? 'Saved' : 'Save'}</Text>
                   </TouchableOpacity>
-                  <TouchableOpacity
+                  {!sharedEditorReadOnly ? <TouchableOpacity
                     activeOpacity={0.82}
-                    accessibilityLabel="Review and finalize plan"
+                    accessibilityLabel={isPlanLocked ? "Unlock and edit plan" : "Lock plan"}
                     accessibilityRole="button"
-                    onPress={lockPlan}
+                    disabled={sharedStatusChanging || !plan.stops.length}
+                    onPress={isPlanLocked ? unlockPlan : lockPlan}
                     style={styles.itineraryPrimaryAction}
                   >
-                    <Text style={styles.itineraryPrimaryActionText}>Review plan</Text>
-                    <Ionicons name="arrow-forward" size={iconSizes.sm} color={colors.textInverse} />
-                  </TouchableOpacity>
+                    <Text style={styles.itineraryPrimaryActionText}>{isPlanLocked ? 'Unlock / Edit' : 'Lock plan'}</Text>
+                    <Ionicons name={isPlanLocked ? "lock-open-outline" : "lock-closed-outline"} size={iconSizes.sm} color={colors.textInverse} />
+                  </TouchableOpacity> : null}
                 </View>
 
                 {planPeopleOpen ? (
@@ -9512,7 +9527,7 @@ function NomNomGoApp() {
                     <Ionicons name="map-outline" size={iconSizes.xs} color={colors.textSecondary} />
                     <Text style={styles.itineraryUtilityText}>{isImportedGoogleMapsPlan && plan.sourceUrl ? 'Open route' : 'Route'}</Text>
                   </TouchableOpacity>
-                  <TouchableOpacity
+                  {!isPlanLocked ? <TouchableOpacity
                     accessibilityLabel="Clear plan"
                     accessibilityRole="button"
                     onPress={requestClearCurrentPlan}
@@ -9520,100 +9535,14 @@ function NomNomGoApp() {
                   >
                     <Ionicons name="trash-outline" size={iconSizes.xs} color={colors.textTertiary} />
                     <Text style={styles.itineraryUtilityText}>Clear plan</Text>
-                  </TouchableOpacity>
+                  </TouchableOpacity> : null}
+                  <TouchableOpacity accessibilityLabel="Add to Calendar" accessibilityRole="button" onPress={addActiveBetaPlanToCalendar} style={styles.itineraryUtilityButton}><Ionicons name="calendar-outline" size={iconSizes.xs} color={colors.textSecondary} /><Text style={styles.itineraryUtilityText}>Calendar</Text></TouchableOpacity>
+                  <TouchableOpacity accessibilityLabel="View larger plan" accessibilityRole="button" onPress={() => setPlanPreviewOpen(true)} style={styles.itineraryUtilityButton}><Ionicons name="expand-outline" size={iconSizes.xs} color={colors.textSecondary} /><Text style={styles.itineraryUtilityText}>Overview</Text></TouchableOpacity>
                 </View>
               </>
             ) : null}
           </View>
-        ) : null}
-
-        {(hasAnyActiveStop || sharedEditor) && isPlanLocked ? (
-          <>
-          <View style={[styles.lockedPlanCard, isDarkMode && styles.darkCard]}>
-            <View style={styles.lockedPlanCardHeader}>
-              <View style={styles.lockedPlanTitleBlock}>
-                <Text style={[styles.lockedPlanTitle, isDarkMode && styles.darkText]} numberOfLines={2}>
-                  {planTitle}
-                </Text>
-                <Text style={[styles.lockedPlanMeta, isDarkMode && styles.darkMutedText]} numberOfLines={1}>
-                  {activePlanDateTimeLabel} | {searchLocationLabel}
-                </Text>
-              </View>
-              <View style={styles.lockedPlanCardTools}>
-                <TouchableOpacity
-                  style={[styles.lockedPlanIconButton, isDarkMode && styles.darkChip]}
-                  onPress={() => setPlanPreviewOpen(true)}
-                  accessibilityRole="button"
-                  accessibilityLabel="View larger plan"
-                >
-                  <Ionicons name="expand-outline" size={18} color={isDarkMode ? colors.textPrimary : colors.textInverse} />
-                </TouchableOpacity>
-                <Text style={[styles.lockedPlanMeta, isDarkMode && styles.darkMutedText]}>{plan.stops.length} stops</Text>
-              </View>
-            </View>
-            <View style={styles.planStats}>
-              <Stat label="Stops" value={plan.stops.length} tone="primary" />
-              <Stat label="Total time" value={planTotalTimeLabel} tone="route" />
-              <Stat label="Est. finish" value={planFinishTimeLabel} tone="success" />
-            </View>
-            {leaveForFirstStopText ? (
-              <Text style={[styles.lockedPlanLeave, isDarkMode && styles.darkMutedText]} numberOfLines={1}>
-                {leaveForFirstStopText}
-              </Text>
-            ) : null}
-            {!getAlphaAccount() ? <><Text style={[styles.lockedPlanInvitees, isDarkMode && styles.darkMutedText]} numberOfLines={1}>
-              With {planPeopleSummary}
-            </Text>
-            <View style={styles.lockedPlanRsvp}>
-              <View style={styles.betaSectionHeader}>
-                <Text style={[styles.sessionSubhead, styles.darkText]}>RSVP</Text>
-                <RsvpSummary participants={Object.values(betaPlanRsvps).map((rsvp) => ({ rsvp }))} />
-              </View>
-              <RsvpControl value={currentBetaRsvp} onChange={setActiveBetaRsvp} />
-            </View>
-            </> : <View style={styles.lockedPlanRsvp}>
-              <Text style={[styles.lockedPlanMeta, isDarkMode && styles.darkMutedText]}>{sharedEditor ? 'Shared itinerary. Open People for RSVPs and group suggestions.' : 'Personal saved copy. Open the shared plan for current RSVPs and group changes.'}</Text>
-              <Button label="Open shared plan & RSVPs" onPress={openCurrentSharedPlan} compact />
-            </View>}
-            <View style={styles.lockedStopList}>
-              {plan.stops.map((stop, index) => {
-                const stopCityState = cityStateLabel(cityStateForPlace(stop.item));
-                const travelMeta = travelMetaForStop(stop, index);
-                const walkableAfterTesla = travelMeta.mode === 'walk' && isWalkableAfterTeslaStop(plan.stops[index - 1], stop);
-                const stopTone = semanticTones[itineraryKindForStop(stop)];
-                return (
-                  <TouchableOpacity key={`locked-${stop.key}`} style={styles.lockedStopRow} onPress={() => openStopMaps(stop)}>
-                    <Text style={[styles.lockedStopIndex, { backgroundColor: stopTone.solid, color: stopTone.foreground }]}>{index + 1}</Text>
-                    <View style={styles.lockedStopTravelBlock}>
-                      <Ionicons name={travelMeta.icon} size={16} color={colors.teal} />
-                      <Text style={styles.lockedStopTravelText} numberOfLines={1}>{travelMeta.duration}</Text>
-                    </View>
-                    <Text style={styles.lockedStopTime}>{formatClockTime(displayedArrivalTimeForStop(stop, index))}</Text>
-                    {walkableAfterTesla ? (
-                      <Ionicons name="walk-outline" size={14} color={colors.teal} />
-                    ) : null}
-                    <View style={styles.lockedStopTextBlock}>
-                      <Text style={styles.lockedStopName} numberOfLines={1}>{cardToName(stop.item) || 'Stop'}</Text>
-                      {stopCityState ? (
-                        <View style={styles.lockedStopCityPill}>
-                          <Text style={styles.lockedStopCityText} numberOfLines={1}>{stopCityState}</Text>
-                        </View>
-                      ) : null}
-                    </View>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-          </View>
-          <View style={styles.lockedPlanActions}>
-            <Button label={isImportedGoogleMapsPlan && plan.sourceUrl ? 'Open route' : 'Route'} onPress={openRouteOptions} primary compact />
-            <Button label="Add to Calendar" onPress={addActiveBetaPlanToCalendar} success compact />
-            <Button label="Share" onPress={() => { if (getAlphaAccount()) void openCurrentSharedPlan(); else setSharePreviewOpen(true); }} compact />
-            {!isCurrentPlanSaved ? <Button label="Save" onPress={saveCurrentPlan} compact /> : null}
-            {!sharedEditorReadOnly ? <Button label="Unlock/Edit" onPress={unlockPlan} compact /> : null}
-          </View>
-          </>
-        ) : null}
+        )}
 
         {!isPlanLocked ? (
         <View style={styles.routeOriginBox}>
@@ -12458,6 +12387,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '900',
   },
+  itineraryWorkspaceStatus: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: spacing.xs },
   planBox: {
     backgroundColor: colors.surface,
     borderWidth: 1,

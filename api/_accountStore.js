@@ -18,7 +18,7 @@ async function accountRpc(args) {
   // scopes BOTH the outer membership and returned plan IDs to the verified actor.
   // Never fetch the member table globally with the service credential.
   const query = new URLSearchParams({
-    select: 'plan_id,plan:nng_shared_plans!inner(revision,participants:nng_shared_members(account_id,email,rsvp,joined_at))',
+    select: 'plan_id,plan:nng_shared_plans!inner(revision,details,participants:nng_shared_members(account_id,email,rsvp,joined_at))',
     email: `eq.${args.p_email}`,
     plan_id: `in.(${result.plans.map((plan) => plan.id).join(',')})`,
   });
@@ -36,7 +36,7 @@ async function accountRpc(args) {
       role: member.account_id === plan.ownerId ? 'owner' : 'participant',
       rsvp: member.rsvp, joined: !!member.joined_at,
     }));
-    return { ...plan, revision: latest.revision, participants,
+    return { ...plan, dateEnd: latest.details?.dateEnd || plan.dateStart, timeWindow: latest.details?.timeWindow, revision: latest.revision, participants,
       rsvp: participants.find((member) => member.displayName === args.p_email)?.rsvp };
   });
   return result;
