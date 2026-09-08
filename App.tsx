@@ -60,6 +60,7 @@ import {
 import { colors, controls, elevations, iconSizes, layout, radii, semanticTones, spacing, typography } from './src/ui/theme';
 import { ActionButton, AppHeader, BottomNavigation, EmptyState, PersonRow, RsvpControl, Stat } from './src/ui/primitives';
 import { ItineraryStopRow } from './src/ui/ItineraryStopRow';
+import { PlanDateTimePicker } from './src/ui/PlanDateTimePicker';
 import {
   DIFFERANCE_NOMNOMGO_LAUNCH_URL,
   LAUNCH_TOKEN_PARAM,
@@ -2986,9 +2987,6 @@ function NomNomGoApp() {
   const [planTimes, setPlanTimes] = useState<Record<string, StopTime | undefined>>({});
   const [arrivalTimes, setArrivalTimes] = useState<Record<string, StopTime | undefined>>({});
   const [timeEditorKey, setTimeEditorKey] = useState<string | null>(null);
-  const [startTimeEditorOpen, setStartTimeEditorOpen] = useState(false);
-  const [startTimeDraft, setStartTimeDraft] = useState('');
-  const [startTimeError, setStartTimeError] = useState('');
   const [expandedStopKey, setExpandedStopKey] = useState<string | null>(null);
   const [addStopMenuOpen, setAddStopMenuOpen] = useState(false);
   const [itineraryListWidth, setItineraryListWidth] = useState<number>();
@@ -3356,23 +3354,6 @@ function NomNomGoApp() {
   const planStartTimeLabel = finalStop
     ? formatClockAfterMinutes(0, activePlanTimelineBaseMs)
     : 'Not set';
-  const parsedPlanTarget = activePlanTimeWindow ? parsePlanningTimeWindow(activePlanTimeWindow) : undefined;
-  const targetDeltaMinutes = parsedPlanTarget
-    ? parsedPlanTarget.end - parsedPlanTarget.start - planTotalMinutes
-    : undefined;
-  const targetStatus = typeof targetDeltaMinutes !== 'number'
-    ? undefined
-    : targetDeltaMinutes === 0
-      ? { label: `Meets target ${formatClockTime(clockTimeFromMinutes(parsedPlanTarget!.end))}`, tone: 'near' as const }
-      : targetDeltaMinutes > 0
-        ? {
-            label: `${targetDeltaMinutes} min before target ${formatClockTime(clockTimeFromMinutes(parsedPlanTarget!.end))}`,
-            tone: targetDeltaMinutes <= 15 ? 'near' as const : 'under' as const,
-          }
-        : {
-            label: `${Math.abs(targetDeltaMinutes)} min over target ${formatClockTime(clockTimeFromMinutes(parsedPlanTarget!.end))}`,
-            tone: 'over' as const,
-          };
   const activePlanDateTimeLabel = firstStop
     ? `${activePlanDateLabel} | First stop ${formatClockTime(displayedArrivalTimeForStop(firstStop, 0))}`
     : activePlanDateLabel;
@@ -3586,7 +3567,6 @@ function NomNomGoApp() {
   };
 
   const closeTransientSurfaces = () => {
-    setStartTimeEditorOpen(false);
     cancelSearch();
     setAccountMenuOpen(false);
     setAccountSettingsOpen(false);
@@ -6455,11 +6435,34 @@ function NomNomGoApp() {
 
   const planTitle = plan.title || activeBetaPlan?.title || titleForPlanStops(plan.stops);
   const isPlanLocked = plan.status === 'locked';
-  const savePlanStartTime = () => {
+  const savePlanStartDate = (date: Date) => {
+    if (isPlanLocked || !Number.isFinite(date.getTime())) return;
+    const start = formatDateInput(date);
+    const rangeDays = Math.round((Date.parse(activePlanDateRange.end) - Date.parse(activePlanDateRange.start)) / 86400000);
+    const end = formatDateInput(addLocalDays(date, Math.max(0, rangeDays)));
+    const range = { start, end };
+    setPlan((prev) => prev.status === 'locked' ? prev : {
+      ...prev,
+      dateWindow: 'custom',
+      customDateRange: range,
+      planDateStart: start,
+      planDateEnd: end,
+      timeWindow: activePlanTimeWindow || timeWindowFromStartClock(clockTimeFromDate(new Date(activePlanTimelineBaseMs))),
+      lockedArrivalTimes: undefined,
+      savedPlanId: undefined,
+    });
+    setSelectedDateWindow('custom');
+    selectedDateWindowRef.current = 'custom';
+    setCustomDateRange(range);
+    customDateRangeRef.current = range;
+    setCustomDateStartInput(start);
+    setCustomDateEndInput(end);
+    setArrivalTimes({});
+  };
+  const savePlanStartTime = (startTimeDraft: string) => {
     if (isPlanLocked) return;
     const startMinutes = parseClockMinutes(startTimeDraft);
     if (startMinutes === undefined) {
-      setStartTimeError('Enter a time like 3:05 PM or 15:05.');
       return;
     }
     const parsedWindow = activePlanTimeWindow ? parsePlanningTimeWindow(activePlanTimeWindow) : undefined;
@@ -6472,8 +6475,6 @@ function NomNomGoApp() {
       savedPlanId: undefined,
     });
     setArrivalTimes({});
-    setStartTimeError('');
-    setStartTimeEditorOpen(false);
   };
   const isImportedGoogleMapsPlan = plan.routeProvider === 'google_maps';
   const planInvitees = plan.invitees || [];
@@ -9236,22 +9237,14 @@ function NomNomGoApp() {
               <>
                 <View style={styles.itinerarySummary}>
                   <View style={styles.itinerarySummaryValues}>
-                    <TouchableOpacity
-                      accessibilityRole="button"
-                      accessibilityLabel={`Edit start time, ${planStartTimeLabel}`}
-                      accessibilityHint="Adjusts all stop arrivals and the finish time"
-                      accessibilityState={{ expanded: startTimeEditorOpen, disabled: isPlanLocked }}
-                      disabled={isPlanLocked}
-                      onPress={() => {
-                        setStartTimeDraft(planStartTimeLabel);
-                        setStartTimeError('');
-                        setStartTimeEditorOpen((current) => !current);
-                      }}
-                      style={styles.itinerarySummaryColumn}
-                    >
+                    <View style={styles.itinerarySummaryColumn}>
+                      <PlanDateTimePicker mode="date" label="Plan date" value={new Date(activePlanTimelineBaseMs)}
+                        displayValue={activePlanDateLabel} disabled={isPlanLocked} onChange={savePlanStartDate} />
                       <Text style={styles.itinerarySummaryLabel}>Est. start</Text>
-                      <Text style={[styles.itinerarySummaryValue, styles.itineraryStartTimeValue]}>{planStartTimeLabel}</Text>
-                    </TouchableOpacity>
+                      <PlanDateTimePicker mode="time" label="Plan start time" value={new Date(activePlanTimelineBaseMs)}
+                        displayValue={planStartTimeLabel} disabled={isPlanLocked}
+                        onChange={(date) => savePlanStartTime(`${date.getHours()}:${String(date.getMinutes()).padStart(2, '0')}`)} />
+                    </View>
                     <View style={styles.itinerarySummaryDivider} />
                     <View style={styles.itinerarySummaryColumn}>
                       <Text style={styles.itinerarySummaryLabel}>Total time</Text>
@@ -9263,46 +9256,7 @@ function NomNomGoApp() {
                       <Text style={styles.itinerarySummaryValue}>{planFinishTimeLabel}</Text>
                     </View>
                   </View>
-                  {startTimeEditorOpen && !isPlanLocked ? (
-                    <View style={styles.itineraryStartTimeEditor}>
-                      <Text style={styles.itinerarySummaryLabel}>Start time</Text>
-                      <View style={[styles.itineraryIdeaComposer, { flexWrap: 'wrap' }]}>
-                        <TextInput
-                          accessibilityLabel="Plan start time"
-                          autoFocus
-                          value={startTimeDraft}
-                          onChangeText={(value) => { setStartTimeDraft(value); setStartTimeError(''); }}
-                          placeholder="3:05 PM"
-                          placeholderTextColor={colors.textTertiary}
-                          style={[styles.itineraryIdeaInput, { flexBasis: '100%' }]}
-                          returnKeyType="done"
-                          onSubmitEditing={savePlanStartTime}
-                        />
-                        <Button label="Apply" onPress={savePlanStartTime} compact primary />
-                        <Button label="Cancel" onPress={() => setStartTimeEditorOpen(false)} compact />
-                      </View>
-                      {startTimeError ? <Text accessibilityRole="alert" style={{ color: colors.red }}>{startTimeError}</Text> : null}
-                    </View>
-                  ) : null}
-                  {targetStatus ? (
-                    <View style={styles.itineraryTargetStatus}>
-                      <Ionicons
-                        name={targetStatus.tone === 'over' ? 'alert-circle-outline' : 'checkmark-circle-outline'}
-                        size={iconSizes.xs}
-                        color={targetStatus.tone === 'over' ? colors.red : targetStatus.tone === 'near' ? colors.amber : colors.green}
-                      />
-                      <Text style={[
-                        styles.itineraryTargetStatusText,
-                        targetStatus.tone === 'over'
-                          ? styles.itineraryTargetStatusOver
-                          : targetStatus.tone === 'near'
-                            ? styles.itineraryTargetStatusNear
-                            : styles.itineraryTargetStatusUnder,
-                      ]}>
-                        {targetStatus.label}
-                      </Text>
-                    </View>
-                  ) : null}
+
                 </View>
 
                 <View style={styles.itineraryFooterActions}>
@@ -13038,16 +12992,6 @@ const styles = StyleSheet.create({
     borderRadius: radii.md,
     borderWidth: 1,
     overflow: 'hidden',
-  },
-  itineraryStartTimeValue: {
-    color: colors.cyan,
-    textDecorationLine: 'underline',
-  },
-  itineraryStartTimeEditor: {
-    borderTopWidth: 1,
-    borderTopColor: colors.divider,
-    padding: spacing.xs,
-    gap: spacing.micro,
   },
   itinerarySummaryValues: {
     alignItems: 'stretch',

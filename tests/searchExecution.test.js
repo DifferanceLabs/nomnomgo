@@ -291,13 +291,45 @@ function areaSelectionHarness(overrides = {}) {
   return { context, events, base, select: appHandler('selectSearchArea', context), load: appHandler('loadSearchAreas', context) };
 }
 
+test('date picker moves a multi-day plan across month boundaries without changing its time or locked plans', () => {
+  const context = {
+    isPlanLocked: false,
+    activePlanDateRange: { start: '2026-09-07', end: '2026-09-09' },
+    activePlanTimeWindow: '4:00 PM - 7:00 PM',
+    selectedDateWindowRef: { current: 'today' }, customDateRangeRef: { current: null },
+  };
+  for (const name of ['formatDateInput', 'addLocalDays']) context[name] = appHandler(name, context);
+  for (const name of ['setSelectedDateWindow', 'setCustomDateRange', 'setCustomDateStartInput', 'setCustomDateEndInput', 'setArrivalTimes']) context[name] = () => {};
+  const stops = [{ key: 'dinner', durationMinutes: 75 }];
+  let plan = { status: 'draft', stops, savedPlanId: 'saved' };
+  context.setPlan = (update) => { plan = update(plan); };
+  const change = appHandler('savePlanStartDate', context);
+  change(new Date(2026, 8, 30, 16, 0));
+  assert.equal(plan.planDateStart, '2026-09-30');
+  assert.equal(plan.planDateEnd, '2026-10-02');
+  assert.equal(plan.timeWindow, context.activePlanTimeWindow);
+  assert.equal(plan.stops, stops);
+  assert.equal(plan.dateWindow, 'custom');
+  assert.equal(context.selectedDateWindowRef.current, 'custom');
+  assert.equal(plan.savedPlanId, undefined);
+  const moved = plan;
+  change(new Date(NaN));
+  assert.equal(plan, moved);
+  plan = { ...plan, status: 'locked' };
+  const locked = plan;
+  change(new Date(2026, 9, 10));
+  assert.equal(plan, locked);
+  context.isPlanLocked = true;
+  context.setPlan = () => assert.fail('Locked date cannot be changed');
+  change(new Date(2026, 9, 10));
+});
+
 test('editing the plan start shifts its window, including midnight, and protects locked plans', () => {
   const context = {};
   for (const name of ['clockMinutes', 'clockTimeFromMinutes', 'formatClockTime', 'clockTimePlusMinutes', 'timeWindowFromStartClock', 'parseClockMinutes', 'parsePlanningTimeWindow']) {
     context[name] = appHandler(name, context);
   }
   let plan;
-  let error;
   let arrivals;
   Object.assign(context, {
     isPlanLocked: false,
@@ -305,37 +337,33 @@ test('editing the plan start shifts its window, including midnight, and protects
     activePlanTimeWindow: '3:05 PM - 6:05 PM',
     setPlan: (update) => { plan = update(plan); },
     setArrivalTimes: (value) => { arrivals = value; },
-    setStartTimeError: (value) => { error = value; },
-    setStartTimeEditorOpen: () => {},
   });
   const save = appHandler('savePlanStartTime', context);
   const stops = [{ key: 'dinner', durationMinutes: 75 }, { key: 'activity', durationMinutes: 90 }];
   plan = { status: 'draft', stops, savedPlanId: 'old-save', lockedArrivalTimes: { dinner: { hours: 16, minutes: 0 } } };
-  save();
+  save(context.startTimeDraft);
   assert.equal(plan.timeWindow, '11:30 PM - 2:30 AM');
   assert.equal(plan.stops, stops);
   assert.equal(plan.savedPlanId, undefined);
   assert.equal(plan.lockedArrivalTimes, undefined);
   assert.equal(Object.keys(arrivals).length, 0);
-  assert.equal(error, '');
   const updated = plan;
   for (const invalid of ['25:00', '13:05 PM', '0 AM', '4:75 PM', 'noon-ish']) {
     context.startTimeDraft = invalid;
-    save();
+    save(context.startTimeDraft);
     assert.equal(plan, updated);
-    assert.match(error, /Enter a time/);
   }
   context.startTimeDraft = '15:05';
   context.activePlanTimeWindow = undefined;
-  save();
+  save(context.startTimeDraft);
   assert.equal(plan.timeWindow, '3:05 PM - 6:05 PM');
   plan = { ...plan, status: 'locked' };
   const locked = plan;
-  save(); // Also protect against a lock arriving after the editor opened.
+  save(context.startTimeDraft); // Also protect against a lock arriving after the editor opened.
   assert.equal(plan, locked);
   context.isPlanLocked = true;
   context.setPlan = () => assert.fail('Locked plans cannot submit a time edit');
-  save();
+  save(context.startTimeDraft);
 });
 
 
