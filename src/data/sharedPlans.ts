@@ -5,11 +5,18 @@ export type SharedPlan = Omit<Plan, 'participants'> & { revision: number; partic
 export type SharedPlanDraft = Pick<Plan, 'title' | 'intent' | 'locationLabel' | 'dateStart' | 'dateEnd' | 'timeWindow' | 'stops'>;
 export type SharedPlanSummary = Pick<SharedPlan, 'id' | 'title' | 'status' | 'dateStart' | 'locationLabel' | 'ownerId'> & { rsvp?: string; revision?: number; participants?: SharedPlan['participants'] };
 
-export const sharedRsvpLabel = (value?: string) => ({ going: 'Going', maybe: 'Maybe', cant_make_it: "Can't make it" }[value || ''] || 'Not answered');
-export function sharedRsvpSummary(participants?: SharedPlan['participants']) {
+export function sharedPlanDraftError(draft: SharedPlanDraft): string {
+  if (!draft.title.trim() || !draft.locationLabel.trim()) return 'Add a plan name and meeting place.';
+  const validDate = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value;
+  if (!validDate(draft.dateStart) || !validDate(draft.dateEnd) || draft.dateEnd < draft.dateStart) return 'Choose valid dates, with the end on or after the start.';
+  return '';
+}
+
+export const sharedRsvpLabel = (value?: string) => ({ going: 'Going', maybe: 'Maybe', cant_make_it: 'Not going' }[value || ''] || 'Awaiting reply');
+export function sharedRsvpSummary(participants?: { rsvp?: string | null }[]) {
   if (!participants) return 'Open plan to see participant responses';
   const count = (value: string) => participants.filter((member) => member.rsvp === value).length;
-  return `${count('going')} Going · ${count('maybe')} Maybe · ${count('cant_make_it')} Can't make it · ${participants.filter((member) => !member.rsvp).length} Awaiting reply`;
+  return `${count('going')} Going · ${count('maybe')} Maybe · ${count('cant_make_it')} Not going · ${participants.filter((member) => !member.rsvp).length} Awaiting reply`;
 }
 export function changedSharedRsvps(previous: Pick<SharedPlanSummary, 'id' | 'participants'> | null, next: Pick<SharedPlanSummary, 'id' | 'participants'>, viewerId: string) {
   if (previous?.id !== next.id || !previous.participants || !next.participants) return [];

@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { Linking, Platform, Share, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Platform, StyleSheet, Text, TextInput, View } from 'react-native';
 import { accountRequest, getAlphaAccount } from '../data/accountStorage';
 import { ActionButton as Button } from './primitives';
+import { ShareMessage } from './ShareMessage';
 
 const metricsLabels: Record<string, string> = {
   friendships: 'Active friendships',
@@ -39,23 +40,6 @@ export function AlphaAccountPanel({ onOpenSharedPlans }: { onOpenSharedPlans?: (
     } catch (error) { setMessage(error instanceof Error ? error.message : 'Could not create invitation.'); }
     finally { setBusy(false); }
   };
-  const openComposer = async (target: string) => {
-    try { await Linking.openURL(target); }
-    catch { setMessage('Could not open your messaging app. Copy the invitation instead.'); }
-  };
-  const share = async () => {
-    try {
-      if (Platform.OS === 'web' && typeof navigator !== 'undefined' && navigator.share) {
-        await navigator.share({ title: 'NomNomGo alpha invitation', text: invitation });
-      } else if (Platform.OS !== 'web') await Share.share({ message: invitation });
-      else if (typeof navigator !== 'undefined' && navigator.clipboard) {
-        await navigator.clipboard.writeText(invitation);
-        setMessage('Invitation copied. Paste it into your message.');
-      } else setMessage(invitation);
-    } catch (error) {
-      if (!(error instanceof Error && error.name === 'AbortError')) setMessage('Use Email or Text, or select and copy the invitation below.');
-    }
-  };
   const loadMetrics = async () => {
     try {
       const [accounts, plans, friends] = await Promise.all([
@@ -69,27 +53,17 @@ export function AlphaAccountPanel({ onOpenSharedPlans }: { onOpenSharedPlans?: (
   };
   return (
     <View style={styles.panel}>
-      <Text style={styles.title}>Invite someone to alpha</Text>
-      <Text style={styles.copy}>Use their Google account email, even when sending a text. New users become your friends after their first NomNomGo sign-in. You send the message. Up to 10 invitations per day.</Text>
+      <Text style={styles.title}>Invite a friend</Text>
+      <Text style={styles.copy}>Use their Google email. Their first sign-in connects you as friends. Up to 10 new invites a day.</Text>
       <TextInput
         style={styles.input} value={email} onChangeText={setEmail} placeholder="Their Google account email"
         placeholderTextColor="#a8b2bf" accessibilityLabel="Invitee Google account email"
         keyboardType="email-address" autoCapitalize="none" autoCorrect={false} editable={!busy}
       />
-      <Button label={busy ? 'Preparing invitation…' : 'Create invitation'} onPress={invite} size="compact" />
+      <Button label="Invite by email or text" onPress={invite} loading={busy} disabled={!email.trim()} size="compact" />
       {message ? <Text accessibilityRole="alert" style={styles.copy}>{message}</Text> : null}
-      {invitedEmail ? (
-        <>
-          <View style={styles.actions}>
-            <Button label="Email" onPress={() => openComposer(`mailto:${encodeURIComponent(invitedEmail)}?subject=NomNomGo%20alpha%20invitation&body=${encodeURIComponent(invitation)}`)} size="compact" />
-            <Button label="Text" onPress={() => openComposer(`sms:${typeof navigator !== 'undefined' && /iPhone|iPad|iPod/.test(navigator.userAgent) ? '&' : '?'}body=${encodeURIComponent(invitation)}`)} size="compact" />
-            <Button label="Share / copy" onPress={share} size="compact" />
-          </View>
-          <Text selectable style={styles.copy}>{invitation}</Text>
-        </>
-      ) : null}
-      <Text style={styles.copy}>Personal saves belong to your account. Shared plans keep RSVPs, suggestions, votes and the group itinerary in sync.</Text>
-      {onOpenSharedPlans ? <Button label="Shared plans & RSVPs" onPress={onOpenSharedPlans} size="compact" /> : null}
+      {invitedEmail ? <ShareMessage key={invitedEmail} email={invitedEmail} message={invitation} /> : null}
+      {onOpenSharedPlans ? <Button label="My plans" onPress={onOpenSharedPlans} size="compact" /> : null}
       {account.isAdmin ? <Button label="Refresh alpha usage" onPress={loadMetrics} size="compact" /> : null}
       {metrics ? (
         <View>

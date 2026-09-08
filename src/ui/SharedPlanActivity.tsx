@@ -1,12 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { getAlphaAccount } from '../data/accountStorage';
 import { startForegroundRefresh } from '../data/foregroundRefresh';
-import { changedSharedRsvps, listSharedPlans, sharedRsvpSummary, type SharedPlanSummary } from '../data/sharedPlans';
+import { changedSharedRsvps, listSharedPlans, type SharedPlanSummary } from '../data/sharedPlans';
+import { RsvpSummary } from './RsvpSummary';
 import { ActionButton } from './primitives';
 
-// Mounted in the main app as well as personal-plan views. Leaving the shared
-// workspace must not make other people's responses disappear from the app.
+// Home shows recent shared responses; personal copies link to the canonical
+// workspace so prototype state cannot be mistaken for another person's RSVP.
 export function SharedPlanActivity({ onOpenPlan }: { onOpenPlan: (id?: string) => void }) {
   const accountId = getAlphaAccount()?.id;
   const [plans, setPlans] = useState<SharedPlanSummary[]>([]);
@@ -37,16 +38,14 @@ export function SharedPlanActivity({ onOpenPlan }: { onOpenPlan: (id?: string) =
   }, [accountId]);
   if (!accountId || (!plans.length && !error)) return null;
   return <View style={styles.panel}>
-    <Text style={styles.title}>Shared plans & RSVPs</Text>
+    <Text style={styles.title}>Plan updates</Text>
     {notice ? <Text accessibilityRole="alert" style={styles.notice}>{notice}</Text> : null}
     {error ? <><Text accessibilityRole="alert" style={styles.copy}>{error}</Text><ActionButton label="Refresh RSVPs" onPress={() => refresh.current()} size="compact" /></> : null}
-    {plans.slice(0, 3).map((plan) => <View style={styles.plan} key={plan.id}>
+    {plans.slice(0, 3).map((plan) => <TouchableOpacity style={styles.plan} key={plan.id} accessibilityRole="button" accessibilityLabel={`Open responses for ${plan.title}`} onPress={() => onOpenPlan(plan.id)}>
       <Text style={styles.copy}>{plan.title}</Text>
-      <Text accessibilityLiveRegion="polite" style={styles.notice}>{sharedRsvpSummary(plan.participants)}</Text>
-      <ActionButton label={`Open responses for ${plan.title}`} onPress={() => onOpenPlan(plan.id)} size="compact" />
-    </View>)}
+      <RsvpSummary participants={plan.participants} />
+    </TouchableOpacity>)}
     {plans.length > 3 ? <ActionButton label="View all shared plans" onPress={() => onOpenPlan()} size="compact" /> : null}
-    <Text style={styles.hint}>Responses update automatically while NomNomGo is open.</Text>
   </View>;
 }
 

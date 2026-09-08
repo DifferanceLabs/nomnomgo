@@ -586,7 +586,7 @@ export type RsvpControlProps = {
 const rsvpOptions: { status: RsvpStatus; label: string; tone: SemanticTone }[] = [
   { status: 'going', label: 'Going', tone: 'going' },
   { status: 'maybe', label: 'Maybe', tone: 'maybe' },
-  { status: 'cant_make_it', label: "Can't make it", tone: 'danger' },
+  { status: 'cant_make_it', label: 'Not going', tone: 'danger' },
 ];
 
 export function RsvpControl({
@@ -632,7 +632,7 @@ export function RsvpControl({
               ]}
               numberOfLines={2}
             >
-              {label}
+              {selected ? '✓ ' : ''}{label}
             </Text>
           </TouchableOpacity>
         );
@@ -1173,7 +1173,7 @@ const styles = StyleSheet.create({
   },
   rsvpButton: {
     flexGrow: 1,
-    flexBasis: 104,
+    flexBasis: 80,
     minWidth: 0,
     minHeight: controls.buttonHeight,
     borderWidth: borders.thin,

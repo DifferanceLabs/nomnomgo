@@ -23,6 +23,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import AsyncStorage, { getAlphaAccount, initializeAlphaAccount, signOutAlphaAccount, subscribeAccountSaveError } from './src/data/accountStorage';
 import { AlphaAccountPanel } from './src/ui/AlphaAccountPanel';
 import { FriendsPanel } from './src/ui/FriendsPanel';
+import { RsvpBadge, RsvpSummary } from './src/ui/RsvpSummary';
 import { SharedPlanActivity } from './src/ui/SharedPlanActivity';
 import { SharedPlansScreen } from './src/ui/SharedPlansScreen';
 import { createSharedPlan, planIdFromUrl, type SharedPlan, type SharedPlanDraft } from './src/data/sharedPlans';
@@ -417,12 +418,7 @@ const GROUP_SESSION_ENABLED = BETA_FEATURES.legacyPlanningSessions;
 const RSVP_OPTIONS: Array<{ status: RsvpStatus; label: string }> = [
   { status: 'going', label: 'Going' },
   { status: 'maybe', label: 'Maybe' },
-  { status: 'cant_make_it', label: "Can't make it" },
-];
-const COMPACT_RSVP_OPTIONS: { status: RsvpStatus; label: string }[] = [
-  { status: 'going', label: 'Going' },
-  { status: 'maybe', label: 'Maybe' },
-  { status: 'cant_make_it', label: "Can't go" },
+  { status: 'cant_make_it', label: 'Not going' },
 ];
 const LOCAL_TEST_LOCATIONS: Record<string, LatLon> = {
   'franklin tn': { latitude: 35.9251, longitude: -86.8689, label: 'Franklin, TN' },
@@ -2565,7 +2561,7 @@ function rsvpCountsFor(rsvps: Record<string, RsvpStatus> = {}) {
 
 function rsvpSummaryText(rsvps: Record<string, RsvpStatus> = {}) {
   const counts = rsvpCountsFor(rsvps);
-  return `${counts.going} Going | ${counts.maybe} Maybe | ${counts.cant_make_it} Can't make it`;
+  return `${counts.going} Going | ${counts.maybe} Maybe | ${counts.cant_make_it} Not going`;
 }
 
 function betaPlanLocationLabel(plan: BetaPlanRecord) {
@@ -4040,6 +4036,7 @@ function NomNomGoApp() {
       return;
     }
     if (key === 'plans') {
+      if (getAlphaAccount()) { closeTransientSurfaces(); setSharedWorkspace({}); return; }
       openCurrentPlanFromNavigation();
       return;
     }
@@ -7714,7 +7711,6 @@ function NomNomGoApp() {
 
   const betaPlanRsvps = activeBetaPlan?.rsvps || plan.rsvps || {};
   const betaPlanSuggestions = activeBetaPlan?.suggestions || plan.participantSuggestions || [];
-  const betaPlanRsvpSummary = rsvpSummaryText(betaPlanRsvps);
   const currentBetaRsvp = betaPlanRsvps[currentTesterName];
   const showDiscoveryTools = !savedPlansLandingOpen && !isPlanLocked && (!nowExperienceActive || nowDiscovering);
   const showPlanningTools = !savedPlansLandingOpen && !isPlanLocked && !nowExperienceActive;
@@ -7788,7 +7784,10 @@ function NomNomGoApp() {
         window.history.replaceState({}, '', url.toString());
       }
     };
-    return <SharedPlansScreen initialPlan={sharedWorkspace.plan} initialPlanId={sharedWorkspace.id} onClose={closeSharedWorkspace} onOpenFriends={() => {
+    return <SharedPlansScreen initialPlan={sharedWorkspace.plan} initialPlanId={sharedWorkspace.id} onClose={() => { closeSharedWorkspace(); openHome(); }} onNavigate={(key) => {
+      closeSharedWorkspace();
+      handleMainNavigation(key);
+    }} onOpenFriends={() => {
       closeSharedWorkspace();
       setAccountTab('friends');
       setAccountSettingsOpen(true);
@@ -7984,7 +7983,7 @@ function NomNomGoApp() {
                 <View style={styles.betaSectionHeader}>
                   <Text style={[styles.sessionSubhead, isDarkMode && styles.darkText]}>Your RSVP</Text>
                   {visitorRsvp ? (
-                    <Text style={[styles.betaSuggestionMeta, isDarkMode && styles.darkMutedText]}>{rsvpStatusLabel(visitorRsvp)}</Text>
+                    <RsvpBadge value={visitorRsvp} />
                   ) : null}
                 </View>
                 <RsvpControl value={visitorRsvp} onChange={setVisitorRsvp} />
@@ -8011,7 +8010,7 @@ function NomNomGoApp() {
                     <PlanLine label="When" value={`${betaPlanDateLabel(visitorBetaPlan)} | ${visitorBetaPlan.timeWindow || 'Time TBD'}`} />
                     <PlanLine label="Where" value={betaPlanLocationLabel(visitorBetaPlan)} />
                     <PlanLine label="Looking for" value={planningIntentLabel(visitorBetaPlan.intent)} />
-                    <PlanLine label="RSVP" value={rsvpSummaryText(visitorRsvps)} />
+                    <RsvpSummary participants={Object.values(visitorRsvps).map((rsvp) => ({ rsvp }))} />
                   </View>
                 ) : null}
               </View>
@@ -8119,7 +8118,7 @@ function NomNomGoApp() {
         </View>
       ) : null}
 
-      {getAlphaAccount() ? <SharedPlanActivity onOpenPlan={(id) => setSharedWorkspace({ id })} /> : null}
+      {getAlphaAccount() && homeOpen && !planSetupOpen ? <SharedPlanActivity onOpenPlan={(id) => setSharedWorkspace({ id })} /> : null}
 
       <Modal
         visible={accountMenuOpen}
@@ -8136,7 +8135,7 @@ function NomNomGoApp() {
               <View style={styles.accountTextBlock}>
                 <Text style={[styles.accountName, isDarkMode && styles.darkText]}>{testerUser?.name || 'Tester'}</Text>
                 <Text style={[styles.accountUsage, isDarkMode && styles.darkMutedText]}>
-                  Places calls: {usageMeter.nearbySearchesToday + usageMeter.textSearchesToday} today - {usageMeter.nearbySearchesMonth + usageMeter.textSearchesMonth} month
+                  {getAlphaAccount() ? 'Your NomNomGo account' : 'Local tester'}
                 </Text>
               </View>
             </View>
@@ -8193,13 +8192,8 @@ function NomNomGoApp() {
                 <Text style={[styles.accountSettingLabel, isDarkMode && styles.darkMutedText]}>Active user</Text>
                 <Text style={[styles.accountSettingValue, isDarkMode && styles.darkText]}>{testerUser?.name || 'Tester'}</Text>
               </View>
-              <View>
-                <Text style={[styles.accountSettingLabel, isDarkMode && styles.darkMutedText]}>Places usage</Text>
-                <Text style={[styles.accountSettingValue, isDarkMode && styles.darkText]}>
-                  {usageMeter.nearbySearchesToday + usageMeter.textSearchesToday} today - {usageMeter.nearbySearchesMonth + usageMeter.textSearchesMonth} month
-                </Text>
-              </View>
             </View>
+            <AlphaAccountPanel onOpenSharedPlans={() => { setAccountSettingsOpen(false); setSharedWorkspace({}); }} />
             <View style={styles.accountActions}>
               <Button
                 label={getAlphaAccount() ? 'Sign out of NomNomGo' : 'Switch user'}
@@ -8210,7 +8204,6 @@ function NomNomGoApp() {
                 compact
               />
             </View>
-            <AlphaAccountPanel onOpenSharedPlans={() => { setAccountSettingsOpen(false); setSharedWorkspace({}); }} />
             </>}
             </ScrollView>
             <Button label="Close profile" onPress={() => setAccountSettingsOpen(false)} compact />
@@ -8556,7 +8549,7 @@ function NomNomGoApp() {
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.nowActionCard, styles.nowPeopleAction]}
-                onPress={() => setNowPeoplePickerOpen(true)}
+                onPress={() => { if (getAlphaAccount()) setSharedWorkspace({}); else setNowPeoplePickerOpen(true); }}
                 accessibilityRole="button"
                 accessibilityLabel="Include Someone"
               >
@@ -8571,7 +8564,7 @@ function NomNomGoApp() {
                 <FilterTab label="Activity" active={nowMode === 'activity'} onPress={() => { void startNowDiscovery('activity', nowActivityCategory); }} />
                 <TouchableOpacity
                   style={[styles.nowPeopleMiniButton, isDarkMode && styles.darkChip]}
-                  onPress={() => setNowPeoplePickerOpen(true)}
+                  onPress={() => { if (getAlphaAccount()) setSharedWorkspace({}); else setNowPeoplePickerOpen(true); }}
                   accessibilityRole="button"
                   accessibilityLabel="Include Someone"
                 >
@@ -8932,37 +8925,9 @@ function NomNomGoApp() {
                     <Ionicons name="people-outline" size={iconSizes.sm} color={colors.cyan} />
                     <Text style={styles.itineraryCollaborationTitle}>RSVP</Text>
                   </View>
-                  <Text
-                    style={styles.itineraryCollaborationSummary}
-                    numberOfLines={1}
-                    accessibilityLabel={`Shared plan RSVP. ${betaPlanRsvpSummary}`}
-                  >
-                    {betaPlanRsvpSummary}
-                  </Text>
+                  <RsvpSummary participants={Object.values(betaPlanRsvps).map((rsvp) => ({ rsvp }))} />
                 </View>
-                <View style={styles.itineraryRsvpActions}>
-                  {COMPACT_RSVP_OPTIONS.map((option) => {
-                    const selected = currentBetaRsvp === option.status;
-                    return (
-                      <TouchableOpacity
-                        key={option.status}
-                        activeOpacity={0.72}
-                        accessibilityLabel={`RSVP ${option.label}`}
-                        accessibilityRole="button"
-                        accessibilityState={{ selected }}
-                        onPress={() => { void setActiveBetaRsvp(option.status); }}
-                        style={[styles.itineraryRsvpButton, selected && styles.itineraryRsvpButtonSelected]}
-                      >
-                        {selected ? (
-                          <Ionicons name="checkmark" size={14} color={colors.cyan} />
-                        ) : null}
-                        <Text style={[styles.itineraryRsvpButtonText, selected && styles.itineraryRsvpButtonTextSelected]} numberOfLines={1}>
-                          {option.label}
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
+                <RsvpControl value={currentBetaRsvp} onChange={setActiveBetaRsvp} />
               </View>
             ) : null}
 
@@ -9405,16 +9370,20 @@ function NomNomGoApp() {
                 {leaveForFirstStopText}
               </Text>
             ) : null}
-            <Text style={[styles.lockedPlanInvitees, isDarkMode && styles.darkMutedText]} numberOfLines={1}>
+            {!getAlphaAccount() ? <><Text style={[styles.lockedPlanInvitees, isDarkMode && styles.darkMutedText]} numberOfLines={1}>
               With {planPeopleSummary}
             </Text>
             <View style={styles.lockedPlanRsvp}>
               <View style={styles.betaSectionHeader}>
                 <Text style={[styles.sessionSubhead, styles.darkText]}>RSVP</Text>
-                <Text style={[styles.betaSuggestionMeta, styles.darkMutedText]}>{betaPlanRsvpSummary}</Text>
+                <RsvpSummary participants={Object.values(betaPlanRsvps).map((rsvp) => ({ rsvp }))} />
               </View>
               <RsvpControl value={currentBetaRsvp} onChange={setActiveBetaRsvp} />
             </View>
+            </> : <View style={styles.lockedPlanRsvp}>
+              <Text style={[styles.lockedPlanMeta, isDarkMode && styles.darkMutedText]}>Personal saved copy. Open the shared plan for current RSVPs and group changes.</Text>
+              <Button label="Open shared plan & RSVPs" onPress={openCurrentSharedPlan} compact />
+            </View>}
             <View style={styles.lockedStopList}>
               {plan.stops.map((stop, index) => {
                 const stopCityState = cityStateLabel(cityStateForPlace(stop.item));
@@ -9716,10 +9685,10 @@ function NomNomGoApp() {
           <TouchableOpacity style={styles.savedPlansHeader} onPress={openHome} accessibilityRole="button" accessibilityLabel="Open NomNomGo home">
             <View style={styles.sectionHeaderTextBlock}>
               <Text style={[styles.sectionTitle, isLightMode && styles.lightSectionTitle, isDarkMode && styles.darkText]}>
-                {savedPlansNavigationSource === 'plans' ? 'Plans' : 'Saved/Shared Plans'}
+                {getAlphaAccount() ? 'Saved plans' : savedPlansNavigationSource === 'plans' ? 'Plans' : 'Saved/Shared Plans'}
               </Text>
               <Text style={[styles.savedPlansHint, isLightMode && styles.lightMutedText, isDarkMode && styles.darkMutedText]}>
-                {visibleSavedPlans.length ? `${visibleSavedPlans.length} saved or shared for ${currentTesterName}` : 'Saved and shared plans will show here.'}
+                {getAlphaAccount() ? 'Your personal saved plans. Group plans are in the Plans tab.' : visibleSavedPlans.length ? `${visibleSavedPlans.length} saved or shared for ${currentTesterName}` : 'Saved and shared plans will show here.'}
               </Text>
             </View>
             <HeaderAction label="Back" />
@@ -9747,7 +9716,7 @@ function NomNomGoApp() {
               )) : (
                 <EmptyState
                   title="No saved plans yet"
-                  description="Plans you save or receive from friends will appear here."
+                  description={getAlphaAccount() ? 'Save a personal plan to return to it later. Open Plans for invitations and group plans.' : 'Plans you save or receive from friends will appear here.'}
                   icon={<Ionicons name="heart-outline" size={30} color={colors.textSecondary} />}
                 />
               )}
@@ -10693,7 +10662,7 @@ function NomNomGoApp() {
             <Text style={styles.quickSharePlace} numberOfLines={2}>
               {quickShareTarget ? quickShareTitle(quickShareTarget) : ''}
             </Text>
-            <Text style={styles.quickShareHint}>Dev users</Text>
+            {!getAlphaAccount() ? <><Text style={styles.quickShareHint}>Dev users</Text>
             <View style={styles.quickShareUserList}>
               {quickShareUsers.map((user) => (
                 <TouchableOpacity key={user} style={styles.quickShareUserButton} onPress={() => shareQuickTargetToUser(user)}>
@@ -10701,6 +10670,7 @@ function NomNomGoApp() {
                 </TouchableOpacity>
               ))}
             </View>
+            </> : null}
             <View style={styles.shareActions}>
               <Button label="Share" onPress={textQuickTarget} primary />
               <Button label="Close" onPress={() => setQuickShareTarget(null)} />

@@ -1,26 +1,36 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Linking, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Linking, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { getAlphaAccount } from '../data/accountStorage';
-import { changeSharedPlan, changedSharedRsvps, createSharedPlan, getSharedPlan, listSharedPlans, newerSharedPlan, sharedPlanUrl, sharedRsvpLabel, sharedRsvpSummary, type SharedPlan, type SharedPlanDraft, type SharedPlanSummary } from '../data/sharedPlans';
+import { changeSharedPlan, changedSharedRsvps, createSharedPlan, getSharedPlan, listSharedPlans, newerSharedPlan, sharedPlanUrl, sharedPlanDraftError, sharedRsvpLabel, type SharedPlan, type SharedPlanDraft, type SharedPlanSummary } from '../data/sharedPlans';
 import { startForegroundRefresh } from '../data/foregroundRefresh';
-import { ActionButton as Button } from './primitives';
+import { ActionButton as Button, BottomNavigation, RsvpControl } from './primitives';
+import { RsvpBadge, RsvpSummary } from './RsvpSummary';
+import { colors } from './theme';
+import { DateField } from './DateField';
 import { ShareMessage } from './ShareMessage';
 import { FriendsPanel } from './FriendsPanel';
 
-const rsvps = [{ value: 'going', label: 'Going' }, { value: 'maybe', label: 'Maybe' }, { value: 'cant_make_it', label: "Can't make it" }];
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => { const date = new Date(); return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`; };
 const emptyDraft = (): SharedPlanDraft => ({ title: '', intent: 'both', locationLabel: '', dateStart: today(), dateEnd: today(), timeWindow: '', stops: [] });
 const requestId = () => typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : '';
 const errorText = (error: unknown) => error instanceof Error ? error.message : 'The plan could not be reached. Please try again.';
 const statusOf = (error: unknown) => (error as { status?: number })?.status;
 
-export function SharedPlansScreen({ initialPlan, initialPlanId, onClose, onOpenFriends }: { initialPlan?: SharedPlan | null; initialPlanId?: string | null; onClose: () => void; onOpenFriends?: () => void }) {
+export function SharedPlansScreen({ initialPlan, initialPlanId, onClose, onOpenFriends, onNavigate }: { initialPlan?: SharedPlan | null; initialPlanId?: string | null; onClose: () => void; onOpenFriends?: () => void; onNavigate?: (key: 'home' | 'saved' | 'profile') => void }) {
   const account = getAlphaAccount()!;
   const [selectedId, setSelectedId] = useState(initialPlan?.id || initialPlanId || '');
   const [plan, setPlan] = useState<SharedPlan | null>(initialPlan || null);
   const planRef = useRef(plan);
   const [plans, setPlans] = useState<SharedPlanSummary[]>([]);
+  const [section, setSection] = useState<'plan' | 'people'>('plan');
+  const [search, setSearch] = useState('');
+  const [removingMember, setRemovingMember] = useState('');
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [editingStop, setEditingStop] = useState('');
+  const [pendingNavigation, setPendingNavigation] = useState<(() => void) | null>(null);
+  const draftSnapshot = useRef('');
   const [loading, setLoading] = useState(true);
   const [syncError, setSyncError] = useState('');
   const [notice, setNotice] = useState('');
@@ -29,6 +39,7 @@ export function SharedPlansScreen({ initialPlan, initialPlanId, onClose, onOpenF
   const refreshRef = useRef<() => void>(() => {});
   const [updated, setUpdated] = useState('');
   const [editing, setEditing] = useState(false);
+  const [formError, setFormError] = useState('');
   const [editBase, setEditBase] = useState<SharedPlan | null>(null);
   const [draft, setDraft] = useState<SharedPlanDraft>(emptyDraft);
   const sourceKey = useRef(`shared-${requestId()}`);
@@ -39,6 +50,13 @@ export function SharedPlansScreen({ initialPlan, initialPlanId, onClose, onOpenF
   const suggestionKey = useRef(requestId());
   const owner = plan?.ownerId === account.id;
   const locked = plan?.status === 'locked';
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !editing || JSON.stringify(draft) === draftSnapshot.current) return;
+    const preventUnload = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ''; };
+    window.addEventListener('beforeunload', preventUnload);
+    return () => window.removeEventListener('beforeunload', preventUnload);
+  }, [editing, draft]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -88,7 +106,7 @@ export function SharedPlansScreen({ initialPlan, initialPlanId, onClose, onOpenF
       const incoming = await changeSharedPlan(base, action, data);
       planRef.current = newerSharedPlan(planRef.current, incoming); setPlan(planRef.current);
       setUpdated(new Date().toLocaleTimeString());
-      if (action === 'plan.rsvp') setNotice(`RSVP saved: ${sharedRsvpLabel(String(data.rsvp))}. The organizer can see your response.`);
+      if (action === 'plan.rsvp') setNotice(`RSVP saved: ${sharedRsvpLabel(String(data.rsvp))}`);
       return true;
     } catch (error) {
       setNotice(errorText(error));
@@ -96,9 +114,18 @@ export function SharedPlansScreen({ initialPlan, initialPlanId, onClose, onOpenF
       return false;
     } finally { busyRef.current = false; setBusy(false); refreshRef.current(); }
   };
-  const openPlan = (id: string) => { planRef.current = null; setPlan(null); setNotice(''); setPreparedEmail(''); setEditing(false); setSelectedId(id); };
-  const edit = () => { if (plan) { setDraft(plan); setEditBase(plan); setEditing(true); } };
+  const navigate = (action: () => void) => {
+    if (busyRef.current) return;
+    if (editing && JSON.stringify(draft) !== draftSnapshot.current) { setPendingNavigation(() => action); return; }
+    action();
+  };
+  const openPlan = (id: string) => { planRef.current = null; setPlan(null); setNotice(''); setPreparedEmail(''); setEditing(false); setFormError(''); setSelectedId(id); setSection('plan'); setRemovingMember(''); setInviteOpen(false); setEditingStop(''); };
+  const create = () => { openPlan(''); const next = emptyDraft(); draftSnapshot.current = JSON.stringify(next); setDraft(next); setEditBase(null); setEditing(true); };
+  const edit = () => { if (plan) { draftSnapshot.current = JSON.stringify(plan); setDraft(plan); setEditBase(plan); setEditing(true); } };
   const saveDetails = async () => {
+    const error = sharedPlanDraftError(draft);
+    if (error) { setFormError(error); return; }
+    setFormError('');
     if (plan) {
       if (await mutate('plan.update', { details: draft }, editBase)) setEditing(false);
       return;
@@ -113,7 +140,7 @@ export function SharedPlansScreen({ initialPlan, initialPlanId, onClose, onOpenF
   };
   const invite = async (target = inviteEmail) => {
     const email = target.trim().toLowerCase();
-    if (await mutate('plan.invite', { email })) { setPreparedEmail(email); setInviteEmail(''); setNotice('Access is ready. Send the invitation below.'); }
+    if (await mutate('plan.invite', { email })) { setPreparedEmail(email); setInviteEmail(''); setNotice('Added to the plan. Send them the invitation below.'); }
   };
   const suggest = async () => {
     if (await mutate('plan.suggest', { suggestionId: suggestionKey.current, slot, place: { title: suggestion.trim(), provider: 'manual' } })) {
@@ -122,80 +149,98 @@ export function SharedPlansScreen({ initialPlan, initialPlanId, onClose, onOpenF
   };
   const field = (label: string, key: 'title' | 'locationLabel' | 'dateStart' | 'dateEnd' | 'timeWindow') => <View style={styles.field} key={key}>
     <Text style={styles.copy}>{label}</Text>
-    <TextInput accessibilityLabel={label} style={styles.input} value={draft[key] || ''} onChangeText={(value) => setDraft((current) => ({ ...current, [key]: value }))} editable={!busy} />
+    {key === 'dateStart' || key === 'dateEnd' ? <DateField label={label} value={draft[key]} disabled={busy} onChange={(value) => { setFormError(''); setDraft((current) => ({ ...current, [key]: value, ...(key === 'dateStart' && current.dateEnd < value ? { dateEnd: value } : {}) })); }} />
+      : <TextInput accessibilityLabel={label} style={styles.input} value={draft[key] || ''} onChangeText={(value) => { setFormError(''); setDraft((current) => ({ ...current, [key]: value })); }} editable={!busy} placeholder={key === 'timeWindow' ? 'e.g. 6–8 PM Central' : undefined} placeholderTextColor="#a8b2bf" />}
   </View>;
   return <SafeAreaView style={styles.screen}>
     <View style={styles.header}>
-      <Text style={styles.heading}>Shared plans</Text>
-      {plan ? <Text accessibilityLiveRegion="polite" style={styles.notice}>{sharedRsvpSummary(plan.participants)}</Text> : null}
-      <Button label="Back to NomNomGo" size="compact" onPress={onClose} disabled={busy} />
-      {onOpenFriends ? <Button label="Friends" size="compact" onPress={onOpenFriends} disabled={busy} /> : null}
+      <View style={styles.headerRow}>
+        <Button label={selectedId || editing ? 'Back' : 'Home'} accessibilityLabel={selectedId || editing ? 'Back to plans' : 'Back to NomNomGo'} size="compact" onPress={() => navigate(selectedId || editing ? () => openPlan('') : onClose)} disabled={busy} />
+        <Text style={[styles.heading, { flex: 1 }]} numberOfLines={1}>{editing ? (plan ? 'Edit plan' : 'New plan') : 'Plans'}</Text>
+        {onOpenFriends ? <Button label="Friends" size="compact" onPress={() => navigate(onOpenFriends)} disabled={busy} /> : null}
+      </View>
+      {plan && !editing ? <View style={styles.row} accessibilityRole="tablist">
+        {(['plan','people'] as const).map((tab) => <TouchableOpacity key={tab} accessibilityRole="tab" accessibilityLabel={tab === 'plan' ? 'Plan' : 'People'} accessibilityState={{ selected: section === tab }} onPress={() => setSection(tab)} style={[styles.tab, section === tab && styles.tabSelected]}><Text style={styles.tabText}>{tab === 'plan' ? 'Plan' : `People (${plan.participants.length})`}</Text></TouchableOpacity>)}
+      </View> : null}
+      {pendingNavigation ? <View accessibilityRole="alert" style={{ gap: 8 }}>
+        <Text style={styles.copy}>Discard your unsaved plan changes?</Text>
+        <View style={styles.row}><Button label="Keep editing" size="compact" onPress={() => setPendingNavigation(null)} /><Button label="Discard changes" size="compact" tone="danger" onPress={() => { const action = pendingNavigation; setPendingNavigation(null); action(); }} /></View>
+      </View> : null}
     </View>
     <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-      <View style={styles.row}>
-        {selectedId ? <Button label="All shared plans" size="compact" onPress={() => openPlan('')} disabled={busy} /> : null}
-        <Button label="Refresh shared plans" size="compact" onPress={() => refreshRef.current()} disabled={busy} />
-      </View>
       {loading ? <ActivityIndicator color="#ff806f" /> : null}
-      <Text style={styles.muted}>{syncError ? 'Connection interrupted. Changes are paused until refresh succeeds.' : updated ? `Updated ${updated} · Refreshes every 5 seconds while open` : 'Connecting…'}</Text>
-      {syncError ? <Text accessibilityRole="alert" style={styles.error}>{syncError}</Text> : null}
+      {syncError ? <><Text accessibilityRole="alert" style={styles.error}>{syncError}</Text><Button label="Retry connection" onPress={() => refreshRef.current()} disabled={busy} /></> : null}
       {notice ? <Text accessibilityRole="alert" selectable style={styles.notice}>{notice}</Text> : null}
 
       {!selectedId && !editing ? <>
-        <Button label="Create shared plan" onPress={() => { setDraft(emptyDraft()); setEditBase(null); setEditing(true); }} disabled={busy || !!syncError} tone="primary" />
+        <Button label="Create plan" accessibilityLabel="Create shared plan" onPress={create} disabled={busy || !!syncError} tone="primary" />
+        {plans.length > 5 || search ? <TextInput accessibilityLabel="Search plans" placeholder="Search plans" placeholderTextColor="#a8b2bf" style={styles.input} value={search} onChangeText={setSearch} /> : null}
         {!loading && !plans.length ? <Text style={styles.copy}>Plans you organize or are invited to will appear here.</Text> : null}
-        {plans.map((item) => <View key={item.id} style={styles.card}>
+        {plans.length > 0 && !plans.some((item) => `${item.title} ${item.locationLabel}`.toLowerCase().includes(search.trim().toLowerCase())) ? <Text style={styles.copy}>No plans match. Try another name or place.</Text> : null}
+        {plans.filter((item) => `${item.title} ${item.locationLabel}`.toLowerCase().includes(search.trim().toLowerCase())).map((item) => <TouchableOpacity key={item.id} style={styles.card} accessibilityRole="button" accessibilityLabel={`Open ${item.title}`} onPress={() => openPlan(item.id)}>
           <Text style={styles.title}>{item.title}</Text>
           <Text style={styles.copy}>{item.dateStart} · {item.locationLabel} · {item.status === 'locked' ? 'Locked' : 'Planning'}</Text>
-          <Text style={styles.muted}>Your RSVP: {rsvps.find((rsvp) => rsvp.value === item.rsvp)?.label || 'Not answered'}</Text>
-          <Text accessibilityLiveRegion="polite" style={styles.notice}>{sharedRsvpSummary(item.participants)}</Text>
-          <Button label={`Open ${item.title}`} onPress={() => openPlan(item.id)} size="compact" />
-        </View>)}
+          <View style={styles.row}><Text style={styles.muted}>You:</Text><RsvpBadge value={item.rsvp} /></View>
+          <RsvpSummary participants={item.participants} />
+        </TouchableOpacity>)}
       </> : null}
 
       {editing ? <View style={styles.card}>
         <Text style={styles.title}>{plan ? 'Edit shared plan details' : 'New shared plan'}</Text>
-        {field('Shared plan title', 'title')}{field('Meeting area or address', 'locationLabel')}
-        {field('Start date (YYYY-MM-DD)', 'dateStart')}{field('End date (YYYY-MM-DD)', 'dateEnd')}{field('Time and timezone', 'timeWindow')}
+        {field('Plan name', 'title')}{field('Meeting place', 'locationLabel')}
+        {field('Start date', 'dateStart')}{field('End date', 'dateEnd')}{field('Time (optional)', 'timeWindow')}
+        {formError ? <Text accessibilityRole="alert" style={styles.error}>{formError}</Text> : null}
         <View style={styles.row}>{(['food', 'activity', 'both'] as const).map((intent) => <Button key={intent} label={intent === 'both' ? 'Food & activity' : intent === 'food' ? 'Food' : 'Activity'} tone={draft.intent === intent ? 'primary' : 'secondary'} size="compact" onPress={() => setDraft((current) => ({ ...current, intent }))} />)}</View>
         {plan && editBase?.revision !== plan.revision ? <>
-          <Text style={styles.notice}>The plan changed while you were editing. Review the latest details below, then keep your edits or cancel.</Text>
-          <Button label="Keep edits with latest version" size="compact" onPress={() => setEditBase(plan)} />
+          <Text style={styles.notice}>This plan changed while you were editing. Review the current details before saving your edits.</Text>
+          <Text style={styles.copy}>{plan.title}{'\n'}{plan.locationLabel}{'\n'}{plan.dateStart} – {plan.dateEnd}{'\n'}{plan.timeWindow || 'Time to be decided'}</Text>
+          <Button label="Keep my edits" accessibilityLabel="Keep edits with latest version" size="compact" onPress={() => setEditBase(plan)} />
         </> : null}
         <View style={styles.row}>
-          <Button label={plan ? 'Save shared details' : 'Save new shared plan'} onPress={saveDetails} loading={busy} disabled={!!syncError || !!(plan && editBase?.revision !== plan.revision)} tone="primary" />
-          <Button label="Cancel editing" onPress={() => setEditing(false)} disabled={busy} />
+          <Button label={plan ? 'Save changes' : 'Create plan'} onPress={saveDetails} loading={busy} disabled={!!syncError || !!(plan && editBase?.revision !== plan.revision)} tone="primary" />
+          <Button label="Cancel" accessibilityLabel="Cancel editing" onPress={() => navigate(() => setEditing(false))} disabled={busy} />
         </View>
       </View> : null}
 
-      {plan ? <>
+      {plan && !editing ? <>
         <View style={styles.card}>
           <Text style={styles.heading}>{plan.title}</Text>
           <Text style={styles.copy}>{plan.dateStart}{plan.dateEnd !== plan.dateStart ? ` – ${plan.dateEnd}` : ''} · {plan.timeWindow || 'Time to be decided'}</Text>
           <Text style={styles.copy}>{plan.locationLabel}</Text>
-          <Text style={styles.notice}>{locked ? 'Locked plan · You can still update your RSVP' : 'Planning together'}</Text>
-          {owner ? <View style={styles.row}>
-            {!locked ? <Button label="Edit shared details" size="compact" onPress={edit} disabled={busy || !!syncError} /> : null}
-            <Button label={locked ? 'Reopen shared plan' : 'Lock shared plan'} size="compact" onPress={async () => { await mutate(locked ? 'plan.reopen' : 'plan.lock'); }} disabled={busy || !!syncError || (!locked && !plan.stops.length)} />
+          <RsvpSummary participants={plan.participants} />
+          {locked ? <Text style={styles.notice}>Plan locked · RSVPs stay open</Text> : null}
+          {owner && section === 'plan' ? <View style={styles.row}>
+            {!locked ? <Button label="Edit" accessibilityLabel="Edit shared details" size="compact" onPress={edit} disabled={busy || !!syncError} /> : null}
+            <Button label={locked ? 'Reopen plan' : 'Lock plan'} accessibilityLabel={locked ? 'Reopen shared plan' : 'Lock shared plan'} size="compact" onPress={async () => { await mutate(locked ? 'plan.reopen' : 'plan.lock'); }} disabled={busy || !!syncError || (!locked && !plan.stops.length)} />
           </View> : null}
+          {owner && section === 'plan' && !locked && !plan.stops.length ? <Text style={styles.muted}>Add a stop to lock the plan.</Text> : null}
         </View>
-        <View style={styles.card}>
+        {section === 'plan' ? <View style={styles.card}>
           <Text style={styles.title}>Your RSVP</Text>
-          <View style={styles.row}>{rsvps.map((rsvp) => <Button key={rsvp.value} label={rsvp.label} accessibilityLabel={`RSVP ${rsvp.label}`} tone={plan.participants.find((p) => p.userId === account.id)?.rsvp === rsvp.value ? 'primary' : 'secondary'} size="compact" disabled={busy || !!syncError} onPress={async () => { await mutate('plan.rsvp', { rsvp: rsvp.value }); }} />)}</View>
+          <RsvpControl value={plan.participants.find((p) => p.userId === account.id)?.rsvp || undefined} disabled={busy || !!syncError} onChange={async (rsvp) => { await mutate('plan.rsvp', { rsvp }); }} />
+        </View> : null}
+        {section === 'people' ? <>
+        <Button label={inviteOpen ? 'Done inviting' : 'Invite people'} tone="primary" onPress={() => setInviteOpen(!inviteOpen)} disabled={busy} />
+        {inviteOpen ? <View style={styles.card}>
+          <Text style={styles.title}>Invite people</Text>
+          <FriendsPanel onInvite={invite} excludedEmails={plan.participants.map((member) => member.displayName)} disabled={busy || !!syncError} />
+          <Text style={styles.copy}>Or invite someone new using their Google email. First sign-in connects you as friends.</Text>
+          <TextInput accessibilityLabel="Plan invitee Google email" style={styles.input} value={inviteEmail} onChangeText={setInviteEmail} keyboardType="email-address" autoCapitalize="none" autoCorrect={false} editable={!busy} />
+          <Button label="Invite by email or text" onPress={() => invite()} loading={busy} disabled={!!syncError || !inviteEmail.trim()} />
+          {preparedEmail ? <ShareMessage email={preparedEmail} message={`Join me for ${plan.title}: ${sharedPlanUrl(plan.id)} . Sign in through Differance Labs with Google using ${preparedEmail}, then open NomNomGo. You can RSVP and help choose our stops. Your access is ready. If you are new to NomNomGo, your first sign-in connects us as friends for future plans.`} /> : null}
+        </View> : null}
+        <View style={styles.card}>
+          <Text style={styles.title}>People</Text>
           {plan.participants.map((person) => <View key={person.displayName} style={styles.person}>
             <Text style={styles.copy}>{person.displayName}{person.role === 'owner' ? ' · Organizer' : ''}</Text>
-            <Text style={styles.muted}>{rsvps.find((rsvp) => rsvp.value === person.rsvp)?.label || (person.joined ? 'Not answered' : 'Invited · Not joined yet')}</Text>
-            {owner && person.role !== 'owner' ? <Button label={`Remove ${person.displayName}`} size="compact" disabled={busy || !!syncError} onPress={async () => { await mutate('plan.removeMember', { email: person.displayName }); }} /> : null}
+            <RsvpBadge value={person.rsvp} pendingLabel={person.joined ? 'Awaiting reply' : 'Invited'} />
+            {owner && person.role !== 'owner' ? removingMember === person.displayName ? <>
+              <Text style={styles.copy}>Remove {person.displayName} from this plan?</Text>
+              <View style={styles.row}><Button label="Keep person" size="compact" onPress={() => setRemovingMember('')} disabled={busy} /><Button label="Remove from plan" tone="danger" size="compact" disabled={busy || !!syncError} onPress={async () => { if (await mutate('plan.removeMember', { email: person.displayName })) setRemovingMember(''); }} /></View>
+            </> : <Button label="Manage" accessibilityLabel={`Manage ${person.displayName}`} size="compact" disabled={busy || !!syncError} onPress={() => setRemovingMember(person.displayName)} /> : null}
           </View>)}
         </View>
-        <View style={styles.card}>
-          <Text style={styles.title}>Invite someone to this plan</Text>
-          <FriendsPanel onInvite={invite} excludedEmails={plan.participants.map((member) => member.displayName)} disabled={busy || !!syncError} />
-          <Text style={styles.copy}>Or enter their Google account email, even when sending a text. New users also receive alpha access and become your friends after their first NomNomGo sign-in.</Text>
-          <TextInput accessibilityLabel="Plan invitee Google email" style={styles.input} value={inviteEmail} onChangeText={setInviteEmail} keyboardType="email-address" autoCapitalize="none" autoCorrect={false} editable={!busy} />
-          <Button label="Prepare plan invitation" onPress={() => invite()} disabled={busy || !!syncError || !inviteEmail.trim()} />
-          {preparedEmail ? <ShareMessage email={preparedEmail} message={`Join me for ${plan.title}: ${sharedPlanUrl(plan.id)} . Sign in through Differance Labs with Google using ${preparedEmail}, then open NomNomGo. You can RSVP and help choose our stops. Your access is ready. If you are new to NomNomGo, your first sign-in connects us as friends for future plans.`} /> : null}
-        </View>
+        </> : <>
         <View style={styles.card}>
           <Text style={styles.title}>Itinerary</Text>
           {!plan.stops.length ? <Text style={styles.copy}>Suggest a place below. The organizer can add it to the itinerary.</Text> : null}
@@ -203,11 +248,12 @@ export function SharedPlansScreen({ initialPlan, initialPlanId, onClose, onOpenF
             <Text style={styles.copy}>{index + 1}. {stop.place.title}</Text>
             {stop.arrivalTime ? <Text style={styles.muted}>{stop.arrivalTime}</Text> : null}
             {stop.place.address ? <Text style={styles.muted}>{stop.place.address}</Text> : null}
-            <Button label={`Map ${stop.place.title}`} size="compact" onPress={async () => { try { await Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(stop.place.latitude !== undefined && stop.place.longitude !== undefined ? `${stop.place.latitude},${stop.place.longitude}` : [stop.place.title, stop.place.address || plan.locationLabel].join(' '))}`); } catch { setNotice('Could not open the map.'); } }} />
-            {owner && !locked ? <View style={styles.row}>
-              <Button label={`Move ${stop.place.title} up`} size="compact" disabled={busy || !!syncError || index === 0} onPress={async () => { await mutate('plan.moveStop', { stopId: stop.id, direction: -1 }); }} />
-              <Button label={`Move ${stop.place.title} down`} size="compact" disabled={busy || !!syncError || index === plan.stops.length - 1} onPress={async () => { await mutate('plan.moveStop', { stopId: stop.id, direction: 1 }); }} />
-              <Button label={`Remove stop ${stop.place.title}`} size="compact" disabled={busy || !!syncError} onPress={async () => { await mutate('plan.removeStop', { stopId: stop.id }); }} />
+            <View style={styles.row}><Button label="Map" accessibilityLabel={`Map ${stop.place.title}`} size="compact" onPress={async () => { try { await Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(stop.place.latitude !== undefined && stop.place.longitude !== undefined ? `${stop.place.latitude},${stop.place.longitude}` : [stop.place.title, stop.place.address || plan.locationLabel].join(' '))}`); } catch { setNotice('Could not open the map.'); } }} />
+              {owner && !locked ? <Button label={editingStop === stop.id ? 'Done' : 'Edit stop'} accessibilityLabel={`Edit ${stop.place.title}`} size="compact" onPress={() => setEditingStop(editingStop === stop.id ? '' : stop.id)} /> : null}</View>
+            {owner && !locked && editingStop === stop.id ? <View style={styles.row}>
+              <Button label="Move up" accessibilityLabel={`Move ${stop.place.title} up`} size="compact" disabled={busy || !!syncError || index === 0} onPress={async () => { await mutate('plan.moveStop', { stopId: stop.id, direction: -1 }); }} />
+              <Button label="Move down" accessibilityLabel={`Move ${stop.place.title} down`} size="compact" disabled={busy || !!syncError || index === plan.stops.length - 1} onPress={async () => { await mutate('plan.moveStop', { stopId: stop.id, direction: 1 }); }} />
+              <Button label="Remove stop" accessibilityLabel={`Remove stop ${stop.place.title}`} tone="danger" size="compact" disabled={busy || !!syncError} onPress={async () => { await mutate('plan.removeStop', { stopId: stop.id }); }} />
             </View> : null}
           </View>)}
         </View>
@@ -216,9 +262,9 @@ export function SharedPlansScreen({ initialPlan, initialPlanId, onClose, onOpenF
           {!locked ? <>
             <TextInput accessibilityLabel="Suggest a place" placeholder="Place name or activity" placeholderTextColor="#a8b2bf" style={styles.input} value={suggestion} onChangeText={(value) => { setSuggestion(value); suggestionKey.current = requestId(); }} editable={!busy} />
             <View style={styles.row}>
-              <Button label="Food suggestion" size="compact" tone={slot === 'food' ? 'primary' : 'secondary'} onPress={() => setSlot('food')} />
-              <Button label="Activity suggestion" size="compact" tone={slot === 'activity' ? 'primary' : 'secondary'} onPress={() => setSlot('activity')} />
-              <Button label="Add shared suggestion" size="compact" onPress={suggest} disabled={busy || !!syncError || !suggestion.trim()} />
+              <Button label="Food" accessibilityLabel="Food suggestion" size="compact" tone={slot === 'food' ? 'primary' : 'secondary'} onPress={() => setSlot('food')} />
+              <Button label="Activity" accessibilityLabel="Activity suggestion" size="compact" tone={slot === 'activity' ? 'primary' : 'secondary'} onPress={() => setSlot('activity')} />
+              <Button label="Suggest" accessibilityLabel="Add shared suggestion" size="compact" onPress={suggest} disabled={busy || !!syncError || !suggestion.trim()} />
             </View>
           </> : <Text style={styles.muted}>The organizer can reopen the plan to continue suggestions and voting.</Text>}
           {plan.suggestions.map((item) => {
@@ -226,20 +272,30 @@ export function SharedPlansScreen({ initialPlan, initialPlanId, onClose, onOpenF
             return <View key={item.id} style={styles.person}>
               <Text style={styles.copy}>{item.place.title} · {item.votes.length} vote{item.votes.length === 1 ? '' : 's'}</Text>
               {!locked ? <View style={styles.row}>
-                <Button label={`${voted ? 'Remove vote for' : 'Vote for'} ${item.place.title}`} size="compact" disabled={busy || !!syncError} onPress={async () => { await mutate('plan.vote', { suggestionId: item.id, voted: !voted }); }} />
-                {owner ? <Button label={`Add ${item.place.title} to itinerary`} size="compact" disabled={busy || !!syncError || plan.stops.some((stop) => stop.id === item.id)} onPress={async () => { await mutate('plan.pick', { suggestionId: item.id }); }} /> : null}
+                <Button label={voted ? '✓ Voted' : 'Vote'} accessibilityLabel={`${voted ? 'Remove vote for' : 'Vote for'} ${item.place.title}`} size="compact" disabled={busy || !!syncError} onPress={async () => { await mutate('plan.vote', { suggestionId: item.id, voted: !voted }); }} />
+                {owner ? <Button label={plan.stops.some((stop) => stop.id === item.id) ? 'Added to plan' : 'Add to plan'} accessibilityLabel={`Add ${item.place.title} to itinerary`} size="compact" disabled={busy || !!syncError || plan.stops.some((stop) => stop.id === item.id)} onPress={async () => { await mutate('plan.pick', { suggestionId: item.id }); }} /> : null}
               </View> : null}
             </View>;
           })}
         </View>
-        <Text selectable style={styles.muted}>Plan link (members only): {sharedPlanUrl(plan.id)}</Text>
+        </>}
       </> : null}
+      {updated && !syncError ? <Text style={styles.muted}>Updated {updated} · Syncs automatically while open</Text> : null}
     </ScrollView>
+    {onNavigate ? <BottomNavigation<'home' | 'plans' | 'saved' | 'profile'> activeKey="plans" onSelect={(key) => navigate(() => key === 'plans' ? openPlan('') : onNavigate(key))} items={[
+      {key:'home',label:'Home',icon:<Ionicons name="home-outline" size={22} color={colors.textTertiary} />},
+      {key:'plans',label:'Plans',icon:<Ionicons name="calendar" size={22} color={colors.coral} />},
+      {key:'saved',label:'Saved',icon:<Ionicons name="heart-outline" size={22} color={colors.textTertiary} />},
+      {key:'profile',label:'Profile',icon:<Ionicons name="person-outline" size={22} color={colors.textTertiary} />},
+    ]} createAction={{label:'Create',accessibilityLabel:'Create a plan',icon:<Ionicons name="add" size={28} color={colors.textInverse} />,onPress:() => navigate(create)}} /> : null}
   </SafeAreaView>;
 }
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#0c1117' }, header: { padding: 16, gap: 10, borderBottomWidth: 1, borderColor: '#293440' },
+  headerRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  tab: { flex: 1, minHeight: 44, padding: 12, borderRadius: 10, backgroundColor: '#25323d' },
+  tabSelected: { backgroundColor: '#276558' }, tabText: { color: '#fff', textAlign: 'center', fontWeight: '700' },
   content: { padding: 16, gap: 16, paddingBottom: 48, width: '100%', maxWidth: 780, alignSelf: 'center' },
   heading: { fontSize: 24, fontWeight: '700', color: '#f5f7fa' }, title: { fontSize: 19, fontWeight: '700', color: '#f5f7fa' },
   copy: { color: '#d7e0e9', fontSize: 15, lineHeight: 22 }, muted: { color: '#a8b2bf', fontSize: 13, lineHeight: 19 },

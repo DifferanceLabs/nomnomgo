@@ -10,6 +10,23 @@ function load(path) {
   return context.exports;
 }
 const updates = load('src/data/sharedPlans.ts');
+
+test('plan form rejects missing fields, impossible dates and reversed ranges before saving', () => {
+  const draft = { title: 'Dinner', locationLabel: 'Franklin', dateStart: '2028-02-29', dateEnd: '2028-02-29' };
+  assert.equal(updates.sharedPlanDraftError(draft), '');
+  assert.match(updates.sharedPlanDraftError({...draft, title:'  '}), /plan name/);
+  assert.match(updates.sharedPlanDraftError({...draft, locationLabel:'  '}), /meeting place/);
+  for (const dateStart of ['2027-02-29', '2028-02-30', '2028-13-01', '02/29/2028', '']) {
+    assert.match(updates.sharedPlanDraftError({...draft, dateStart}), /valid dates/);
+  }
+  assert.match(updates.sharedPlanDraftError({...draft, dateEnd:'2028-02-28'}), /end on or after/);
+});
+
+test('RSVP summaries distinguish unanswered invitations from explicit declines', () => {
+  assert.equal(updates.sharedRsvpSummary([{rsvp:'going'}, {rsvp:'maybe'}, {rsvp:'cant_make_it'}, {rsvp:null}]), '1 Going · 1 Maybe · 1 Not going · 1 Awaiting reply');
+  assert.equal(updates.sharedRsvpLabel('cant_make_it'), 'Not going');
+  assert.equal(updates.sharedRsvpLabel(), 'Awaiting reply');
+});
 test('organizer summaries include invitee responses and announce a change even when total going is unchanged', () => {
   const owner = {userId:'owner',displayName:'owner@example.com',rsvp:'going'};
   const before = {id:'plan',participants:[owner,{userId:'friend',displayName:'friend@example.com',rsvp:null}]};

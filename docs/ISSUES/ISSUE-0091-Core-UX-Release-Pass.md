@@ -12,6 +12,9 @@ Exercise active Now, Later, plan editing, discovery, saved plans, local particip
 
 ## Acceptance Criteria
 
+- September alpha follow-up: Going is green, Maybe yellow and Not going red in all RSVP controls, participant labels and plan summaries; labels/selection also communicate status without color.
+- Audit every screen family and interaction category in the source; exercise active phone flows with representative empty, busy, error and populated states and distinguish runtime evidence from source review.
+- Shared plans provide consistent navigation, compact Plan/People sections and clear recovery. Invitations, profile/friends, saves and discovery minimize repeated instructions and unnecessary steps.
 - Search results and loading state belong to the latest user request; changing category, location, or search text cannot restore older results.
 - Discovery does not serialize independent requests unnecessarily or continue unnecessary work after the user leaves.
 - Empty/error states offer clear recovery without claiming an admin was notified before the incident service exists.
@@ -23,4 +26,4 @@ Exercise active Now, Later, plan editing, discovery, saved plans, local particip
 
 ## Validation
 
-See [UX release review](../UX_RELEASE_REVIEW_2026-09-04.md) for tested combinations, changes, and limitations. Production completion additionally requires successful GitHub/Vercel checks and an unauthenticated launch-gate probe.
+See the [September 7 alpha audit](../UX_AUDIT_2026-09-07.md) for the screen inventory, RSVP/shared-plan improvements, current runtime coverage and remaining physical-device/beta checks. The earlier [UX release review](../UX_RELEASE_REVIEW_2026-09-04.md) records the wider discovery/preset matrix. Production completion additionally requires successful GitHub/Vercel checks and an unauthenticated launch-gate probe.

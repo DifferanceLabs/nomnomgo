@@ -102,12 +102,12 @@ export const semanticTones = {
     accent: '#BE9BFF',
   },
   maybe: {
-    solid: colors.amber,
-    pressed: colors.amberPressed,
-    soft: colors.amberSoft,
-    border: '#725422',
+    solid: '#F4D35E',
+    pressed: '#D6B643',
+    soft: '#302B14',
+    border: '#78692F',
     foreground: colors.textInverse,
-    accent: colors.amber,
+    accent: '#F4D35E',
   },
   people: {
     solid: colors.teal,

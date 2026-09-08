@@ -47,18 +47,18 @@ export function FriendsPanel({ onInvite, excludedEmails = [], disabled = false }
   const matches = available.filter((friend) => friend.email.includes(search.trim().toLowerCase()));
   return <View style={styles.panel}>
     <Text style={styles.title}>{onInvite ? 'Invite a friend' : 'Friends'}</Text>
-    <Text style={styles.copy}>New invitees become friends with their inviters after their first NomNomGo sign-in. Personal saves stay private.</Text>
     {error ? <Text accessibilityRole="alert" style={styles.copy}>{error}</Text> : null}
     {!loaded && !error ? <Text style={styles.copy}>Loading friends…</Text> : null}
-    {loaded && !available.length && !error ? <Text style={styles.copy}>{friends.length && onInvite ? 'Your friends are already invited to this plan.' : 'Friends will appear here after an invitee signs in.'}</Text> : null}
-    {available.length > 8 ? <TextInput accessibilityLabel="Search friends" placeholder="Search friends by email" placeholderTextColor="#a8b2bf" value={search} onChangeText={setSearch} style={styles.input} autoCapitalize="none" /> : null}
+    {loaded && !available.length && !error ? <Text style={styles.copy}>{friends.length && onInvite ? 'Your friends are already in this plan.' : 'Invite someone to NomNomGo. They become your friend after their first sign-in.'}</Text> : null}
+    {available.length > 8 || search ? <TextInput accessibilityLabel="Search friends" placeholder="Search friends by email" placeholderTextColor="#a8b2bf" value={search} onChangeText={setSearch} style={styles.input} autoCapitalize="none" /> : null}
+    {loaded && available.length > 0 && !matches.length ? <Text style={styles.copy}>No friends match this email.</Text> : null}
     {matches.slice(0, 20).map((friend) => <View key={friend.id} style={styles.friend}>
       <Text selectable style={styles.copy}>{friend.email}</Text>
       {removing === friend.id ? <>
         <Text style={styles.copy}>Remove this friendship for both of you? Existing shared plans will stay shared.</Text>
-        <Button label="Remove friendship" size="compact" onPress={() => act(friend)} disabled={busy || disabled} />
+        <Button label="Remove friendship" tone="danger" size="compact" onPress={() => act(friend)} disabled={busy || disabled} />
         <Button label="Keep friend" size="compact" onPress={() => setRemoving('')} disabled={busy} />
-      </> : <Button label={onInvite ? `Invite ${friend.email}` : `Remove ${friend.email}`} size="compact" onPress={() => onInvite ? act(friend) : setRemoving(friend.id)} disabled={busy || disabled} />}
+      </> : <Button label={onInvite ? 'Invite' : 'Manage'} accessibilityLabel={`${onInvite ? 'Invite' : 'Manage friendship with'} ${friend.email}`} size="compact" onPress={() => onInvite ? act(friend) : setRemoving(friend.id)} disabled={busy || disabled} />}
     </View>)}
     {matches.length > 20 ? <Text style={styles.copy}>Showing 20 of {matches.length}. Search to find someone.</Text> : null}
   </View>;
