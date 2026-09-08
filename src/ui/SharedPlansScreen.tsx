@@ -3,7 +3,7 @@ import { ActivityIndicator, ScrollView, StyleSheet, Text, TextInput, TouchableOp
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { getAlphaAccount } from '../data/accountStorage';
-import { changeSharedPlan, changedSharedRsvps, createSharedPlan, getSharedPlan, groupPlansByDate, listSharedPlans, newerSharedPlan, sharedPlanUrl, sharedPlanDraftError, sharedRsvpLabel, type SharedPlan, type SharedPlanDraft, type SharedPlanSummary } from '../data/sharedPlans';
+import { changeSharedPlan, changedSharedRsvps, createSharedPlan, getSharedPlan, groupPlansByDate, listSharedPlans, newerSharedPlan, planDateRangeLabel, sharedPlanUrl, sharedPlanDraftError, sharedRsvpLabel, type SharedPlan, type SharedPlanDraft, type SharedPlanSummary } from '../data/sharedPlans';
 import { startForegroundRefresh } from '../data/foregroundRefresh';
 import { ActionButton as Button, BottomNavigation, RsvpControl } from './primitives';
 import { RsvpBadge, RsvpSummary } from './RsvpSummary';
@@ -157,8 +157,7 @@ export function SharedPlansScreen({ initialPlan, initialPlanId, initialSection, 
       : <TextInput accessibilityLabel={label} style={styles.input} value={draft[key] || ''} onChangeText={(value) => { setFormError(''); setDraft((current) => ({ ...current, [key]: value })); }} editable={!busy} placeholder={key === 'timeWindow' ? 'e.g. 6–8 PM Central' : undefined} placeholderTextColor="#a8b2bf" />}
   </View>;
   return <SafeAreaView style={styles.screen}>
-    {plan && !editing ? <PlanWorkspaceHeader section={section === 'plan' ? 'plan' : 'friends'} count={plan.participants.length} disabled={busy}
-      onBack={() => navigate(() => openPlan(''))} onPlan={() => setSection('plan')} onFriends={() => setSection('people')} /> : <View style={styles.header}>
+    {!plan || editing ? <View style={styles.header}>
       <View style={styles.headerRow}>
         <Button label={selectedId || editing ? 'Back' : 'Home'} accessibilityLabel={selectedId || editing ? 'Back to plans' : 'Back to NomNomGo'} size="compact" onPress={() => navigate(selectedId || editing ? () => openPlan('') : onClose)} disabled={busy} />
         <Text style={[styles.heading, { flex: 1 }]} numberOfLines={1}>{editing ? (plan ? 'Edit plan' : 'New plan') : 'Plans'}</Text>
@@ -168,8 +167,13 @@ export function SharedPlansScreen({ initialPlan, initialPlanId, initialSection, 
         <Text style={styles.copy}>Discard your unsaved plan changes?</Text>
         <View style={styles.row}><Button label="Keep editing" size="compact" onPress={() => setPendingNavigation(null)} /><Button label="Discard changes" size="compact" tone="danger" onPress={() => { const action = pendingNavigation; setPendingNavigation(null); action(); }} /></View>
       </View> : null}
-    </View>}
-    <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+    </View> : null}
+    <ScrollView contentContainerStyle={[styles.content, plan && !editing && styles.planContent]} keyboardShouldPersistTaps="handled">
+      {plan && !editing ? <PlanWorkspaceHeader section={section === 'plan' ? 'plan' : 'friends'} count={plan.participants.length}
+        title={plan.title} dateLabel={planDateRangeLabel(plan.dateStart, plan.dateEnd)} timeLabel={plan.timeWindow || 'Time to be decided'}
+        locationLabel={plan.locationLabel} stopCount={plan.stops.length} locked={locked} participants={plan.participants}
+        statusLabel={!owner ? 'Organizer edits' : undefined} disabled={busy}
+        onBack={() => navigate(() => openPlan(''))} onPlan={() => setSection('plan')} onFriends={() => setSection('people')} /> : null}
       {loading ? <ActivityIndicator color="#ff806f" /> : null}
       {syncError ? <><Text accessibilityRole="alert" style={styles.error}>{syncError}</Text><Button label="Retry connection" onPress={() => refreshRef.current()} disabled={busy} /></> : null}
       {notice ? <Text accessibilityRole="alert" selectable style={styles.notice}>{notice}</Text> : null}
@@ -210,13 +214,6 @@ export function SharedPlansScreen({ initialPlan, initialPlanId, initialSection, 
       </View> : null}
 
       {plan && !editing && section === 'people' ? <>
-        <View style={styles.card}>
-          <Text style={styles.title}>{plan.title}</Text>
-          <Text style={styles.copy}>{plan.dateStart}{plan.dateEnd !== plan.dateStart ? ` – ${plan.dateEnd}` : ''} · {plan.timeWindow || 'Time to be decided'}</Text>
-          <Text style={styles.muted}>{plan.locationLabel}</Text>
-          <RsvpSummary participants={plan.participants} />
-          {locked ? <Text style={styles.notice}>Plan locked · RSVPs stay open</Text> : null}
-        </View>
         {section === 'people' ? <View style={styles.card}>
           <Text style={styles.title}>Your RSVP</Text>
           <RsvpControl value={plan.participants.find((p) => p.userId === account.id)?.rsvp || undefined} disabled={busy || !!syncError} onChange={async (rsvp) => { await mutate('plan.rsvp', { rsvp }); }} />
@@ -278,9 +275,10 @@ export function SharedPlansScreen({ initialPlan, initialPlanId, initialSection, 
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: '#0c1117' }, header: { padding: 16, gap: 10, borderBottomWidth: 1, borderColor: '#293440' },
+  screen: { flex: 1, backgroundColor: colors.background }, header: { padding: 16, gap: 10, borderBottomWidth: 1, borderColor: '#293440' },
   headerRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   content: { padding: 16, gap: 16, paddingBottom: 48, width: '100%', maxWidth: 780, alignSelf: 'center' },
+  planContent: { paddingTop: 0 },
   heading: { fontSize: 24, fontWeight: '700', color: '#f5f7fa' }, title: { fontSize: 19, fontWeight: '700', color: '#f5f7fa' },
   copy: { color: '#d7e0e9', fontSize: 15, lineHeight: 22 }, muted: { color: '#a8b2bf', fontSize: 13, lineHeight: 19 },
   notice: { color: '#8fe0d3', lineHeight: 22 }, error: { color: '#ffb3a8', lineHeight: 22 },

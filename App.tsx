@@ -28,7 +28,7 @@ import { SharedPlanActivity } from './src/ui/SharedPlanActivity';
 import { SharedPlansScreen } from './src/ui/SharedPlansScreen';
 import { PlanWorkspaceHeader } from './src/ui/PlanWorkspaceHeader';
 import { startForegroundRefresh } from './src/data/foregroundRefresh';
-import { changeSharedItinerary, createSharedPlan, getSharedPlan, newerSharedPlan, sharedItinerarySignature, planIdFromUrl, type SharedPlan, type SharedPlanDraft } from './src/data/sharedPlans';
+import { changeSharedItinerary, createSharedPlan, getSharedPlan, newerSharedPlan, sharedItinerarySignature, planIdFromUrl, planDateRangeLabel, type SharedPlan, type SharedPlanDraft } from './src/data/sharedPlans';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import Sortable, { type DropIndicatorComponentProps, type SortableFlexDragEndParams } from 'react-native-sortables';
 import Animated, { useAnimatedRef, useAnimatedStyle } from 'react-native-reanimated';
@@ -6522,7 +6522,7 @@ function NomNomGoApp() {
     setHomeOpen(false); setNowMode('closed'); setPlanSetupOpen(false);
     setSavedPlansLandingOpen(false); setSavedPlansOpen(false); setPreferencesOpen(false);
     setPlanSettingsOpen(false); setAddStopMenuOpen(false); setCards([]); setHasInitiatedSearch(false);
-    scrollToPlan();
+    scrollToTop();
   };
   const saveSharedEditor = async (): Promise<SharedPlan | null> => {
     if (!sharedEditor || sharedEditorSavingRef.current) return null;
@@ -8276,16 +8276,20 @@ function NomNomGoApp() {
       keyboardVerticalOffset={0}
     >
     <View style={styles.appShell}>
-    {showPlanWorkspace ? <PlanWorkspaceHeader section="plan" count={sharedEditor?.participants.length}
-      disabled={sharedEditorSaving || sharedStatusChanging} onBack={() => handleMainNavigation('plans')}
-      onPlan={() => {}} onFriends={() => { void openCurrentSharedPlan(); }} /> : null}
     <Animated.ScrollView
       ref={scrollRef}
       style={[styles.screen, isLightMode && styles.lightScreen, isDarkMode && styles.darkScreen]}
-      contentContainerStyle={styles.content}
+      contentContainerStyle={[styles.content, showPlanWorkspace && styles.workspaceContent]}
       keyboardShouldPersistTaps="handled"
       keyboardDismissMode="interactive"
     >
+      {showPlanWorkspace ? <PlanWorkspaceHeader section="plan" count={sharedEditor?.participants.length}
+        title={plan.title ?? planTitle} dateLabel={planDateRangeLabel(activePlanDateRange.start, activePlanDateRange.end)}
+        timeLabel={activePlanTimeWindow || 'Time to be decided'} locationLabel={searchLocationLabel}
+        stopCount={plan.stops.length} locked={plan.status === 'locked'} participants={sharedEditor?.participants}
+        statusLabel={sharedEditorReadOnly ? 'Organizer edits' : sharedEditorDirty ? 'Unsaved changes' : undefined}
+        onTitleChange={!isPlanLocked ? renamePlan : undefined} disabled={sharedEditorSaving || sharedStatusChanging}
+        onBack={() => handleMainNavigation('plans')} onPlan={() => {}} onFriends={() => { void openCurrentSharedPlan(); }} /> : null}
       {!showPlanWorkspace ? <AppHeader
         style={[styles.appBanner, styles.darkPanel]}
         onBrandPress={openHome}
@@ -9100,7 +9104,7 @@ function NomNomGoApp() {
 
       {!nowExperienceActive ? (
       <View
-        style={[styles.planBox, isDarkMode && styles.darkPanel]}
+        style={[styles.planBox, isDarkMode && styles.darkPanel, showPlanWorkspace && styles.workspacePlanBox]}
         onLayout={(event) => { planBoxYRef.current = event.nativeEvent.layout.y; }}
       >
         {sharedEditorConflict ? <View style={{ gap: spacing.xs }}>
@@ -9113,7 +9117,7 @@ function NomNomGoApp() {
         </View> : null}
         {(
           <View style={styles.itineraryBuilder}>
-            <View style={styles.itineraryPlanHeader}>
+            {!showPlanWorkspace ? <View style={styles.itineraryPlanHeader}>
               <TextInput
                 style={styles.itineraryPlanTitleInput}
                 value={plan.title ?? planTitle}
@@ -9126,12 +9130,9 @@ function NomNomGoApp() {
               <Text style={styles.itineraryPlanMeta} numberOfLines={1}>
                 {planHeaderMeta || 'Build a plan one stop at a time'}
               </Text>
-            </View>
+            </View> : null}
 
-            {sharedEditor ? <View style={styles.itineraryWorkspaceStatus}>
-              <RsvpSummary participants={sharedEditor.participants} />
-              <Text style={styles.itinerarySectionHint}>{sharedEditorReadOnly ? 'Organizer edits · RSVP in Friends' : isPlanLocked ? 'Locked · RSVPs stay open' : sharedEditorDirty ? 'Unsaved changes' : 'Saved'}</Text>
-            </View> : isPlanLocked ? <Text style={styles.itinerarySectionHint}>Plan locked</Text> : null}
+            {!showPlanWorkspace && isPlanLocked ? <Text style={styles.itinerarySectionHint}>Plan locked</Text> : null}
             {!getAlphaAccount() && (activeBetaPlan || plan.sharedPlanId) ? (
               <View style={styles.itineraryCollaborationStrip}>
                 <View style={styles.itineraryCollaborationHeader}>
@@ -12387,7 +12388,8 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '900',
   },
-  itineraryWorkspaceStatus: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: spacing.xs },
+  workspaceContent: { maxWidth: 780, paddingHorizontal: 16, paddingTop: 0 },
+  workspacePlanBox: { marginTop: 16, padding: 0, borderWidth: 0, borderRadius: 0, backgroundColor: colors.background },
   planBox: {
     backgroundColor: colors.surface,
     borderWidth: 1,

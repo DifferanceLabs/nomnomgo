@@ -5,6 +5,15 @@ export type SharedPlan = Omit<Plan, 'participants'> & { revision: number; partic
 export type SharedPlanDraft = Pick<Plan, 'title' | 'intent' | 'locationLabel' | 'dateStart' | 'dateEnd' | 'timeWindow' | 'stops'>;
 export type SharedPlanSummary = Pick<SharedPlan, 'id' | 'title' | 'status' | 'dateStart' | 'locationLabel' | 'ownerId'> & { dateEnd?: string; timeWindow?: string; rsvp?: string; revision?: number; participants?: SharedPlan['participants'] };
 
+export function planDateRangeLabel(start: string, end = start) {
+  const label = (key: string) => {
+    const [year, month, day] = key.split('-').map(Number);
+    const date = new Date(year, month - 1, day);
+    return Number.isFinite(date.getTime()) ? date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : key;
+  };
+  return start === end ? label(start) : `${label(start)} – ${label(end)}`;
+}
+
 // Keep today's and ongoing multi-day plans in Future until their final date ends.
 export function groupPlansByDate<T extends { dateStart: string; dateEnd?: string }>(plans: readonly T[], now = new Date()) {
   const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
