@@ -306,6 +306,50 @@ test('Current location requests fresh GPS rather than a cached route address and
   assert.equal(calls, 2);
 });
 
+test('home Food and Activity searches request device location after resetting the old search area', async () => {
+  const events = [];
+  const open = appHandler('startNowDiscoveryFromHome', {
+    NOW_FOOD_CATEGORIES: ['Anything'], NOW_ACTIVITY_CATEGORIES: ['Anything'],
+    startNowPlan: async () => events.push('reset'),
+    startNowDiscovery: async (slot, category, useDeviceLocation) => events.push([slot, category, useDeviceLocation]),
+  });
+  await open('food');
+  await open('activity');
+  assert.deepEqual(events, [
+    'reset', ['food', 'Anything', true],
+    'reset', ['activity', 'Anything', true],
+  ]);
+});
+
+test('home searches use fresh device coordinates instead of a saved area or an old food stop', async () => {
+  const device = { latitude: 36, longitude: -86, label: 'Near Nashville' };
+  const events = [];
+  const context = {
+    keyLoaded: true, resultFilter: 'all', cards: [], memory: { favorites: [] },
+    selectedFoods: [], selectedActivities: [], selectedDietary: [],
+    searchRequestIdRef: { current: 1 }, beginSearch: () => ({ id: 1 }),
+    PAGE_SIZE: 8,
+    getLocation: async (fresh) => { events.push(['device', fresh]); return device; },
+    getSearchLocation: async () => { throw new Error('Saved search location was used'); },
+    typesForSelection: () => ['place'], FOOD_TYPE_MAP: {}, DEFAULT_FOOD_TYPES: [],
+    ACTIVITY_TYPE_MAP: {}, DEFAULT_ACTIVITY_TYPES: [], DEFAULT_ACTIVITY_RADIUS_METERS: 1000,
+    plan: { stops: [{ slot: 'food', item: { lat: 34, lng: -84, title: 'Old stop' } }] },
+    searchRouteBiasForAnchorIndex: () => undefined,
+    wantsCloseBy: () => false, DEFAULT_RADIUS_METERS: 1000,
+    runPlacesSearch: async (slot, center) => events.push(['search', slot, center]),
+    setLastSearchLocationCenter: (center) => events.push(['display', center]),
+    addLog: () => {}, setResultMode: () => {}, setResultFilter: () => {},
+    setHasInitiatedSearch: () => {}, setCards: () => {}, setVisibleCount: () => {},
+    setSearchNotice: () => {}, setLoading: () => {}, scrollToResults: () => {},
+  };
+  await appHandler('searchForSlot', context)('food', true, false, undefined, undefined, undefined, true);
+  await appHandler('searchForSlot', context)('activity', true, false, undefined, undefined, undefined, true);
+  assert.deepEqual(events, [
+    ['device', true], ['display', device], ['search', 'food', device],
+    ['device', true], ['display', device], ['search', 'activity', device],
+  ]);
+});
+
 test('a double tap on Unlock waits for one reopen request without showing a stale error', async () => {
   const pending = deferred(); let calls=0, opened, error;
   const context = {

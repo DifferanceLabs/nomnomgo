@@ -17,7 +17,7 @@ Vercel settings:
 
 ### Production Publishing Runbook
 
-Only push directly to `main` when the user explicitly asks to publish or push to production. A push to `origin/main` triggers the Vercel production deployment.
+Publish completed requested changes to production by default unless the user explicitly says not to. This standing user instruction authorizes pushing the requested release to `origin/main` after the checks below. A push to `origin/main` triggers the Vercel production deployment.
 
 1. Inspect `git status -sb` and preserve unrelated user-owned changes. Stage only the files in the requested release; never use `git add -A` in a mixed worktree.
 2. Refresh and compare the production branch before committing:

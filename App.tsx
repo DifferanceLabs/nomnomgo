@@ -3196,6 +3196,10 @@ function NomNomGoApp() {
           ? 'from start'
           : undefined;
   const searchLocationLabel = activePlanningSession?.locationLabel || searchLocationOverride.trim() || searchLocation?.label || startingLocationLabel;
+  const searchedAreaCenter = lastSearchLocationCenter || activeSearchLocation;
+  const searchedAreaStatus = searchedAreaCenter
+    ? `Searching near ${searchedAreaCenter.label?.replace(/^Near\s+/i, '') || `${searchedAreaCenter.latitude.toFixed(3)}, ${searchedAreaCenter.longitude.toFixed(3)}`}`
+    : loading ? 'Finding your location…' : 'Search defaults to your current location';
   const selectedPreferenceTimeWindow = selectedTime === 'Now' ? undefined : defaultTimeWindowForPreference(selectedTime);
   const activePlanDateWindow = plan.dateWindow || selectedDateWindow;
   const activePlanCustomDateRange = plan.customDateRange ?? customDateRange;
@@ -3784,7 +3788,7 @@ function NomNomGoApp() {
     addLog('Home action: now discovery');
   };
 
-  const startNowDiscovery = async (slot: PlanSlot, category?: string) => {
+  const startNowDiscovery = async (slot: PlanSlot, category?: string, useDeviceLocation = false) => {
     const nextCategory = category || (slot === 'food' ? nowFoodCategory : nowActivityCategory);
     const foodSelections = slot === 'food' ? nowFoodSelectionsForCategory(nextCategory) : selectedFoods;
     const activitySelections = slot === 'activity' ? nowActivitySelectionsForCategory(nextCategory) : selectedActivities;
@@ -3795,6 +3799,7 @@ function NomNomGoApp() {
     setResultMode(slot);
     setResultFilter('all');
     setSelectedTime('Now');
+    activePlanTimingRef.current = { dateRange: dateRangeKeysForWindow('today', null), timePreference: 'Now' };
     selectedDateWindowRef.current = 'today';
     customDateRangeRef.current = null;
     setSelectedDateWindow('today');
@@ -3815,12 +3820,12 @@ function NomNomGoApp() {
       foodSelections,
       activitySelections,
       dietarySelections: [...DEFAULT_DIETARY_SELECTIONS],
-    });
+    }, undefined, useDeviceLocation);
   };
 
   const startNowDiscoveryFromHome = async (slot: PlanSlot) => {
     await startNowPlan();
-    await startNowDiscovery(slot, slot === 'food' ? NOW_FOOD_CATEGORIES[0] : NOW_ACTIVITY_CATEGORIES[0]);
+    await startNowDiscovery(slot, slot === 'food' ? NOW_FOOD_CATEGORIES[0] : NOW_ACTIVITY_CATEGORIES[0], true);
   };
 
   const openNowPeopleFromHome = async () => {
@@ -4316,6 +4321,7 @@ function NomNomGoApp() {
     const stamped = { ...labeled, ts: Date.now() };
     setLocation(stamped);
     await AsyncStorage.setItem(STORAGE_LOCATION, JSON.stringify(stamped));
+    return stamped;
   };
 
   const saveSearchLocation = async (next: LatLon) => {
@@ -4551,8 +4557,8 @@ function NomNomGoApp() {
     setter(next.length ? next : ['Any']);
   };
 
-  const getLocation = async () => {
-    if (location?.ts && Date.now() - location.ts < LOCATION_TTL_MS) {
+  const getLocation = async (forceDeviceLocation = false) => {
+    if (!forceDeviceLocation && location?.ts && Date.now() - location.ts < LOCATION_TTL_MS) {
       addLog('Location cache hit');
       return location;
     }
@@ -4574,9 +4580,9 @@ function NomNomGoApp() {
         longitude: current.coords.longitude,
         label: 'Current location',
       };
-      await saveLocation(next);
+      const saved = await saveLocation(next);
       addLog(`GPS success: ${next.latitude.toFixed(4)}, ${next.longitude.toFixed(4)}`);
-      return next;
+      return saved;
     } catch (err) {
       addLog(`GPS failed: ${compactError(err)}`);
       const lastKnown = await withTimeout(Location.getLastKnownPositionAsync(), 3000, 'Last known location');
@@ -4586,9 +4592,9 @@ function NomNomGoApp() {
         longitude: lastKnown.coords.longitude,
         label: 'Last known location',
       };
-      await saveLocation(next);
+      const saved = await saveLocation(next);
       addLog(`Last known location success: ${next.latitude.toFixed(4)}, ${next.longitude.toFixed(4)}`);
-      return next;
+      return saved;
     }
   };
 
@@ -4844,7 +4850,8 @@ function NomNomGoApp() {
     const baseQueries = activeDietary.length
       ? unique([...combinedQueries, ...dietaryQueries, ...cuisineQueries])
       : cuisineQueries;
-    const locationLabel = center.label && !/current location|last known location/i.test(center.label) ? center.label : '';
+    const locationLabel = center.label && !/current location|last known location/i.test(center.label)
+      ? center.label.replace(/^Near\s+/i, '') : '';
     const locationQueries = locationLabel && (cuisines.length || activeDietary.length)
       ? baseQueries.slice(0, 4).map((query) => `${query} near ${locationLabel}`)
       : [];
@@ -5280,6 +5287,7 @@ function NomNomGoApp() {
     centerOverride?: LatLon,
     preferenceOverride?: SearchPreferenceOverride,
     routeBiasOverride?: SearchRouteBias,
+    useDeviceLocation = false,
   ) => {
     const execution = beginSearch(forceRefresh);
     const requestId = execution.id;
@@ -5312,13 +5320,13 @@ function NomNomGoApp() {
     setLoading(true);
     if (shouldScroll) scrollToResults();
     try {
-      const center = centerOverride || await getSearchLocation();
+      const center = useDeviceLocation ? await getLocation(true) : centerOverride || await getSearchLocation();
       if (requestId !== searchRequestIdRef.current) return;
       setLastSearchLocationCenter(center);
       if (slot === 'activity') {
         const types = typesForSelection(activitySelections, ACTIVITY_TYPE_MAP, DEFAULT_ACTIVITY_TYPES);
         addLog(`Selected activity types: ${types.join(', ')}`);
-        const anchorIndex = centerOverride || center.areaFocus
+        const anchorIndex = useDeviceLocation || centerOverride || center.areaFocus
           ? -1
           : plan.stops.findIndex((stop) => stop.slot === 'food' && typeof stop.item !== 'string' && Boolean(stop.item.lat && stop.item.lng));
         const anchor = anchorIndex >= 0 && typeof plan.stops[anchorIndex].item !== 'string'
@@ -8823,6 +8831,9 @@ function NomNomGoApp() {
               </View>
               <View style={styles.setupField}>
                 <Text style={[styles.setupLabel, isDarkMode && styles.darkMutedText]}>Search area</Text>
+                <Text style={[styles.searchedAreaText, isDarkMode && styles.darkMutedText]} accessibilityLiveRegion="polite">
+                  {searchedAreaStatus}
+                </Text>
                 <View style={styles.inputRow}>
                   <TextInput
                     style={[styles.input, isDarkMode && styles.darkPanelInput, Platform.OS === 'web' && styles.webInput]}
@@ -10078,6 +10089,11 @@ function NomNomGoApp() {
               returnKeyType="search" onSubmitEditing={searchFromSearchLocationOverride} />
             <Button label="Use" onPress={searchFromSearchLocationOverride} compact />
           </View>
+          {hasInitiatedSearch ? (
+            <Text style={[styles.searchedAreaText, isDarkMode && styles.darkMutedText]} accessibilityLiveRegion="polite">
+              {searchedAreaStatus}
+            </Text>
+          ) : null}
           {renderSearchAreaPicker()}
         </View>
       ) : null}
@@ -10122,6 +10138,9 @@ function NomNomGoApp() {
       ) : (
         <View onLayout={(event) => { resultsYRef.current = event.nativeEvent.layout.y; }}>
         <Section title={titleForResults}>
+          <Text style={[styles.searchedAreaText, isDarkMode && styles.darkMutedText]}>
+            {searchedAreaStatus}
+          </Text>
           {resultMode === 'activity' && selectedActivities.includes('Events') && !manualSearchSubmitted ? (
             <Text style={[styles.preferenceSummary, isDarkMode && styles.darkMutedText]}>
               Upcoming events within {Math.round(areaSearchRadius(lastSearchLocationCenter, TICKETMASTER_EVENT_RADIUS_MILES * METERS_PER_MILE) / METERS_PER_MILE)} miles of {lastSearchLocationCenter?.label || searchLocationLabel} for {activePlanDateLabel}. Ticketmaster does not list every local show. Local search suggestions have unverified dates.
@@ -13692,6 +13711,12 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     fontSize: 12,
     lineHeight: 17,
+  },
+  searchedAreaText: {
+    color: colors.textSecondary,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '700',
   },
   bridgeTitle: {
     color: colors.textPrimary,
