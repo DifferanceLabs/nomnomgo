@@ -1,58 +1,94 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { getAlphaAccount } from '../data/accountStorage';
 import { startForegroundRefresh } from '../data/foregroundRefresh';
-import { changedSharedRsvps, listSharedPlans, type SharedPlanSummary } from '../data/sharedPlans';
-import { RsvpSummary } from './RsvpSummary';
+import { listSharedPlans, planDateRangeLabel, type SharedPlanSummary } from '../data/sharedPlans';
+import { dismissHomePlan, loadHomePlanDismissals, upcomingHomePlans, type HomePlanDismissals } from '../data/homePlans';
+import { colors, radii, spacing, typography } from './theme';
 import { ActionButton } from './primitives';
 
-// Home shows recent shared responses; personal copies link to the canonical
-// workspace so prototype state cannot be mistaken for another person's RSVP.
 export function SharedPlanActivity({ onOpenPlan }: { onOpenPlan: (id?: string) => void }) {
   const accountId = getAlphaAccount()?.id;
   const [plans, setPlans] = useState<SharedPlanSummary[]>([]);
-  const previous = useRef<SharedPlanSummary[]>([]);
+  const [dismissed, setDismissed] = useState<HomePlanDismissals | null>(null);
   const [error, setError] = useState('');
-  const [notice, setNotice] = useState('');
+  const [saveError, setSaveError] = useState('');
+  const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
+  const dismissalVersion = useRef(0);
   const refresh = useRef(() => {});
   useEffect(() => {
     if (!accountId) return;
     let active = true;
     const poller = startForegroundRefresh(async () => {
       try {
-        const incoming = await listSharedPlans();
+        const version = dismissalVersion.current;
+        const [incoming, hidden] = await Promise.all([listSharedPlans(), loadHomePlanDismissals()]);
         if (!active) return;
-        const changes = incoming.flatMap((plan) => changedSharedRsvps(previous.current.find((old) => old.id === plan.id) || null, plan, accountId)
-          .map((change) => `${plan.title} · ${change}`));
-        previous.current = incoming; setPlans(incoming); setError('');
-        if (changes.length) setNotice(`RSVP updated · ${changes.join(' · ')}`);
+        setPlans(incoming); setError('');
+        if (!savingRef.current && version === dismissalVersion.current) setDismissed(hidden);
       } catch (failure) {
         if (!active) return;
-        setError('Shared responses could not be refreshed. Retry to see the latest RSVPs.');
+        setError('Upcoming plans couldn’t be refreshed.');
         const status = (failure as { status?: number })?.status;
-        if (status && [401, 403, 404].includes(status)) { previous.current = []; setPlans([]); setNotice(''); }
+        if (status && [401, 403, 404].includes(status)) setPlans([]);
       }
-    });
+    }, { ready: () => !savingRef.current });
     refresh.current = poller.refresh;
     return () => { active = false; poller.stop(); };
   }, [accountId]);
-  if (!accountId || (!plans.length && !error)) return null;
+  const dismiss = async (plan: SharedPlanSummary) => {
+    if (savingRef.current) return;
+    dismissalVersion.current++;
+    savingRef.current = true; setSaving(true); setSaveError('');
+    try { setDismissed(await dismissHomePlan(plan)); }
+    catch { setSaveError('Couldn’t save your dismissal. Please try again.'); }
+    finally { savingRef.current = false; setSaving(false); }
+  };
+  const upcoming = dismissed ? upcomingHomePlans(plans, dismissed) : [];
+  if (!accountId || (!upcoming.length && !error && !saveError)) return null;
   return <View style={styles.panel}>
-    <Text style={styles.title}>Plan updates</Text>
-    {notice ? <Text accessibilityRole="alert" style={styles.notice}>{notice}</Text> : null}
-    {error ? <><Text accessibilityRole="alert" style={styles.copy}>{error}</Text><ActionButton label="Refresh RSVPs" onPress={() => refresh.current()} size="compact" /></> : null}
-    {plans.slice(0, 3).map((plan) => <TouchableOpacity style={styles.plan} key={plan.id} accessibilityRole="button" accessibilityLabel={`Open responses for ${plan.title}`} onPress={() => onOpenPlan(plan.id)}>
-      <Text style={styles.copy}>{plan.title}</Text>
-      <RsvpSummary participants={plan.participants} />
-    </TouchableOpacity>)}
-    {plans.length > 3 ? <ActionButton label="View all shared plans" onPress={() => onOpenPlan()} size="compact" /> : null}
+    <View style={styles.heading}>
+      <Text accessibilityRole="header" style={styles.title}>Coming up</Text>
+      <TouchableOpacity style={styles.allPlans} onPress={() => onOpenPlan()} accessibilityRole="button" accessibilityLabel="View all plans">
+        <Text style={styles.link}>All plans</Text><Ionicons name="arrow-forward" size={16} color={colors.teal} />
+      </TouchableOpacity>
+    </View>
+    {error ? <View style={styles.errorRow}><Text accessibilityRole="alert" style={styles.hint}>{error}</Text><ActionButton label="Retry" onPress={() => refresh.current()} size="compact" /></View> : null}
+    {saveError ? <Text accessibilityRole="alert" style={styles.hint}>{saveError}</Text> : null}
+    {upcoming.slice(0, 3).map((plan) => <View style={styles.plan} key={plan.id}>
+      <TouchableOpacity style={styles.planBody} accessibilityRole="button" accessibilityLabel={`Open ${plan.title}`} onPress={() => onOpenPlan(plan.id)}>
+        <Text style={styles.date}>{planDateRangeLabel(plan.dateStart, plan.dateEnd)}{plan.timeWindow ? ` · ${plan.timeWindow}` : ''}</Text>
+        <Text style={styles.planTitle}>{plan.title}</Text>
+        <Text style={styles.hint}>{plan.locationLabel || 'Location to be decided'}</Text>
+        <View style={styles.metadata}>
+          <Text style={styles.status}>{plan.status === 'locked' ? 'Confirmed' : 'Planning'}</Text>
+          {plan.participants?.length ? <Text style={styles.hint}>{plan.participants.filter((member) => member.rsvp === 'going').length} going</Text> : null}
+        </View>
+      </TouchableOpacity>
+      <TouchableOpacity style={styles.dismiss} accessibilityRole="button" accessibilityLabel={`Dismiss ${plan.title} from Home`} accessibilityHint="Still available in Plans. Major updates can bring this card back." disabled={saving} onPress={() => { void dismiss(plan); }}>
+        <Ionicons name="close" size={20} color={colors.textSecondary} />
+      </TouchableOpacity>
+    </View>)}
+    {upcoming.length ? <Text style={styles.footer}>Dismissed plans stay in Plans.</Text> : null}
   </View>;
 }
 
 const styles = StyleSheet.create({
-  panel: { backgroundColor: '#18212b', borderRadius: 16, padding: 16, gap: 12 },
-  title: { color: '#f5f7fa', fontSize: 17, fontWeight: '700' },
-  copy: { color: '#d7e0e9', fontSize: 15, lineHeight: 21 },
-  notice: { color: '#8fe0d3', fontSize: 14, lineHeight: 21 },
-  hint: { color: '#a8b2bf', fontSize: 12 }, plan: { gap: 8 },
+  panel: { gap: spacing.xs, paddingTop: spacing.sm, borderTopWidth: 1, borderTopColor: colors.divider },
+  heading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.xs },
+  title: { ...typography.subheading, color: colors.textPrimary },
+  allPlans: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
+  link: { ...typography.label, color: colors.teal },
+  plan: { backgroundColor: colors.surfaceRaised, borderWidth: 1, borderColor: colors.border, borderRadius: radii.md, flexDirection: 'row', alignItems: 'flex-start' },
+  planBody: { flex: 1, minWidth: 0, padding: spacing.sm, paddingRight: 0, gap: spacing.micro },
+  date: { ...typography.caption, color: colors.teal },
+  planTitle: { ...typography.bodyStrong, color: colors.textPrimary },
+  hint: { ...typography.caption, color: colors.textSecondary },
+  metadata: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: spacing.xs, marginTop: spacing.micro },
+  status: { ...typography.caption, color: colors.textPrimary },
+  dismiss: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+  footer: { ...typography.caption, color: colors.textTertiary },
+  errorRow: { gap: spacing.xs, alignItems: 'flex-start' },
 });

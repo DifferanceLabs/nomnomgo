@@ -175,12 +175,15 @@ test('participant enrichment scopes the query to verified membership and drops c
     const query=new URL(url).searchParams;
     assert.equal(query.get('email'),'eq.owner@example.com'); assert.equal(query.get('plan_id'),'in.(kept,removed)');
     reads++;
-    return {ok:true,json:async()=>[{plan_id:'kept',plan:{revision:4,details:{dateEnd:'2026-09-10',timeWindow:'1pm'},participants:[{account_id:'friend',email:'friend@example.com',rsvp:'going',joined_at:'today'}]}}]};
+    return {ok:true,json:async()=>[{plan_id:'kept',plan:{revision:4,status:'locked',details:{title:'Current title',locationLabel:'Current place',dateStart:'2026-09-09',dateEnd:'2026-09-10',timeWindow:'1pm'},participants:[{account_id:'friend',email:'friend@example.com',rsvp:'going',joined_at:'today'}]}}]};
   };
   try {
     const result=await accountRpc({p_email:'owner@example.com',p_admin:false,p_action:'plan.list',p_data:{}});
     assert.equal(reads,1); assert.equal(result.plans.length,1); assert.equal(result.plans[0].participants[0].rsvp,'going');
     assert.equal(result.plans[0].dateEnd,'2026-09-10'); assert.equal(result.plans[0].timeWindow,'1pm');
+    assert.equal(result.plans[0].title,'Current title'); assert.equal(result.plans[0].locationLabel,'Current place');
+    assert.equal(result.plans[0].dateStart,'2026-09-09'); assert.equal(result.plans[0].status,'locked');
+    assert.match(result.plans[0].homeUpdateKey,/^[a-f0-9]{64}$/);
     global.fetch=async()=>({ok:true,json:async()=>({error:'Denied',status:403})});
     assert.equal((await accountRpc({p_email:'owner@example.com',p_admin:false,p_action:'plan.list',p_data:{}})).status,403);
   } finally {

@@ -1,5 +1,19 @@
 // Temporary federation adapter. Only this server module and the alpha SQL
 // adapter know about Differance Labs grants. Never send service credentials to clients.
+const { createHash } = require('node:crypto');
+
+// Only changes to the outing itself should bring a dismissed Home card back.
+// Ignore revisions, RSVPs, invitations, votes and refreshed provider metadata.
+function homePlanUpdateKey(details = {}, status) {
+  const stops = (details.stops || []).map((stop) => [stop.kind, stop.position,
+    stop.place?.provider, stop.place?.providerId, stop.place?.title, stop.place?.address,
+    stop.place?.latitude, stop.place?.longitude, stop.travelMode, stop.arrivalTime, stop.durationMinutes]);
+  return createHash('sha256').update(JSON.stringify([
+    details.title, details.intent, details.locationLabel, details.dateStart,
+    details.dateEnd || details.dateStart, details.timeWindow || '', status, stops,
+  ])).digest('hex');
+}
+
 async function accountRpc(args) {
   const base = process.env.SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -18,7 +32,7 @@ async function accountRpc(args) {
   // scopes BOTH the outer membership and returned plan IDs to the verified actor.
   // Never fetch the member table globally with the service credential.
   const query = new URLSearchParams({
-    select: 'plan_id,plan:nng_shared_plans!inner(revision,details,participants:nng_shared_members(account_id,email,rsvp,joined_at))',
+    select: 'plan_id,plan:nng_shared_plans!inner(revision,status,details,participants:nng_shared_members(account_id,email,rsvp,joined_at))',
     email: `eq.${args.p_email}`,
     plan_id: `in.(${result.plans.map((plan) => plan.id).join(',')})`,
   });
@@ -36,7 +50,11 @@ async function accountRpc(args) {
       role: member.account_id === plan.ownerId ? 'owner' : 'participant',
       rsvp: member.rsvp, joined: !!member.joined_at,
     }));
-    return { ...plan, dateEnd: latest.details?.dateEnd || plan.dateStart, timeWindow: latest.details?.timeWindow, revision: latest.revision, participants,
+    const details = latest.details || {};
+    return { ...plan, title: details.title ?? plan.title, locationLabel: details.locationLabel ?? plan.locationLabel,
+      dateStart: details.dateStart ?? plan.dateStart, dateEnd: details.dateEnd || details.dateStart || plan.dateStart,
+      timeWindow: details.timeWindow, status: latest.status ?? plan.status,
+      homeUpdateKey: homePlanUpdateKey(details, latest.status ?? plan.status), revision: latest.revision, participants,
       rsvp: participants.find((member) => member.displayName === args.p_email)?.rsvp };
   });
   return result;
@@ -46,4 +64,4 @@ function isAccountAdmin(email) {
   return (process.env.NNG_ADMIN_EMAILS || '').split(',').map((value) => value.trim().toLowerCase()).includes(email);
 }
 
-module.exports = { accountRpc, isAccountAdmin };
+module.exports = { accountRpc, isAccountAdmin, homePlanUpdateKey };

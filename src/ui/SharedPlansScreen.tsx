@@ -186,11 +186,11 @@ export function SharedPlansScreen({ initialPlan, initialPlanId, initialSection, 
         {!loading && !plans.length ? <Text style={styles.copy}>Plans you organize or are invited to will appear here.</Text> : null}
         {plans.length > 0 && !plans.some((item) => `${item.title} ${item.locationLabel}`.toLowerCase().includes(search.trim().toLowerCase())) ? <Text style={styles.copy}>No plans match. Try another name or place.</Text> : null}
         {(['future', 'past'] as const).map((group) => <View key={group} style={{ gap: 12 }}>
-        <Text accessibilityRole="header" style={styles.title}>{group === 'future' ? 'Future' : 'Past'} ({planGroups[group].length})</Text>
+        <Text accessibilityRole="header" style={styles.title}>{group === 'future' ? 'Future plans' : 'Past plans'} ({planGroups[group].length})</Text>
         {!planGroups[group].length && !loading ? <Text style={styles.muted}>{search ? 'No matching plans.' : group === 'future' ? 'No future plans yet.' : 'No past plans yet.'}</Text> : null}
         {planGroups[group].map((item) => <TouchableOpacity key={item.id} style={styles.card} accessibilityRole="button" accessibilityLabel={`Open ${item.title}`} onPress={() => openPlan(item.id)}>
           <Text style={styles.title}>{item.title}</Text>
-          <Text style={styles.copy}>{item.dateStart}{item.dateEnd && item.dateEnd !== item.dateStart ? ` – ${item.dateEnd}` : ''}{item.timeWindow ? ` · ${item.timeWindow}` : ''}</Text>
+          <Text style={styles.copy}>{planDateRangeLabel(item.dateStart, item.dateEnd)}{item.timeWindow ? ` · ${item.timeWindow}` : ''}</Text>
           <Text style={styles.muted}>{item.locationLabel} · {item.status === 'locked' ? 'Locked' : 'Planning'}</Text>
           <View style={styles.row}><Text style={styles.muted}>You:</Text><RsvpBadge value={item.rsvp} /></View>
           <RsvpSummary participants={item.participants} />

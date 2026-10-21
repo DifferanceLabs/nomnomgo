@@ -4,7 +4,7 @@ import { inferItineraryStopKind, itineraryArrivalRange, scheduleFromFirstArrival
 
 export type SharedPlan = Omit<Plan, 'participants'> & { revision: number; participants: (PlanParticipant & { joined: boolean })[] };
 export type SharedPlanDraft = Pick<Plan, 'title' | 'intent' | 'locationLabel' | 'dateStart' | 'dateEnd' | 'timeWindow' | 'stops'>;
-export type SharedPlanSummary = Pick<SharedPlan, 'id' | 'title' | 'status' | 'dateStart' | 'locationLabel' | 'ownerId'> & { dateEnd?: string; timeWindow?: string; rsvp?: string; revision?: number; participants?: SharedPlan['participants'] };
+export type SharedPlanSummary = Pick<SharedPlan, 'id' | 'title' | 'status' | 'dateStart' | 'locationLabel' | 'ownerId'> & { dateEnd?: string; timeWindow?: string; rsvp?: string; revision?: number; homeUpdateKey?: string; participants?: SharedPlan['participants'] };
 
 export function sharedPlanStopKind(plan: Pick<Plan, 'intent' | 'suggestions'>, stop: PlanStop) {
   if (stop.kind && stop.kind !== 'activity') return stop.kind;

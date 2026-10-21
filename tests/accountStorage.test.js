@@ -77,11 +77,13 @@ test('switching accounts isolates cloud data and local location caches', async (
   await f.api.initializeAlphaAccount();
   await f.api.default.setItem(key, '["a"]');
   await f.api.default.setItem('location', 'private-location-a');
+  await f.api.default.setItem('nomNomGoHomePlanDismissalsV1', '{"plan":"version"}');
   await f.api.signOutAlphaAccount();
   f.switchAccount();
   await f.api.initializeAlphaAccount();
   assert.equal(await f.api.default.getItem(key), null);
   assert.equal(await f.api.default.getItem('location'), null);
+  assert.equal(await f.api.default.getItem('nomNomGoHomePlanDismissalsV1'), null);
   assert.equal(f.api.getAlphaAccount().email, 'b@example.com');
 });
 

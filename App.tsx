@@ -25,6 +25,7 @@ import { AlphaAccountPanel } from './src/ui/AlphaAccountPanel';
 import { FriendsPanel } from './src/ui/FriendsPanel';
 import { RsvpBadge, RsvpSummary } from './src/ui/RsvpSummary';
 import { SharedPlanActivity } from './src/ui/SharedPlanActivity';
+import { HomeStart } from './src/ui/HomeStart';
 import { SharedPlansScreen } from './src/ui/SharedPlansScreen';
 import { PlanWorkspaceHeader } from './src/ui/PlanWorkspaceHeader';
 import { GettingThereRow, type GettingThereSummary } from './src/ui/GettingThereRow';
@@ -4112,27 +4113,6 @@ function NomNomGoApp() {
     setAccountSettingsOpen(true);
   };
 
-  const openPeopleGroupsHomeAction = () => {
-    closeTransientSurfaces();
-    setNowMode('closed');
-    if (getAlphaAccount()) {
-      setAccountTab('friends');
-      setAccountSettingsOpen(true);
-      return;
-    }
-    if (GROUP_SESSION_ENABLED) {
-      setPlanSetupOpen(false);
-      setHomeOpen(false);
-      setSavedPlansLandingOpen(false);
-      setSavedPlansOpen(false);
-      setSessionBuilderOpen(true);
-      scrollToTop();
-      addLog('Home action: people and groups session builder');
-      return;
-    }
-    setPeopleGroupsOpen(true);
-    addLog('Home action: people and groups');
-  };
 
   useEffect(() => {
     addLog(`Google Places key loaded: ${keyLoaded}`);
@@ -8315,7 +8295,7 @@ function NomNomGoApp() {
         onTitleChange={!isPlanLocked ? renamePlan : undefined} disabled={sharedEditorSaving || sharedStatusChanging}
         onBack={() => handleMainNavigation('plans')} onPlan={() => {}} onFriends={() => { void openCurrentSharedPlan(); }} /> : null}
       {!showPlanWorkspace ? <AppHeader
-        style={[styles.appBanner, styles.darkPanel]}
+        style={[styles.appBanner, styles.darkPanel, homeOpen && !planSetupOpen && styles.homeBanner]}
         onBrandPress={openHome}
         brandAccessibilityLabel="Go to NomNomGo home"
         logo={(
@@ -8331,7 +8311,7 @@ function NomNomGoApp() {
               <Text style={[styles.bannerName, styles.bannerNameMain, styles.bannerNameMainDark]} numberOfLines={1}>NomNom</Text>
               <Text style={[styles.bannerName, styles.bannerNameGo]} numberOfLines={1}>Go</Text>
             </View>
-            <Text style={[styles.bannerTagline, styles.darkMutedText]} numberOfLines={1}>Come together</Text>
+            {!homeOpen || planSetupOpen ? <Text style={[styles.bannerTagline, styles.darkMutedText]} numberOfLines={1}>Come together</Text> : null}
           </View>
         )}
         trailing={(
@@ -8352,8 +8332,6 @@ function NomNomGoApp() {
         </View>
       ) : null}
       <Modal visible={sharedEditorSaving || sharedStatusChanging} transparent><View style={{ flex: 1, backgroundColor: colors.overlay, alignItems: 'center', justifyContent: 'center' }}><ActivityIndicator color={colors.cyan} /><Text style={styles.authHint}>{sharedStatusChanging ? 'Updating plan…' : 'Saving plan…'}</Text></View></Modal>
-
-      {getAlphaAccount() && homeOpen && !planSetupOpen ? <SharedPlanActivity onOpenPlan={(id) => setSharedWorkspace({ id })} /> : null}
 
       <Modal
         visible={accountMenuOpen}
@@ -8447,78 +8425,16 @@ function NomNomGoApp() {
       </Modal>
 
       {homeOpen ? (
-        <View style={[styles.homeBox, isLightMode && styles.lightPanel, isDarkMode && styles.darkPanel]}>
+        <View style={[styles.homeBox, isLightMode && styles.lightPanel, isDarkMode && styles.darkPanel, !planSetupOpen && styles.homeLanding]}>
           {!planSetupOpen ? (
             <>
-              <View style={styles.homeTitleBlock}>
-                <Text style={[styles.homeTitle, isDarkMode && styles.darkText]}>Come together</Text>
-                <Text style={[styles.homeSubtitle, isDarkMode && styles.darkMutedText]}>What do you want to do?</Text>
-              </View>
-              <View style={styles.homePeoplePill}>
-                <Ionicons name="person-outline" size={16} color={colors.teal} />
-                <Text style={styles.homePeoplePillText}>Just me</Text>
-              </View>
-              <View style={styles.nowActionGrid}>
-                <TouchableOpacity
-                  style={[styles.nowActionCard, styles.nowFoodAction]}
-                  onPress={() => { void startNowDiscoveryFromHome('food'); }}
-                  accessibilityRole="button"
-                  accessibilityLabel="Find food now"
-                >
-                  <Ionicons name="restaurant-outline" size={28} color={semanticTones.food.foreground} />
-                  <Text style={[styles.nowActionTitle, styles.nowActionTitleLight]}>Food</Text>
-                  <Ionicons name="chevron-forward" size={22} color={semanticTones.food.foreground} style={styles.homeActionChevron} />
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.nowActionCard, styles.nowActivityAction]}
-                  onPress={() => { void startNowDiscoveryFromHome('activity'); }}
-                  accessibilityRole="button"
-                  accessibilityLabel="Find an activity now"
-                >
-                  <Ionicons name="sparkles-outline" size={28} color={colors.textInverse} />
-                  <Text style={[styles.nowActionTitle, styles.nowActionTitleDark]}>Activity</Text>
-                  <Ionicons name="chevron-forward" size={22} color={colors.textInverse} style={styles.homeActionChevron} />
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.nowActionCard, styles.nowPeopleAction]}
-                  onPress={() => { void openNowPeopleFromHome(); }}
-                  accessibilityRole="button"
-                  accessibilityLabel="Include someone"
-                >
-                  <Ionicons name="people-outline" size={28} color={semanticTones.people.foreground} />
-                  <Text style={styles.nowActionTitle}>Include Someone</Text>
-                  <Ionicons name="chevron-forward" size={22} color={semanticTones.people.foreground} style={styles.homeActionChevron} />
-                </TouchableOpacity>
-              </View>
-              <View style={styles.homeUtilityRow}>
-                <TouchableOpacity style={styles.homeUtilityButton} onPress={() => openPlanSetup('later')} accessibilityRole="button" accessibilityLabel="Plan for later">
-                  <Ionicons name="calendar-outline" size={20} color={colors.coral} />
-                  <Text style={styles.homeUtilityButtonText}>Plan for later</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.homeUtilityButton} onPress={() => openSavedPlansHomeAction('saved')} accessibilityRole="button" accessibilityLabel="Open saved and shared plans">
-                  <Ionicons name="albums-outline" size={20} color={colors.teal} />
-                  <Text style={styles.homeUtilityButtonText}>Saved plans</Text>
-                </TouchableOpacity>
-              </View>
-              {getAlphaAccount() || BETA_FEATURES.peopleGroups ? (
-                <TouchableOpacity
-                  style={[styles.peopleGroupsEntry, isDarkMode && styles.darkChip]}
-                  onPress={openPeopleGroupsHomeAction}
-                  accessibilityRole="button"
-                  accessibilityLabel={getAlphaAccount() ? 'Friends. View friends and invitations.' : 'People and groups. Plan with friends, family, and groups.'}
-                >
-                  <View style={styles.peopleGroupsIcon}>
-                    <Ionicons name="people-outline" size={21} color={colors.teal} />
-                  </View>
-                  <View style={styles.peopleGroupsTextBlock}>
-                    <Text style={[styles.peopleGroupsTitle, isDarkMode && styles.darkText]}>{getAlphaAccount() ? 'Friends' : 'People & Groups'}</Text>
-                    <Text style={[styles.peopleGroupsSubtitle, isDarkMode && styles.darkMutedText]}>
-                      Plan with friends, family, and groups
-                    </Text>
-                  </View>
-                  <Ionicons name="chevron-forward" size={18} color={isDarkMode ? colors.textPrimary : colors.textSecondary} />
-                </TouchableOpacity>
-              ) : null}
+              <HomeStart
+                onFood={() => { void startNowDiscoveryFromHome('food'); }}
+                onActivity={() => { void startNowDiscoveryFromHome('activity'); }}
+                onPeople={() => { void openNowPeopleFromHome(); }}
+                onLater={() => openPlanSetup('later')}
+              />
+              {getAlphaAccount() ? <SharedPlanActivity onOpenPlan={(id) => setSharedWorkspace(id ? { id } : {})} /> : null}
             </>
           ) : (
             <>
@@ -11329,9 +11245,23 @@ const styles = StyleSheet.create({
     gap: spacing.md,
     ...elevations.low,
   },
-  homeTitleBlock: {
-    gap: spacing.micro,
-    alignItems: 'center',
+  homeBanner: {
+    backgroundColor: 'transparent',
+    borderWidth: 0,
+    borderRadius: 0,
+    paddingHorizontal: 0,
+    paddingVertical: spacing.xs,
+    marginBottom: spacing.sm,
+    boxShadow: 'none',
+    ...elevations.none,
+  },
+  homeLanding: {
+    backgroundColor: 'transparent',
+    borderWidth: 0,
+    borderRadius: 0,
+    padding: 0,
+    boxShadow: 'none',
+    ...elevations.none,
   },
   homeTitle: {
     color: colors.textPrimary,
@@ -11342,48 +11272,6 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     ...typography.body,
     textAlign: 'center',
-  },
-  homePeoplePill: {
-    minHeight: controls.minimumTouchTarget,
-    alignSelf: 'center',
-    borderRadius: radii.pill,
-    borderWidth: 1,
-    borderColor: semanticTones.people.border,
-    backgroundColor: semanticTones.people.soft,
-    paddingHorizontal: spacing.md,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.xs,
-  },
-  homePeoplePillText: {
-    color: colors.textPrimary,
-    ...typography.label,
-  },
-  homeActionChevron: {
-    marginLeft: 'auto',
-  },
-  homeUtilityRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.xs,
-  },
-  homeUtilityButton: {
-    flex: 1,
-    minWidth: 140,
-    minHeight: controls.buttonHeight,
-    borderRadius: radii.md,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surface,
-    paddingHorizontal: spacing.sm,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.xs,
-  },
-  homeUtilityButtonText: {
-    color: colors.textPrimary,
-    ...typography.label,
   },
   homeActionGrid: {
     flexDirection: 'row',
