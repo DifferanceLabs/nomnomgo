@@ -1,0 +1,7 @@
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Known non-secret client storage key, also used as a SQL lookup literal"
+regexTarget = "secret"
+regexes = ['^nomNomGoSavedPlansV1$']
