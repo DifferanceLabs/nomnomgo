@@ -5,7 +5,9 @@
   "cleanUrls": true,
   "framework": null,
   "functions": {
-    "api/local-areas.js": { "maxDuration": 30 }
+    "api/local-areas.js": {
+      "maxDuration": 30
+    }
   },
   "rewrites": [
     {
@@ -15,6 +17,25 @@
     {
       "source": "/:path*",
       "destination": "/"
+    }
+  ],
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        {
+          "key": "X-Content-Type-Options",
+          "value": "nosniff"
+        },
+        {
+          "key": "Referrer-Policy",
+          "value": "no-referrer"
+        },
+        {
+          "key": "X-Frame-Options",
+          "value": "DENY"
+        }
+      ]
     }
   ]
 }
