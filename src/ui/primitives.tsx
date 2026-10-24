@@ -1,4 +1,5 @@
 import { useTheme, useThemedStyles } from './ThemeProvider';
+import { cloneElement, isValidElement } from 'react';
 import type { ComponentProps, PropsWithChildren, ReactNode } from 'react';
 import {
   ActivityIndicator,
@@ -816,18 +817,24 @@ function BottomNavigationTab<T extends string>({
   active: boolean;
   onSelect: (key: T) => void | Promise<void>;
 }) {
+  const { theme: { navigation } } = useTheme();
   const styles = useThemedStyles(createStyles);
+  const icon = active && item.selectedIcon ? item.selectedIcon : item.icon;
+  const foreground = active ? navigation.activeForeground : navigation.inactiveForeground;
   return (
     <TouchableOpacity
-      style={[styles.navigationTab, active && styles.navigationTabActive, item.disabled && styles.disabled]}
+      style={[styles.navigationTab, item.disabled && styles.disabled]}
       onPress={() => { void onSelect(item.key); }}
       activeOpacity={0.76}
       disabled={item.disabled}
       accessibilityRole="tab"
       accessibilityLabel={item.accessibilityLabel ?? item.label}
       accessibilityState={{ selected: active, disabled: item.disabled }}
+      aria-selected={active}
     >
-      <View style={styles.navigationIcon}>{active && item.selectedIcon ? item.selectedIcon : item.icon}</View>
+      <View style={[styles.navigationIcon, active && styles.navigationTabActive]}>
+        {isValidElement<{ color?: string }>(icon) ? cloneElement(icon, { color: foreground }) : icon}
+      </View>
       <Text style={[styles.navigationLabel, active && styles.navigationLabelActive]} numberOfLines={1}>{item.label}</Text>
     </TouchableOpacity>
   );
@@ -842,6 +849,7 @@ export function BottomNavigation<T extends string>({
   accessibilityLabel = 'Primary navigation',
   testID,
 }: BottomNavigationProps<T>) {
+  const { theme: { navigation } } = useTheme();
   const styles = useThemedStyles(createStyles);
   const insets = useSafeAreaInsets();
   const splitIndex = Math.ceil(items.length / 2);
@@ -858,14 +866,14 @@ export function BottomNavigation<T extends string>({
       accessibilityLabel={accessibilityLabel}
       testID={testID}
     >
-      <View style={styles.navigationSide}>
-        {leftItems.map((item) => (
-          <BottomNavigationTab key={item.key} item={item} active={item.key === activeKey} onSelect={onSelect} />
-        ))}
-      </View>
-      <View style={styles.navigationCreateSlot}>
+      <View style={styles.navigationContent}>
+        <View style={styles.navigationSide}>
+          {leftItems.map((item) => (
+            <BottomNavigationTab key={item.key} item={item} active={item.key === activeKey} onSelect={onSelect} />
+          ))}
+        </View>
         <TouchableOpacity
-          style={[styles.navigationCreateButton, createAction.disabled && styles.disabled]}
+          style={[styles.navigationCreateSlot, createAction.disabled && styles.disabled]}
           onPress={() => runPress(createAction.onPress)}
           activeOpacity={0.82}
           disabled={createAction.disabled}
@@ -873,20 +881,22 @@ export function BottomNavigation<T extends string>({
           accessibilityLabel={createAction.accessibilityLabel ?? createAction.label}
           accessibilityState={{ disabled: createAction.disabled }}
         >
-          {createAction.icon}
+          <View style={styles.navigationCreateButton}>
+            {isValidElement<{ color?: string }>(createAction.icon) ? cloneElement(createAction.icon, { color: navigation.createForeground }) : createAction.icon}
+          </View>
+          <Text style={styles.navigationCreateLabel} numberOfLines={1}>{createAction.label}</Text>
         </TouchableOpacity>
-        <Text style={styles.navigationCreateLabel} numberOfLines={1}>{createAction.label}</Text>
-      </View>
-      <View style={styles.navigationSide}>
-        {rightItems.map((item) => (
-          <BottomNavigationTab key={item.key} item={item} active={item.key === activeKey} onSelect={onSelect} />
-        ))}
+        <View style={styles.navigationSide}>
+          {rightItems.map((item) => (
+            <BottomNavigationTab key={item.key} item={item} active={item.key === activeKey} onSelect={onSelect} />
+          ))}
+        </View>
       </View>
     </View>
   );
 }
 
-const createStyles = ({ colors, semanticTones, borders }: NomNomGoTheme) => StyleSheet.create({
+const createStyles = ({ colors, semanticTones, borders, navigation }: NomNomGoTheme) => StyleSheet.create({
   screen: {
     flex: 1,
     backgroundColor: colors.background,
@@ -1303,71 +1313,77 @@ const createStyles = ({ colors, semanticTones, borders }: NomNomGoTheme) => Styl
     borderTopColor: colors.divider,
   },
   bottomNavigation: {
-    minHeight: layout.bottomNavigationHeight,
+    minHeight: 76,
     borderTopWidth: borders.thin,
-    borderTopColor: colors.border,
-    backgroundColor: colors.backgroundRaised,
-    paddingTop: layout.bottomNavigationGap,
+    borderTopColor: navigation.border,
+    backgroundColor: navigation.background,
+    paddingTop: 6,
     paddingHorizontal: spacing.xs,
+    width: '100%',
+  },
+  navigationContent: {
+    width: '100%',
+    maxWidth: layout.contentMaxWidth,
+    alignSelf: 'center',
     flexDirection: 'row',
-    alignItems: 'flex-end',
-    ...elevations.high,
+    alignItems: 'center',
   },
   navigationSide: {
-    flex: 1,
+    flex: 2,
     minWidth: 0,
     flexDirection: 'row',
-    alignItems: 'flex-end',
+    alignItems: 'center',
   },
   navigationTab: {
     flex: 1,
     minWidth: controls.minimumTouchTarget,
-    minHeight: controls.minimumTouchTarget,
+    minHeight: 60,
     borderRadius: radii.sm,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: spacing.hairline,
+    gap: spacing.micro,
     paddingHorizontal: spacing.micro,
     paddingVertical: spacing.micro,
   },
   navigationTabActive: {
-    backgroundColor: colors.surfaceMuted,
+    backgroundColor: navigation.activeBackground,
   },
   navigationIcon: {
-    minHeight: 22,
+    width: 52,
+    height: 32,
+    borderRadius: radii.pill,
     alignItems: 'center',
     justifyContent: 'center',
   },
   navigationLabel: {
     ...typography.caption,
-    color: colors.textTertiary,
+    color: navigation.inactiveForeground,
     maxWidth: '100%',
   },
   navigationLabelActive: {
-    color: colors.textPrimary,
+    color: navigation.activeForeground,
   },
   navigationCreateSlot: {
-    width: 76,
-    minHeight: controls.minimumTouchTarget,
-    alignItems: 'center',
-    justifyContent: 'flex-end',
-  },
-  navigationCreateButton: {
-    width: controls.createButtonSize,
-    height: controls.createButtonSize,
-    marginTop: -24,
-    borderRadius: radii.pill,
-    borderWidth: borders.strong,
-    borderColor: colors.backgroundRaised,
-    backgroundColor: semanticTones.primary.solid,
+    flex: 1,
+    minWidth: controls.minimumTouchTarget,
+    minHeight: 60,
     alignItems: 'center',
     justifyContent: 'center',
-    ...elevations.medium,
+    gap: spacing.micro,
+    paddingVertical: spacing.micro,
+    borderRadius: radii.sm,
+  },
+  navigationCreateButton: {
+    width: 44,
+    height: 32,
+    borderRadius: radii.sm,
+    backgroundColor: navigation.createBackground,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   navigationCreateLabel: {
     ...typography.caption,
-    color: colors.textSecondary,
-    marginTop: spacing.hairline,
-    maxWidth: 72,
+    color: navigation.inactiveForeground,
+    maxWidth: '100%',
   },
 });

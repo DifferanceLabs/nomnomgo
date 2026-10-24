@@ -3128,7 +3128,6 @@ function NomNomGoApp() {
   const [suggestedPairingsOpen, setSuggestedPairingsOpen] = useState(true);
   const [suggestedPairingsExpanded, setSuggestedPairingsExpanded] = useState(false);
   const [toastMessage, setToastMessage] = useState('');
-  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
   const [accountTab, setAccountTab] = useState<'account' | 'friends'>('account');
   const [peopleGroupsOpen, setPeopleGroupsOpen] = useState(false);
@@ -3669,7 +3668,6 @@ function NomNomGoApp() {
 
   const closeTransientSurfaces = () => {
     cancelSearch();
-    setAccountMenuOpen(false);
     setAccountSettingsOpen(false);
     setPeopleGroupsOpen(false);
     setPlanPeopleOpen(false);
@@ -4144,6 +4142,7 @@ function NomNomGoApp() {
       return;
     }
     closeTransientSurfaces();
+    setAccountTab('account');
     setAccountSettingsOpen(true);
   };
 
@@ -7973,12 +7972,12 @@ function NomNomGoApp() {
     (suggestion) => samePlanningSuggestion(suggestion, resultMode, placeDetailCard),
   ));
   const placeDetailActionLabel = nowDiscovering
-    ? 'Use'
+    ? 'Add to Plan'
     : planningSuggestionMode
       ? placeDetailIsSuggested ? 'Suggested' : 'Suggest'
       : placeDetailIsSelected ? 'Deselect' : 'Add to Plan';
   const placeDetailActionIcon: React.ComponentProps<typeof Ionicons>['name'] = nowDiscovering
-    ? 'navigate-outline'
+    ? 'add'
     : planningSuggestionMode
       ? placeDetailIsSuggested ? 'checkmark-done-outline' : 'chatbubble-ellipses-outline'
       : placeDetailIsSelected ? 'remove-circle-outline' : 'add';
@@ -8351,9 +8350,9 @@ function NomNomGoApp() {
         trailing={(
           <TouchableOpacity
             style={[styles.accountIconButton, styles.darkChip]}
-            onPress={() => setAccountMenuOpen((prev) => !prev)}
+            onPress={() => handleMainNavigation('profile')}
             accessibilityRole="button"
-            accessibilityLabel="Open user menu"
+            accessibilityLabel="Open profile settings"
           >
             <Ionicons name="person-circle-outline" size={28} color={colors.textPrimary} />
           </TouchableOpacity>
@@ -8366,51 +8365,6 @@ function NomNomGoApp() {
         </View>
       ) : null}
       <Modal visible={sharedEditorSaving || sharedStatusChanging} transparent><View style={{ flex: 1, backgroundColor: colors.overlay, alignItems: 'center', justifyContent: 'center' }}><ActivityIndicator color={colors.cyan} /><Text style={styles.authHint}>{sharedStatusChanging ? 'Updating plan…' : 'Saving plan…'}</Text></View></Modal>
-
-      <Modal
-        visible={accountMenuOpen}
-        animationType="fade"
-        transparent
-        onRequestClose={() => setAccountMenuOpen(false)}
-      >
-        <TouchableOpacity style={styles.accountOverlay} activeOpacity={1} onPress={() => setAccountMenuOpen(false)}>
-          <TouchableOpacity style={[styles.accountCard, isDarkMode && styles.darkModalCard]} activeOpacity={1} onPress={(event) => event.stopPropagation()}>
-            <View style={styles.accountHeader}>
-              <View style={styles.accountAvatar}>
-                <Ionicons name="person-circle-outline" size={36} color={colors.textPrimary} />
-              </View>
-              <View style={styles.accountTextBlock}>
-                <Text style={[styles.accountName, isDarkMode && styles.darkText]}>{testerUser?.name || 'Tester'}</Text>
-                <Text style={[styles.accountUsage, isDarkMode && styles.darkMutedText]}>
-                  {getAlphaAccount() ? 'Your NomNomGo account' : 'Local tester'}
-                </Text>
-              </View>
-            </View>
-            <View style={styles.accountActions}>
-              {getAlphaAccount() ? <Button label="Shared plans & RSVPs" onPress={() => { setAccountMenuOpen(false); setSharedWorkspace({}); }} compact /> : null}
-              {getAlphaAccount() ? <Button label="Friends" onPress={() => { setAccountMenuOpen(false); setAccountTab('friends'); setAccountSettingsOpen(true); }} compact /> : null}
-              <Button
-                label={getAlphaAccount() ? 'Account, invites & usage' : 'User settings'}
-                onPress={() => {
-                  setAccountMenuOpen(false);
-                  setAccountTab('account');
-                  setAccountSettingsOpen(true);
-                }}
-                compact
-              />
-              <Button
-                label={getAlphaAccount() ? 'Sign out of NomNomGo' : 'Switch user'}
-                onPress={() => {
-                  setAccountMenuOpen(false);
-                  void signOutTester();
-                }}
-                compact
-              />
-              <Button label="Close" onPress={() => setAccountMenuOpen(false)} compact />
-            </View>
-          </TouchableOpacity>
-        </TouchableOpacity>
-      </Modal>
 
       <Modal
         visible={accountSettingsOpen}
@@ -9336,7 +9290,7 @@ function NomNomGoApp() {
                       onPress={addIdeaStop}
                       style={[styles.itineraryIdeaAddButton, !ideaDraft.trim() && styles.itineraryControlDisabled]}
                     >
-                      <Ionicons name="arrow-forward" size={iconSizes.sm} color={colors.textInverse} />
+                      <Ionicons name="add" size={iconSizes.sm} color={colors.textInverse} />
                       <Text style={styles.itineraryIdeaAddText}>Add</Text>
                     </TouchableOpacity>
                   </View>
@@ -10080,7 +10034,7 @@ function NomNomGoApp() {
             <Button label="Search" onPress={() => runManualSearch(resultMode)} disabled={!manualSearch.trim()} compact />
           )}
         </View>
-        <Text style={[styles.preferenceSummary, isDarkMode && styles.darkMutedText]}>Search shows matches first. Choose Add, Suggest, or Use to select one.</Text>
+        <Text style={[styles.preferenceSummary, isDarkMode && styles.darkMutedText]}>Search shows matches first. Choose Add or Suggest to select one.</Text>
         {!loading && manualSearch.trim() && manualSearchSubmitted && (searchFailed || cards.length === 0) ? (
           <Button label={planningSuggestionMode ? 'Suggest this place manually' : 'Add this place manually'} onPress={() => addManualPlace(resultMode)} compact />
         ) : null}
@@ -10157,7 +10111,7 @@ function NomNomGoApp() {
             const resultActionLabel = nowDiscovering
               ? nowPlanCreating
                 ? 'Adding'
-                : 'Use'
+                : 'Add'
               : planningSuggestionMode
                 ? isSuggested
                   ? 'Suggested'
@@ -10166,14 +10120,14 @@ function NomNomGoApp() {
                   ? 'In plan'
                   : 'Add';
             const resultActionIcon: React.ComponentProps<typeof Ionicons>['name'] = nowDiscovering
-              ? 'navigate-outline'
+              ? 'add'
               : planningSuggestionMode
                 ? isSuggested
                   ? 'checkmark-done-outline'
                   : 'chatbubble-ellipses-outline'
                 : isSelected
                   ? 'checkmark-circle-outline'
-                  : 'add-outline';
+                  : 'add';
             const imageUri = cardImageUri(card);
             return (
             <View key={`${card.id}-${index}`} style={[
@@ -11212,7 +11166,6 @@ const createStyles = ({ colors, semanticTones }: NomNomGoTheme) => StyleSheet.cr
   },
   bottomNavigation: {
     width: '100%',
-    maxWidth: layout.contentMaxWidth,
     alignSelf: 'center',
   },
   screen: {

@@ -21,7 +21,7 @@ const { readAppearancePreference, resolveAppearance } = load('src/ui/ThemeProvid
 
 test('new, missing and invalid saved preferences default to System', () => {
   for (const value of [undefined, null, '', 'auto', 'sepia', '{}', 1, false]) assert.equal(readAppearancePreference(value), 'system');
-  for (const value of ['system', 'light', 'dark']) assert.equal(readAppearancePreference(value), value);
+  for (const value of ['system', 'light', 'dark', 'sage']) assert.equal(readAppearancePreference(value), value);
 });
 
 test('System follows changes while manual themes remain fixed', () => {
@@ -29,6 +29,7 @@ test('System follows changes while manual themes remain fixed', () => {
     assert.equal(resolveAppearance('system', device), device === 'dark' ? 'dark' : 'light');
     assert.equal(resolveAppearance('light', device), 'light');
     assert.equal(resolveAppearance('dark', device), 'dark');
+    assert.equal(resolveAppearance('sage', device), 'sage');
   }
   assert.equal(resolveAppearance('system', 'light'), 'light');
   assert.equal(resolveAppearance('system', 'dark'), 'dark');
@@ -44,9 +45,13 @@ function contrast(a, b) {
   const values = [luminance(a), luminance(b)].sort((x, y) => y - x);
   return (values[0] + 0.05) / (values[1] + 0.05);
 }
-test('both palettes cover all UI tokens and keep body text readable', () => {
+test('all three palettes cover UI tokens and keep text and navigation readable', () => {
   assert.deepEqual(Object.keys(themes.light.colors).sort(), Object.keys(themes.dark.colors).sort());
   for (const theme of Object.values(themes)) {
+    assert.deepEqual(Object.keys(theme.colors).sort(), Object.keys(themes.light.colors).sort());
+    assert.ok(contrast(theme.navigation.activeForeground, theme.navigation.activeBackground) >= 4.5, `${theme.name} selected navigation`);
+    assert.ok(contrast(theme.navigation.inactiveForeground, theme.navigation.background) >= 4.5, `${theme.name} inactive navigation`);
+    assert.ok(contrast(theme.navigation.createForeground, theme.navigation.createBackground) >= 4.5, `${theme.name} create button`);
     for (const surface of ['background', 'surface', 'surfaceRaised', 'surfaceMuted', 'surfaceInteractive']) {
       for (const text of ['textPrimary', 'textSecondary', 'textTertiary']) {
         assert.ok(contrast(theme.colors[text], theme.colors[surface]) >= 4.5, `${theme.mode} ${text} on ${surface}`);

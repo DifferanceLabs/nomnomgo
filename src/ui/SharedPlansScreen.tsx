@@ -161,7 +161,7 @@ export function SharedPlansScreen({ initialPlan, initialPlanId, initialSection, 
     {key === 'dateStart' || key === 'dateEnd' ? <DateField label={label} value={draft[key]} disabled={busy} onChange={(value) => { setFormError(''); setDraft((current) => ({ ...current, [key]: value, ...(key === 'dateStart' && current.dateEnd < value ? { dateEnd: value } : {}) })); }} />
       : <TextInput accessibilityLabel={label} style={styles.input} value={draft[key] || ''} onChangeText={(value) => { setFormError(''); setDraft((current) => ({ ...current, [key]: value })); }} editable={!busy} placeholder={key === 'timeWindow' ? 'e.g. 6–8 PM Central' : undefined} placeholderTextColor={colors.textTertiary} />}
   </View>;
-  return <SafeAreaView style={styles.screen}>
+  return <SafeAreaView style={styles.screen} edges={onNavigate ? ['top', 'left', 'right'] : ['top', 'bottom', 'left', 'right']}>
     {!plan || editing ? <View style={styles.header}>
       <View style={styles.headerRow}>
         <Button label={selectedId || editing ? 'Back' : 'Home'} accessibilityLabel={selectedId || editing ? 'Back to plans' : 'Back to NomNomGo'} size="compact" onPress={() => navigate(selectedId || editing ? () => openPlan('') : onClose)} disabled={busy} />

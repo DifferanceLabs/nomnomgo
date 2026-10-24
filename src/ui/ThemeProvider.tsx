@@ -2,13 +2,14 @@ import LocalStorage from '@react-native-async-storage/async-storage';
 import { createContext, useContext, useEffect, useState, type PropsWithChildren } from 'react';
 import { Appearance, Platform, useColorScheme } from 'react-native';
 import * as SystemUI from 'expo-system-ui';
-import { themes, type NomNomGoTheme } from './theme';
+import * as NavigationBar from 'expo-navigation-bar';
+import { themes, type NomNomGoTheme, type ThemeName } from './theme';
 
-export type AppearancePreference = 'system' | 'light' | 'dark';
+export type AppearancePreference = 'system' | ThemeName;
 export const APPEARANCE_STORAGE_KEY = 'nomNomGoAppearanceV1';
 
 export function readAppearancePreference(value: unknown): AppearancePreference {
-  return value === 'light' || value === 'dark' ? value : 'system';
+  return value === 'light' || value === 'dark' || value === 'sage' ? value : 'system';
 }
 
 export function resolveAppearance(preference: AppearancePreference, systemScheme: string | null | undefined) {
@@ -33,8 +34,8 @@ export function ThemeProvider({ children }: PropsWithChildren) {
   const [ready, setReady] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  const mode = resolveAppearance(preference, systemScheme);
-  const theme = themes[mode];
+  const themeName = resolveAppearance(preference, systemScheme);
+  const theme = themes[themeName];
 
   useEffect(() => {
     let active = true;
@@ -50,11 +51,14 @@ export function ThemeProvider({ children }: PropsWithChildren) {
     if (Platform.OS !== 'web') {
       void SystemUI.setBackgroundColorAsync(theme.colors.background).catch(() => undefined);
     }
+    if (Platform.OS === 'android') {
+      void NavigationBar.setButtonStyleAsync(theme.mode === 'dark' ? 'light' : 'dark').catch(() => undefined);
+    }
   }, [theme]);
 
   useEffect(() => {
-    if (Platform.OS !== 'web') Appearance.setColorScheme(preference === 'system' ? null : preference);
-  }, [preference]);
+    if (Platform.OS !== 'web') Appearance.setColorScheme(preference === 'system' ? null : theme.mode);
+  }, [preference, theme.mode]);
 
   const setPreference = async (next: AppearancePreference) => {
     if (!ready || saving) return;

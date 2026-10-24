@@ -32,9 +32,9 @@ Real-user alpha setup and the two-phone acceptance test are documented in [docs/
 
 ### Appearance
 
-In Profile → Account (or User settings in local/Expo builds), Appearance offers System, Light, and Dark. New users default to System, which follows browser/OS appearance changes without requesting permissions. If the device does not report a preference, the app uses Light. A manual choice overrides the device theme until System is selected again.
+Open Profile from the top-right profile icon or the bottom Profile tab, then Account (or User settings in local/Expo builds). Appearance has three visual themes: Light (clean whites), Dark (soft charcoal), and Sage (muted greens and warm neutrals). The separate Follow device appearance switch is on for new users and automatically chooses Light or Dark without requesting permissions. If the device does not report a preference, the app uses Light. Choosing a theme turns off device matching; turning it back on resumes automatic appearance.
 
-The choice is saved on the current device/browser, separately from shared plans and cloud account data. Clearing app/browser storage resets it to System. Signup and install preference prompts are deferred; there is no new onboarding prompt. Native builds use automatic interface style with `expo-system-ui`; rebuild installed native apps to pick up that configuration.
+The choice is saved on the current device/browser, separately from shared plans and cloud account data. Clearing app/browser storage restores device matching. Signup and install preference prompts are deferred; there is no new onboarding prompt. Native builds use automatic interface style with `expo-system-ui`, plus `expo-navigation-bar` to match Android navigation buttons to the theme; rebuild installed native apps to pick up that configuration. Bottom navigation uses the same themed surface through the bottom safe area, with aligned controls and an integrated create button.
 
 Install dependencies:
 

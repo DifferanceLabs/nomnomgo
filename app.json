@@ -32,14 +32,8 @@
         "backgroundColor": "#080A0C"
       }
     },
-    "androidStatusBar": {
-      "backgroundColor": "#080A0C",
-      "barStyle": "light-content",
-      "translucent": false
-    },
     "androidNavigationBar": {
-      "backgroundColor": "#080A0C",
-      "barStyle": "light-content"
+      "enforceContrast": false
     },
     "ios": {
       "bundleIdentifier": "com.differancelabs.nomnomgo",
