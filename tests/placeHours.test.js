@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { currentHoursDisplay, readPlaceHours, weeklyHoursForDate, PLACE_HOURS_FIELDS } = require('../.route-import-test-build/placeHours.js');
+const { currentHoursDisplay, hasPlaceHours, plannedHoursDisplay, fetchPlaceHours, readPlaceHours, weeklyHoursForDate, PLACE_HOURS_FIELDS } = require('../.route-import-test-build/placeHours.js');
 const { hoursLineForDate, placeOpenDuringWindow } = require('../.route-import-test-build/planningHours.js');
 
 // Relevant fields from the live U Brew response on September 5, 2026:
@@ -75,4 +75,42 @@ test('weekday labels work in Sunday-first and abbreviated responses without gues
   assert.equal(hoursLineForDate(['Sat: 9:00 AM – 2:00 PM'], '2026-09-05'), 'Sat: 9:00 AM – 2:00 PM');
   assert.equal(hoursLineForDate(['Monday: Closed'], '2026-09-05'), undefined);
   assert.equal(hoursLineForDate(['Samstag: Geschlossen'], '2026-09-05'), undefined);
+});
+
+test('planned hours show the selected date, special closure, and typical future schedule', () => {
+  const hours = readPlaceHours(provider, now);
+  const partial = plannedHoursDisplay(hours, '2026-09-05', '1:30 PM - 2:30 PM');
+  assert.equal(partial.isOpen, null);
+  assert.equal(partial.hoursWarning, 'Closes at 2:00 PM during visit');
+  assert.equal(partial.operatingHours, '2026-09-05 · Saturday: 9:00 AM – 2:00 PM');
+  assert.match(plannedHoursDisplay(hours, '2026-09-12', '3:00 PM - 4:00 PM').operatingHours, /Typical hours.*5:00 PM/);
+  assert.equal(plannedHoursDisplay({ ...hours, currentWeeklyHours: undefined }, '2026-09-05', '3:00 PM - 4:00 PM').isOpen, null);
+});
+
+test('unknown text and expired badges are not evidence of known operating hours', () => {
+  assert.equal(hasPlaceHours({ hoursText: 'Hours unknown' }), false);
+  assert.equal(hasPlaceHours({ openNow: false }), true);
+  assert.equal(hasPlaceHours({ currentWeeklyHours: ['Saturday: Closed'] }), true);
+  const unknown = plannedHoursDisplay({}, '2026-09-05', '3:00 PM - 4:00 PM');
+  assert.equal(unknown.isOpen, null);
+  assert.match(unknown.hoursText, /check with venue/);
+});
+
+test('regular overnight hours do not override an unknown current special schedule', () => {
+  const hours = readPlaceHours({ regularOpeningHours: { weekdayDescriptions: ['Friday: 5:00 PM – 2:00 AM'] },
+    currentOpeningHours: {} }, now);
+  assert.equal(plannedHoursDisplay(hours, '2026-09-05', '12:15 AM - 1:00 AM').isOpen, null);
+});
+
+test('hours lookup requests current exceptions and never turns provider errors into hours', async (t) => {
+  t.mock.method(global, 'fetch', async (url, init) => {
+    assert.match(url, /places\/sample\?languageCode=en$/);
+    assert.ok(init.headers['X-Goog-FieldMask'].includes('currentOpeningHours'));
+    assert.equal(init.cache, 'no-store');
+    return { ok: true, json: async () => provider };
+  });
+  const hours = await fetchPlaceHours('sample', 'test-key');
+  assert.deepEqual(hours.currentWeeklyHours, provider.currentOpeningHours.weekdayDescriptions);
+  global.fetch.mock.mockImplementation(async () => ({ ok: false, status: 403 }));
+  await assert.rejects(fetchPlaceHours('sample', 'test-key'), /status 403/);
 });

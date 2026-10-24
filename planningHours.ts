@@ -1,22 +1,87 @@
 function parseClockToken(value: string) {
-  const match = value.trim().match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)$/i);
+  const match = value.trim().match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/i);
   if (!match) return undefined;
 
   let hours = Number(match[1]);
   const minutes = Number(match[2] || 0);
-  if (hours < 1 || hours > 12 || minutes < 0 || minutes > 59) return undefined;
+  if (minutes > 59) return undefined;
+  if (!match[3]) return match[2] && hours <= 24 && (hours < 24 || minutes === 0) ? hours * 60 + minutes : undefined;
+  if (hours < 1 || hours > 12) return undefined;
   if (hours === 12) hours = 0;
   if (match[3].toLowerCase() === 'pm') hours += 12;
   return hours * 60 + minutes;
 }
 
 function parseTimeWindow(value: string) {
-  const parts = value.split(/\s+[–—-]\s+/);
+  const parts = value.normalize('NFKC').split(/\s*[–—-]\s*/);
   if (parts.length !== 2) return undefined;
-  const start = parseClockToken(parts[0]);
+  // Google omits the first meridian in ranges such as "4:00–10:00 PM".
+  const endMeridian = parts[1].match(/(am|pm)$/i)?.[1];
+  const inheritedMeridian = !/(am|pm)$/i.test(parts[0]) && endMeridian;
+  let start = parseClockToken(parts[0] + (inheritedMeridian ? ` ${endMeridian}` : ''));
   const end = parseClockToken(parts[1]);
   if (typeof start !== 'number' || typeof end !== 'number') return undefined;
+  if (inheritedMeridian && start >= end && start - 720 >= 0 && start - 720 < end) start -= 720;
   return { start, end: end <= start ? end + 24 * 60 : end };
+}
+
+export function shiftHoursDate(dateKey: string, days: number) {
+  const date = new Date(`${dateKey}T12:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function intervalsForHours(line?: string) {
+  if (!line) return undefined;
+  const text = line.slice(line.indexOf(':') + 1).trim();
+  if (/^open 24 hours$/i.test(text)) return [{ start: 0, end: 1440 }];
+  if (/^closed$/i.test(text)) return [];
+  const intervals = text.split(/[,;]/).map(parseTimeWindow);
+  return intervals.length && intervals.every((interval) => interval !== undefined) ? intervals : undefined;
+}
+
+function clockLabel(minute: number) {
+  const value = ((minute % 1440) + 1440) % 1440;
+  const hour = Math.floor(value / 60);
+  return `${hour % 12 || 12}:${String(value % 60).padStart(2, '0')} ${hour < 12 ? 'AM' : 'PM'}`;
+}
+
+export function hoursForVisit(
+  lineForDate: (date: string) => string | undefined,
+  dateKey: string,
+  timeWindow: string | undefined,
+) {
+  const window = timeWindow ? parseTimeWindow(timeWindow) : undefined;
+  if (!window) return { availability: 'unknown' as const, warning: undefined as string | undefined };
+  const intervals: { start: number; end: number }[] = [];
+  let known = true;
+  // Previous-day openings can continue past midnight into this visit.
+  for (let day = -1; day <= Math.floor((window.end - 1) / 1440); day += 1) {
+    const daily = intervalsForHours(lineForDate(shiftHoursDate(dateKey, day)));
+    if (!daily && day >= 0) known = false;
+    daily?.forEach(({ start, end }) => intervals.push({ start: start + day * 1440, end: end + day * 1440 }));
+  }
+  const merged: typeof intervals = [];
+  intervals.sort((a, b) => a.start - b.start).forEach((interval) => {
+    const last = merged[merged.length - 1];
+    if (last && interval.start <= last.end) last.end = Math.max(last.end, interval.end);
+    else merged.push({ ...interval });
+  });
+  const covering = merged.find(({ start, end }) => start <= window.start && end >= window.end);
+  if (covering) {
+    const warning = covering.end - window.end <= 60
+      ? `Closes at ${clockLabel(covering.end)}${covering.end >= 1440 ? ' next day' : ''}`
+      : window.start - covering.start <= 60
+        ? `Opens at ${clockLabel(covering.start)}` : undefined;
+    return { availability: 'open' as const, warning };
+  }
+  const overlap = merged.find(({ start, end }) => start < window.end && end > window.start);
+  if (overlap) {
+    return { availability: 'partial' as const, warning: overlap.start > window.start
+      ? `Opens at ${clockLabel(overlap.start)} during visit`
+      : `Closes at ${clockLabel(overlap.end)} during visit` };
+  }
+  return { availability: known ? 'closed' as const : 'unknown' as const, warning: undefined };
 }
 
 function weekdayForDate(dateKey: string) {
@@ -42,34 +107,8 @@ export function placeOpenDuringWindow(
   dateKey: string,
   timeWindow: string | undefined,
 ): boolean | undefined {
-  if (!timeWindow) return undefined;
-  const hoursLine = hoursLineForDate(weeklyHours, dateKey);
-  if (!hoursLine) return undefined;
-
-  const hoursText = hoursLine.slice(hoursLine.indexOf(':') + 1).trim();
-  if (/open 24 hours/i.test(hoursText)) return true;
-  if (/closed/i.test(hoursText)) return false;
-
-  const planWindow = parseTimeWindow(timeWindow);
-  if (!planWindow) return undefined;
-  const targetMinute = (planWindow.start + planWindow.end) / 2;
-  const intervalPattern = /(\d{1,2}(?::\d{2})?\s*(?:am|pm))\s*[–—-]\s*(\d{1,2}(?::\d{2})?\s*(?:am|pm))/gi;
-  let parsedInterval = false;
-  let match = intervalPattern.exec(hoursText);
-
-  while (match) {
-    const start = parseClockToken(match[1]);
-    const rawEnd = parseClockToken(match[2]);
-    if (typeof start === 'number' && typeof rawEnd === 'number') {
-      parsedInterval = true;
-      const end = rawEnd <= start ? rawEnd + 24 * 60 : rawEnd;
-      const comparableTarget = targetMinute < start && end > 24 * 60 ? targetMinute + 24 * 60 : targetMinute;
-      if (comparableTarget >= start && comparableTarget <= end) return true;
-    }
-    match = intervalPattern.exec(hoursText);
-  }
-
-  return parsedInterval ? false : undefined;
+  const { availability } = hoursForVisit((date) => hoursLineForDate(weeklyHours, date), dateKey, timeWindow);
+  return availability === 'open' ? true : availability === 'closed' ? false : undefined;
 }
 
 export function foodTimePreferenceScore(

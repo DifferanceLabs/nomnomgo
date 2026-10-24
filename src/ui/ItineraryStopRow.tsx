@@ -53,6 +53,7 @@ export type ItineraryStopRowProps = {
   arrivalTime: string;
   durationMinutes: number;
   location?: string;
+  hours?: { hoursText: string; operatingHours?: string; hoursWarning?: string; isOpen: boolean | null };
   travelToNext?: ItineraryTravelToNext | null;
   expanded: boolean;
   onToggleExpanded: () => void;
@@ -199,6 +200,7 @@ export function ItineraryStopRow({
   arrivalTime,
   durationMinutes,
   location,
+  hours,
   travelToNext,
   expanded,
   onToggleExpanded,
@@ -421,6 +423,14 @@ export function ItineraryStopRow({
               </View>
             ) : null}
           </TouchableOpacity>
+
+          {hours ? (
+            <View style={styles.hours} testID={testID ? `${testID}-hours` : undefined}>
+              <Text style={[styles.hoursStatus, hours.isOpen === false && { color: colors.red },
+                hours.hoursWarning && { color: colors.amber }]}>{hours.hoursWarning || hours.hoursText}</Text>
+              {hours.operatingHours ? <Text style={styles.hoursCopy}>{hours.operatingHours}</Text> : null}
+            </View>
+          ) : null}
 
           {expanded ? (
             <View style={styles.expandedContent}>
@@ -778,6 +788,19 @@ const styles = StyleSheet.create({
     borderTopWidth: borders.thin,
     paddingBottom: spacing.xs,
     paddingHorizontal: spacing.xs,
+  },
+  hours: {
+    paddingHorizontal: spacing.sm,
+    paddingBottom: spacing.xs,
+    gap: spacing.micro,
+  },
+  hoursStatus: {
+    ...typography.caption,
+    color: colors.textSecondary,
+  },
+  hoursCopy: {
+    ...typography.caption,
+    color: colors.textSecondary,
   },
   locationRow: {
     alignItems: 'flex-start',
