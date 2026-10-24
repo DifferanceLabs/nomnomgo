@@ -1,8 +1,10 @@
+import { useTheme } from './ThemeProvider';
 import React, { useState } from 'react';
 import { Linking, Platform, Share, Text, View } from 'react-native';
 import { ActionButton } from './primitives';
 
 export function ShareMessage({ message, email = '' }: { message: string; email?: string }) {
+  const { theme: { colors } } = useTheme();
   const [notice, setNotice] = useState('');
   const [showMessage, setShowMessage] = useState(false);
   const copy = async () => {
@@ -23,7 +25,7 @@ export function ShareMessage({ message, email = '' }: { message: string; email?:
     } catch (error) { if (!(error instanceof Error && error.name === 'AbortError')) { setShowMessage(true); setNotice('Use Email or Text, or select and copy the message below.'); } }
   };
   return <View style={{ gap: 12 }}>
-    <Text style={{ color: '#c7d1db' }}>Send the invitation with your preferred app.</Text>
+    <Text style={{ color: colors.textSecondary }}>Send the invitation with your preferred app.</Text>
     <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
       <ActionButton label="Email" accessibilityLabel="Email invitation" size="compact" onPress={() => open(`mailto:${encodeURIComponent(email)}?subject=NomNomGo%20plan%20invitation&body=${encodeURIComponent(message)}`)} />
       <ActionButton label="Text" accessibilityLabel="Text invitation" size="compact" onPress={() => open(`sms:${Platform.OS === 'ios' || (typeof navigator !== 'undefined' && /iPhone|iPad|iPod/.test(navigator.userAgent)) ? '&' : '?'}body=${encodeURIComponent(message)}`)} />
@@ -31,7 +33,7 @@ export function ShareMessage({ message, email = '' }: { message: string; email?:
       <ActionButton label="Copy" accessibilityLabel="Copy invitation" size="compact" onPress={copy} />
     </View>
     <ActionButton label={showMessage ? 'Hide message' : 'Preview message'} size="compact" tone="ghost" onPress={() => setShowMessage(!showMessage)} />
-    {showMessage ? <Text selectable style={{ color: '#c7d1db', lineHeight: 21 }}>{message}</Text> : null}
-    {notice ? <Text accessibilityRole="alert" style={{ color: '#c7d1db' }}>{notice}</Text> : null}
+    {showMessage ? <Text selectable style={{ color: colors.textSecondary, lineHeight: 21 }}>{message}</Text> : null}
+    {notice ? <Text accessibilityRole="alert" style={{ color: colors.textSecondary }}>{notice}</Text> : null}
   </View>;
 }

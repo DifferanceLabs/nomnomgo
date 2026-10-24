@@ -1,11 +1,14 @@
+import { useTheme, useThemedStyles } from './ThemeProvider';
 import React from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { colors, radii, semanticTones, spacing, typography } from './theme';
+import { radii, spacing, typography, type NomNomGoTheme } from './theme';
 
 export function HomeStart({ onFood, onActivity, onPeople, onLater }: {
   onFood: () => void; onActivity: () => void; onPeople: () => void; onLater: () => void;
 }) {
+  const { theme: { colors, semanticTones } } = useTheme();
+  const styles = useThemedStyles(createStyles);
   return <View style={styles.container}>
     <View style={styles.intro}>
       <Text accessibilityRole="header" style={styles.title}>What sounds good?</Text>
@@ -36,7 +39,7 @@ export function HomeStart({ onFood, onActivity, onPeople, onLater }: {
   </View>;
 }
 
-const styles = StyleSheet.create({
+const createStyles = ({ colors, semanticTones }: NomNomGoTheme) => StyleSheet.create({
   container: { gap: spacing.sm },
   intro: { gap: spacing.xs, paddingTop: spacing.xs, paddingBottom: spacing.xs },
   title: { ...typography.title, color: colors.textPrimary, fontSize: 28, lineHeight: 34 },

@@ -1,9 +1,10 @@
+import { useTheme, useThemedStyles } from './ThemeProvider';
 import React, { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Linking, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { AREA_CHOICES, AREA_RADIUS_OPTIONS, locationForArea, METERS_PER_MILE, type AreaCenter, type AreaKind, type AreaLocation, type AreaMatch } from '../domain/searchArea';
 import { isSearchCancelled, SearchExecution } from '../domain/searchExecution';
-import { colors } from './theme';
+import { type NomNomGoTheme } from './theme';
 
 type Props = {
   location: AreaLocation | null;
@@ -15,6 +16,8 @@ type Props = {
 
 /** The inline chooser contains filter values; only selecting one updates main results. */
 export function SearchAreaPicker({ location, contextKey, pendingKind, onLoad, onSelect }: Props) {
+  const { theme: { colors } } = useTheme();
+  const styles = useThemedStyles(createStyles);
   const [openKind, setOpenKind] = useState<AreaKind | null>(null);
   const [options, setOptions] = useState<{ base: AreaCenter; matches: AreaMatch[] } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -137,7 +140,7 @@ export function SearchAreaPicker({ location, contextKey, pendingKind, onLoad, on
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = ({ colors }: NomNomGoTheme) => StyleSheet.create({
   panel: { gap: 10, paddingTop: 12 },
   chooser: { gap: 10, padding: 12, borderWidth: 1, borderColor: colors.borderStrong, borderRadius: 12, backgroundColor: colors.surface },
   options: { maxHeight: 260 },

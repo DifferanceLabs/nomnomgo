@@ -1,13 +1,15 @@
+import { useTheme } from './ThemeProvider';
 import React, { useState } from 'react';
 import type { PlanDateTimePickerProps } from './PlanDateTimePicker.types';
 
 export function PlanDateTimePicker({ mode, value, label, displayValue, disabled, onChange }: PlanDateTimePickerProps) {
+  const { theme: { colors, mode: colorMode } } = useTheme();
   const [focused, setFocused] = useState(false);
   const pad = (number: number) => String(number).padStart(2, '0');
   const inputValue = mode === 'date'
     ? `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}`
     : `${pad(value.getHours())}:${pad(value.getMinutes())}`;
-  return <label style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 44, width: '100%', color: disabled ? '#AEB3B8' : '#3CCFD1', fontWeight: 700, textAlign: 'center', textDecoration: disabled ? 'none' : 'underline', outline: focused ? '2px solid #FFF2DE' : 'none', borderRadius: 6 }}>
+  return <label style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 44, width: '100%', color: disabled ? colors.textSecondary : colors.cyan, fontWeight: 700, textAlign: 'center', textDecoration: disabled ? 'none' : 'underline', outline: focused ? `2px solid ${colors.focus}` : 'none', borderRadius: 6 }}>
     <span aria-hidden="true">{displayValue}</span>
     <input
       type={mode}
@@ -32,7 +34,7 @@ export function PlanDateTimePicker({ mode, value, label, displayValue, disabled,
         }
         if (Number.isFinite(next.getTime())) onChange(next);
       }}
-      style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', opacity: 0, cursor: disabled ? 'default' : 'pointer', colorScheme: 'dark' }}
+      style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', opacity: 0, cursor: disabled ? 'default' : 'pointer', colorScheme: colorMode }}
     />
   </label>;
 }

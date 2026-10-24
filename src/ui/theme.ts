@@ -7,7 +7,7 @@ const systemFont = Platform.select({
   default: 'System',
 });
 
-export const colors = {
+const darkColors = {
   background: '#080A0C',
   backgroundRaised: '#0C0F12',
   surface: '#111417',
@@ -48,118 +48,137 @@ export const colors = {
   scrim: 'rgba(8, 10, 12, 0.82)',
 } as const;
 
-export const semanticTones = {
-  neutral: {
-    solid: colors.surfaceInteractive,
-    pressed: colors.surfacePressed,
-    soft: colors.surfaceMuted,
-    border: colors.borderStrong,
-    foreground: colors.textPrimary,
-    accent: colors.textSecondary,
-  },
-  primary: {
-    solid: colors.coral,
-    pressed: colors.coralPressed,
-    soft: colors.coralSoft,
-    border: '#7D3733',
-    foreground: colors.textInverse,
-    accent: '#FF7A72',
-  },
-  food: {
-    solid: colors.coral,
-    pressed: colors.coralPressed,
-    soft: colors.coralSoft,
-    surface: '#181011',
-    border: '#7D3733',
-    foreground: colors.textInverse,
-    accent: '#FF7A72',
-  },
-  activity: {
-    solid: colors.amber,
-    pressed: colors.amberPressed,
-    soft: colors.amberSoft,
-    surface: '#18150F',
-    border: '#725422',
-    foreground: colors.textInverse,
-    accent: colors.amber,
-  },
-  dessert: {
-    solid: colors.teal,
-    pressed: colors.tealPressed,
-    soft: colors.tealSoft,
-    surface: '#0F1918',
-    border: '#28655E',
-    foreground: colors.textInverse,
-    accent: '#56D5C4',
-  },
-  idea: {
-    solid: colors.violet,
-    pressed: colors.violetPressed,
-    soft: colors.violetSoft,
-    surface: '#15111D',
-    border: '#654B8F',
-    foreground: colors.textInverse,
-    accent: '#BE9BFF',
-  },
-  maybe: {
-    solid: '#F4D35E',
-    pressed: '#D6B643',
-    soft: '#302B14',
-    border: '#78692F',
-    foreground: colors.textInverse,
-    accent: '#F4D35E',
-  },
-  people: {
-    solid: colors.teal,
-    pressed: colors.tealPressed,
-    soft: colors.tealSoft,
-    border: '#28655E',
-    foreground: colors.textInverse,
-    accent: colors.teal,
-  },
-  route: {
-    solid: colors.teal,
-    pressed: colors.tealPressed,
-    soft: colors.tealSoft,
-    border: '#28655E',
-    foreground: colors.textInverse,
-    accent: colors.teal,
-  },
-  travel: {
-    solid: colors.cyan,
-    pressed: colors.cyanPressed,
-    soft: colors.cyanSoft,
-    border: '#2B666B',
-    foreground: colors.textInverse,
-    accent: colors.cyan,
-  },
-  success: {
-    solid: colors.green,
-    pressed: colors.greenPressed,
-    soft: colors.greenSoft,
-    border: '#2F6946',
-    foreground: colors.textInverse,
-    accent: colors.green,
-  },
-  going: {
-    solid: colors.green,
-    pressed: colors.greenPressed,
-    soft: colors.greenSoft,
-    border: '#2F6946',
-    foreground: colors.textInverse,
-    accent: colors.green,
-  },
-  danger: {
-    solid: colors.red,
-    pressed: colors.redPressed,
-    soft: colors.redSoft,
-    border: '#7C323A',
-    foreground: colors.textInverse,
-    accent: colors.red,
-  },
-} as const;
+export type ThemeColors = { [Key in keyof typeof darkColors]: string };
 
-export type SemanticTone = keyof typeof semanticTones;
+const lightColors: ThemeColors = {
+  background: '#F8F7F4', backgroundRaised: '#FFFFFF', surface: '#FFFFFF',
+  surfaceRaised: '#F2F3F3', surfaceMuted: '#EAEDEE', surfaceInteractive: '#E1E6E8', surfacePressed: '#D3DADF',
+  overlay: 'rgba(20, 28, 35, 0.45)', scrim: 'rgba(248, 247, 244, 0.92)',
+  textPrimary: '#20252B', textSecondary: '#515B65', textTertiary: '#596570', textInverse: '#FFFFFF',
+  border: '#D5DADD', borderStrong: '#84929C', divider: '#DFE3E5', focus: '#08776C',
+  coral: '#B9342D', coralPressed: '#982B26', coralSoft: '#FCEAE7',
+  amber: '#855600', amberPressed: '#6D4600', amberSoft: '#FFF0D5',
+  teal: '#08776C', tealPressed: '#065E55', tealSoft: '#DCF3ED',
+  cyan: '#006C70', cyanPressed: '#055E60', cyanSoft: '#DEF2F3',
+  violet: '#7441B0', violetPressed: '#5B318E', violetSoft: '#F0E8FC',
+  green: '#237842', greenPressed: '#1A5E32', greenSoft: '#E2F3E8',
+  red: '#B72E3A', redPressed: '#972430', redSoft: '#FCE8EC',
+};
+
+function createSemanticTones(colors: ThemeColors, light: boolean) {
+  return {
+    neutral: {
+      solid: colors.surfaceInteractive,
+      pressed: colors.surfacePressed,
+      soft: colors.surfaceMuted,
+      border: colors.borderStrong,
+      foreground: colors.textPrimary,
+      accent: colors.textSecondary,
+    },
+    primary: {
+      solid: colors.coral,
+      pressed: colors.coralPressed,
+      soft: colors.coralSoft,
+      border: light ? '#D88781' : '#7D3733',
+      foreground: colors.textInverse,
+      accent: light ? colors.coral : '#FF7A72',
+    },
+    food: {
+      solid: colors.coral,
+      pressed: colors.coralPressed,
+      soft: colors.coralSoft,
+      surface: light ? '#FFF5F2' : '#181011',
+      border: light ? '#D88781' : '#7D3733',
+      foreground: colors.textInverse,
+      accent: light ? colors.coral : '#FF7A72',
+    },
+    activity: {
+      solid: colors.amber,
+      pressed: colors.amberPressed,
+      soft: colors.amberSoft,
+      surface: light ? '#FFF8E9' : '#18150F',
+      border: light ? '#C69B55' : '#725422',
+      foreground: colors.textInverse,
+      accent: colors.amber,
+    },
+    dessert: {
+      solid: colors.teal,
+      pressed: colors.tealPressed,
+      soft: colors.tealSoft,
+      surface: light ? '#EEFAF5' : '#0F1918',
+      border: light ? '#66A99D' : '#28655E',
+      foreground: colors.textInverse,
+      accent: light ? colors.teal : '#56D5C4',
+    },
+    idea: {
+      solid: colors.violet,
+      pressed: colors.violetPressed,
+      soft: colors.violetSoft,
+      surface: light ? '#F8F3FF' : '#15111D',
+      border: light ? '#AB8DCD' : '#654B8F',
+      foreground: colors.textInverse,
+      accent: light ? colors.violet : '#BE9BFF',
+    },
+    maybe: {
+      solid: light ? '#876400' : '#F4D35E',
+      pressed: light ? '#6B4F00' : '#D6B643',
+      soft: light ? '#FFF3CC' : '#302B14',
+      border: light ? '#B39745' : '#78692F',
+      foreground: colors.textInverse,
+      accent: light ? '#876400' : '#F4D35E',
+    },
+    people: {
+      solid: colors.teal,
+      pressed: colors.tealPressed,
+      soft: colors.tealSoft,
+      border: light ? '#66A99D' : '#28655E',
+      foreground: colors.textInverse,
+      accent: colors.teal,
+    },
+    route: {
+      solid: colors.teal,
+      pressed: colors.tealPressed,
+      soft: colors.tealSoft,
+      border: light ? '#66A99D' : '#28655E',
+      foreground: colors.textInverse,
+      accent: colors.teal,
+    },
+    travel: {
+      solid: colors.cyan,
+      pressed: colors.cyanPressed,
+      soft: colors.cyanSoft,
+      border: light ? '#6AA9AC' : '#2B666B',
+      foreground: colors.textInverse,
+      accent: colors.cyan,
+    },
+    success: {
+      solid: colors.green,
+      pressed: colors.greenPressed,
+      soft: colors.greenSoft,
+      border: light ? '#78AC8B' : '#2F6946',
+      foreground: colors.textInverse,
+      accent: colors.green,
+    },
+    going: {
+      solid: colors.green,
+      pressed: colors.greenPressed,
+      soft: colors.greenSoft,
+      border: light ? '#78AC8B' : '#2F6946',
+      foreground: colors.textInverse,
+      accent: colors.green,
+    },
+    danger: {
+      solid: colors.red,
+      pressed: colors.redPressed,
+      soft: colors.redSoft,
+      border: light ? '#D38791' : '#7C323A',
+      foreground: colors.textInverse,
+      accent: colors.red,
+    },
+  } as const;
+}
+
+export type SemanticTone = keyof ReturnType<typeof createSemanticTones>;
 
 export const spacing = {
   none: 0,
@@ -185,12 +204,10 @@ export const radii = {
   pill: 999,
 } as const;
 
-export const borders = {
+const baseBorders = {
   hairline: StyleSheet.hairlineWidth,
   thin: 1,
   strong: 2,
-  color: colors.border,
-  strongColor: colors.borderStrong,
 } as const;
 
 export const typography = {
@@ -329,17 +346,21 @@ export const layout = {
   safeAreaFallbackBottom: spacing.xs,
 } as const;
 
-export const theme = {
-  colors,
-  semanticTones,
-  spacing,
-  radii,
-  borders,
-  typography,
-  elevations,
-  controls,
-  iconSizes,
-  layout,
-} as const;
+function createTheme(mode: 'light' | 'dark', colors: ThemeColors) {
+  return {
+    mode,
+    colors,
+    semanticTones: createSemanticTones(colors, mode === 'light'),
+    spacing,
+    radii,
+    borders: { ...baseBorders, color: colors.border, strongColor: colors.borderStrong },
+    typography,
+    elevations,
+    controls,
+    iconSizes,
+    layout,
+  } as const;
+}
 
-export type NomNomGoTheme = typeof theme;
+export const themes = { light: createTheme('light', lightColors), dark: createTheme('dark', darkColors) };
+export type NomNomGoTheme = ReturnType<typeof createTheme>;

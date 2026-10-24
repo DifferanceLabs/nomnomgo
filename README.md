@@ -30,6 +30,12 @@ Real-user alpha setup and the two-phone acceptance test are documented in [docs/
 
 ## Local Development
 
+### Appearance
+
+In Profile → Account (or User settings in local/Expo builds), Appearance offers System, Light, and Dark. New users default to System, which follows browser/OS appearance changes without requesting permissions. If the device does not report a preference, the app uses Light. A manual choice overrides the device theme until System is selected again.
+
+The choice is saved on the current device/browser, separately from shared plans and cloud account data. Clearing app/browser storage resets it to System. Signup and install preference prompts are deferred; there is no new onboarding prompt. Native builds use automatic interface style with `expo-system-ui`; rebuild installed native apps to pick up that configuration.
+
 Install dependencies:
 
 ```bash

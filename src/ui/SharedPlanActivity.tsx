@@ -1,3 +1,4 @@
+import { useTheme, useThemedStyles } from './ThemeProvider';
 import React, { useEffect, useRef, useState } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -5,10 +6,12 @@ import { getAlphaAccount } from '../data/accountStorage';
 import { startForegroundRefresh } from '../data/foregroundRefresh';
 import { listSharedPlans, planDateRangeLabel, type SharedPlanSummary } from '../data/sharedPlans';
 import { dismissHomePlan, loadHomePlanDismissals, upcomingHomePlans, type HomePlanDismissals } from '../data/homePlans';
-import { colors, radii, spacing, typography } from './theme';
+import { radii, spacing, typography, type NomNomGoTheme } from './theme';
 import { ActionButton } from './primitives';
 
 export function SharedPlanActivity({ onOpenPlan }: { onOpenPlan: (id?: string) => void }) {
+  const { theme: { colors } } = useTheme();
+  const styles = useThemedStyles(createStyles);
   const accountId = getAlphaAccount()?.id;
   const [plans, setPlans] = useState<SharedPlanSummary[]>([]);
   const [dismissed, setDismissed] = useState<HomePlanDismissals | null>(null);
@@ -75,7 +78,7 @@ export function SharedPlanActivity({ onOpenPlan }: { onOpenPlan: (id?: string) =
   </View>;
 }
 
-const styles = StyleSheet.create({
+const createStyles = ({ colors }: NomNomGoTheme) => StyleSheet.create({
   panel: { gap: spacing.xs, paddingTop: spacing.sm, borderTopWidth: 1, borderTopColor: colors.divider },
   heading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.xs },
   title: { ...typography.subheading, color: colors.textPrimary },

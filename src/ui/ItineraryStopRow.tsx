@@ -1,3 +1,4 @@
+import { useTheme, useThemedStyles } from './ThemeProvider';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useEffect, useState, type ComponentProps } from 'react';
 import {
@@ -22,16 +23,7 @@ import {
   type ItineraryStopKind,
 } from '../domain/itinerary';
 import type { TravelMode } from '../domain/plan';
-import {
-  borders,
-  colors,
-  controls,
-  iconSizes,
-  radii,
-  semanticTones,
-  spacing,
-  typography,
-} from './theme';
+import { controls, iconSizes, radii, spacing, typography, type NomNomGoTheme } from './theme';
 
 type IconName = ComponentProps<typeof Ionicons>['name'];
 type PressHandler = () => void | Promise<void>;
@@ -126,6 +118,8 @@ function CompactAction({
   expanded,
   testID,
 }: CompactActionProps) {
+  const { theme: { colors } } = useTheme();
+  const styles = useThemedStyles(createStyles);
   const disabled = !onPress;
   return (
     <TouchableOpacity
@@ -166,6 +160,8 @@ type MoreActionProps = {
 };
 
 function MoreAction({ label, icon, onPress, disabled = false, selected = false }: MoreActionProps) {
+  const { theme: { colors } } = useTheme();
+  const styles = useThemedStyles(createStyles);
   return (
     <TouchableOpacity
       activeOpacity={0.72}
@@ -223,6 +219,8 @@ export function ItineraryStopRow({
   style,
   testID,
 }: ItineraryStopRowProps) {
+  const { theme: { colors, semanticTones } } = useTheme();
+  const styles = useThemedStyles(createStyles);
   const { width: viewportWidth } = useWindowDimensions();
   const tone = semanticTones[kind];
   const { activationAnimationProgress, isActive } = useItemContext();
@@ -629,7 +627,7 @@ export function ItineraryStopRow({
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = ({ colors, semanticTones, borders }: NomNomGoTheme) => StyleSheet.create({
   stop: {
     width: '100%',
   },

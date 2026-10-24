@@ -1,3 +1,4 @@
+import { useTheme, useThemedStyles } from './ThemeProvider';
 import type { ComponentProps, PropsWithChildren, ReactNode } from 'react';
 import {
   ActivityIndicator,
@@ -13,18 +14,7 @@ import {
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import {
-  borders,
-  colors,
-  controls,
-  elevations,
-  layout,
-  radii,
-  semanticTones,
-  spacing,
-  typography,
-  type SemanticTone,
-} from './theme';
+import { controls, elevations, layout, radii, spacing, typography, type SemanticTone, type NomNomGoTheme } from './theme';
 
 export type PressHandler = () => void | Promise<void>;
 
@@ -52,6 +42,7 @@ export function ScreenContainer({
   scrollViewProps,
   testID,
 }: ScreenContainerProps) {
+  const styles = useThemedStyles(createStyles);
   const contentStyle = [
     styles.screenContent,
     withBottomNavigation && styles.screenContentWithNavigation,
@@ -87,13 +78,6 @@ export type SurfaceProps = PropsWithChildren<{
   testID?: string;
 }>;
 
-const surfaceVariantStyles: Record<SurfaceVariant, ViewStyle> = {
-  base: { backgroundColor: colors.surface },
-  raised: { backgroundColor: colors.surfaceRaised },
-  muted: { backgroundColor: colors.surfaceMuted },
-  interactive: { backgroundColor: colors.surfaceInteractive },
-};
-
 const surfacePaddingStyles: Record<SurfacePadding, ViewStyle> = {
   none: { padding: 0 },
   small: { padding: spacing.xs },
@@ -109,9 +93,11 @@ export function Surface({
   accessibilityLabel,
   testID,
 }: SurfaceProps) {
+  const { theme: { colors } } = useTheme();
+  const styles = useThemedStyles(createStyles);
   return (
     <View
-      style={[styles.surface, surfaceVariantStyles[variant], surfacePaddingStyles[padding], style]}
+      style={[styles.surface, { backgroundColor: colors[variant === 'base' ? 'surface' : variant === 'raised' ? 'surfaceRaised' : variant === 'muted' ? 'surfaceMuted' : 'surfaceInteractive'] }, surfacePaddingStyles[padding], style]}
       accessibilityLabel={accessibilityLabel}
       testID={testID}
     >
@@ -145,6 +131,7 @@ export function AppHeader({
   style,
   testID,
 }: AppHeaderProps) {
+  const styles = useThemedStyles(createStyles);
   const brandContent = (
     <>
       <View style={styles.headerLogo}>{logo}</View>
@@ -232,6 +219,8 @@ export function ActionButton({
   accessibilityLabel,
   testID,
 }: ActionButtonProps) {
+  const { theme: { semanticTones } } = useTheme();
+  const styles = useThemedStyles(createStyles);
   const palette = semanticTones[actionToneMap[tone]];
   const ghost = tone === 'ghost';
   const unavailable = disabled || loading;
@@ -301,6 +290,8 @@ export function Chip({
   accessibilityLabel,
   testID,
 }: ChipProps) {
+  const { theme: { colors, semanticTones } } = useTheme();
+  const styles = useThemedStyles(createStyles);
   const palette = semanticTones[tone];
   const chipContent = (
     <>
@@ -374,6 +365,8 @@ export function SegmentedControl<T extends string>({
   style,
   testID,
 }: SegmentedControlProps<T>) {
+  const { theme: { semanticTones } } = useTheme();
+  const styles = useThemedStyles(createStyles);
   const palette = semanticTones[tone];
 
   return (
@@ -433,6 +426,7 @@ export function FieldShell({
   style,
   testID,
 }: FieldShellProps) {
+  const styles = useThemedStyles(createStyles);
   return (
     <View style={[styles.field, style]} testID={testID}>
       <View style={styles.fieldHeader}>
@@ -470,6 +464,8 @@ export function MetadataRow({
   style,
   testID,
 }: MetadataRowProps) {
+  const { theme: { semanticTones } } = useTheme();
+  const styles = useThemedStyles(createStyles);
   return (
     <View style={[styles.metadataRow, style]} testID={testID}>
       {icon ? <View style={styles.metadataIcon}>{icon}</View> : null}
@@ -491,6 +487,8 @@ export type StatProps = {
 };
 
 export function Stat({ label, value, tone = 'neutral', style, testID }: StatProps) {
+  const { theme: { semanticTones } } = useTheme();
+  const styles = useThemedStyles(createStyles);
   const palette = semanticTones[tone];
   return (
     <View style={[styles.stat, { backgroundColor: palette.soft, borderColor: palette.border }, style]} testID={testID}>
@@ -525,6 +523,7 @@ export function PersonRow({
   style,
   testID,
 }: PersonRowProps) {
+  const styles = useThemedStyles(createStyles);
   const content = (
     <>
       <View style={[styles.personAvatar, selected && styles.personAvatarSelected]}>
@@ -599,6 +598,8 @@ export function RsvpControl({
   accessibilityLabel = 'RSVP',
   testID,
 }: RsvpControlProps) {
+  const { theme: { semanticTones } } = useTheme();
+  const styles = useThemedStyles(createStyles);
   return (
     <View style={[styles.rsvpControl, style]} accessibilityLabel={accessibilityLabel} testID={testID}>
       {rsvpOptions.map((option) => {
@@ -662,6 +663,8 @@ export function EmptyState({
   style,
   testID,
 }: EmptyStateProps) {
+  const { theme: { semanticTones } } = useTheme();
+  const styles = useThemedStyles(createStyles);
   const resolvedTone = tone ?? (status === 'error' ? 'danger' : 'neutral');
   const palette = semanticTones[resolvedTone];
   return (
@@ -719,6 +722,8 @@ export function TimelineStopCard({
   style,
   testID,
 }: TimelineStopCardProps) {
+  const { theme: { semanticTones } } = useTheme();
+  const styles = useThemedStyles(createStyles);
   const palette = semanticTones[tone];
   const stopContent = (
     <>
@@ -811,6 +816,7 @@ function BottomNavigationTab<T extends string>({
   active: boolean;
   onSelect: (key: T) => void | Promise<void>;
 }) {
+  const styles = useThemedStyles(createStyles);
   return (
     <TouchableOpacity
       style={[styles.navigationTab, active && styles.navigationTabActive, item.disabled && styles.disabled]}
@@ -836,6 +842,7 @@ export function BottomNavigation<T extends string>({
   accessibilityLabel = 'Primary navigation',
   testID,
 }: BottomNavigationProps<T>) {
+  const styles = useThemedStyles(createStyles);
   const insets = useSafeAreaInsets();
   const splitIndex = Math.ceil(items.length / 2);
   const leftItems = items.slice(0, splitIndex);
@@ -879,7 +886,7 @@ export function BottomNavigation<T extends string>({
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = ({ colors, semanticTones, borders }: NomNomGoTheme) => StyleSheet.create({
   screen: {
     flex: 1,
     backgroundColor: colors.background,

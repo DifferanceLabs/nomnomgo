@@ -1,3 +1,5 @@
+import { AppearancePreferences } from './src/ui/AppearancePreferences';
+import { useTheme, useThemedStyles, ThemeProvider } from './src/ui/ThemeProvider';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -64,7 +66,7 @@ import {
   snapStopDurationMinutes,
   type ItineraryStopKind,
 } from './src/domain/itinerary';
-import { colors, controls, elevations, iconSizes, layout, radii, semanticTones, spacing, typography } from './src/ui/theme';
+import { controls, elevations, iconSizes, layout, radii, spacing, typography, type NomNomGoTheme } from './src/ui/theme';
 import { ActionButton, AppHeader, BottomNavigation, EmptyState, PersonRow, RsvpControl } from './src/ui/primitives';
 import { ItineraryStopRow } from './src/ui/ItineraryStopRow';
 import { PlanDateTimePicker } from './src/ui/PlanDateTimePicker';
@@ -2743,7 +2745,6 @@ function safeCalendarFileName(title: string) {
   return `${safe || 'nomnomgo-plan'}.ics`;
 }
 
-const DARK_WEB_BACKGROUND = colors.background;
 
 type AlphaGateState = 'checking' | 'allowed' | 'locked';
 
@@ -2775,7 +2776,9 @@ function removeLaunchTokenFromUrl() {
   window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
 }
 
-function useWebDocumentSurface(backgroundColor: string) {
+function useWebDocumentSurface() {
+  const { theme: { colors, mode } } = useTheme();
+  const backgroundColor = colors.background;
   useEffect(() => {
     if (Platform.OS !== 'web' || typeof document === 'undefined') return;
 
@@ -2800,6 +2803,7 @@ function useWebDocumentSurface(backgroundColor: string) {
       }
     `;
 
+    document.documentElement.style.colorScheme = mode;
     document.documentElement.style.backgroundColor = backgroundColor;
     document.documentElement.style.minHeight = '100%';
     document.body.style.backgroundColor = backgroundColor;
@@ -2814,7 +2818,7 @@ function useWebDocumentSurface(backgroundColor: string) {
     if (viewport && !viewportContent.includes('viewport-fit=cover')) {
       viewport.setAttribute('content', viewportContent ? `${viewportContent}, viewport-fit=cover` : 'viewport-fit=cover');
     }
-  }, [backgroundColor]);
+  }, [backgroundColor, colors.focus, mode]);
 }
 
 function openDifferanceLaunch() {
@@ -2849,9 +2853,11 @@ async function validateAlphaSession() {
 }
 
 function AlphaAccessGate({ children }: { children: React.ReactNode }) {
-  const isLightMode = false;
-  const isDarkMode = true;
-  useWebDocumentSurface(DARK_WEB_BACKGROUND);
+  const { theme: { colors, mode: colorMode } } = useTheme();
+  const isDarkMode = colorMode === 'dark';
+  const isLightMode = colorMode === 'light';
+  const styles = useThemedStyles(createStyles);
+  useWebDocumentSurface();
   const [gateState, setGateState] = useState<AlphaGateState>(() => (shouldApplyAlphaGate() ? 'checking' : 'allowed'));
   const [gateError, setGateError] = useState('');
 
@@ -2928,6 +2934,7 @@ function AlphaAccessGate({ children }: { children: React.ReactNode }) {
 }
 
 function ItineraryInsertionIndicator({ activeAnimationProgress, style }: DropIndicatorComponentProps) {
+  const styles = useThemedStyles(createStyles);
   const animatedStyle = useAnimatedStyle(() => ({
     opacity: activeAnimationProgress.value,
   }));
@@ -2960,6 +2967,10 @@ function confirmedPlanFromSharedPlan(shared: SharedPlan): ConfirmedPlan {
 }
 
 function NomNomGoApp() {
+  const { theme: { colors, semanticTones, mode: colorMode } } = useTheme();
+  const isDarkMode = colorMode === 'dark';
+  const isLightMode = colorMode === 'light';
+  const styles = useThemedStyles(createStyles);
   const [gettingThere, setGettingThere] = useState<GettingThereSummary | null>(null);
   const [sharedWorkspace, setSharedWorkspace] = useState<{ id?: string; plan?: SharedPlan; section?: 'plan' | 'people' } | null>(() => {
     const id = getAlphaAccount() ? planIdFromUrl() : null;
@@ -2996,8 +3007,6 @@ function NomNomGoApp() {
     timePreference: string;
   }>({ dateRange: { start: '', end: '' }, timePreference: 'Now' });
   const betaPlanRecordBuilderRef = useRef<((base?: BetaPlanRecord | null) => BetaPlanRecord) | null>(null);
-  const isLightMode = false;
-  const isDarkMode = true;
   const [selectedMoods, setSelectedMoods] = useState<string[]>(['Easy']);
   const [selectedTime, setSelectedTime] = useState('Now');
   const [selectedDateWindow, setSelectedDateWindow] = useState<DateWindowId>('today');
@@ -8416,8 +8425,8 @@ function NomNomGoApp() {
               {(['account', 'friends'] as const).map((tab) => <TouchableOpacity
                 key={tab} accessibilityRole="tab" accessibilityLabel={tab === 'account' ? 'Account' : 'Friends'}
                 accessibilityState={{ selected: accountTab === tab }} onPress={() => setAccountTab(tab)}
-                style={{ flex: 1, minHeight: 44, padding: 12, borderRadius: 10, backgroundColor: accountTab === tab ? colors.teal : '#25323d' }}
-              ><Text style={{ color: '#fff', fontWeight: '700', textAlign: 'center' }}>{tab === 'account' ? 'Account' : 'Friends'}</Text></TouchableOpacity>)}
+                style={{ flex: 1, minHeight: 44, padding: 12, borderRadius: 10, backgroundColor: accountTab === tab ? colors.tealSoft : colors.surfaceInteractive }}
+              ><Text style={{ color: accountTab === tab ? colors.teal : colors.textPrimary, fontWeight: '700', textAlign: 'center' }}>{tab === 'account' ? 'Account' : 'Friends'}</Text></TouchableOpacity>)}
             </View> : null}
             <ScrollView key={accountTab} style={{ maxHeight: 420 }} keyboardShouldPersistTaps="handled">
             {getAlphaAccount() && accountTab === 'friends' ? <View style={{ gap: 12, marginVertical: 12 }}>
@@ -8431,6 +8440,7 @@ function NomNomGoApp() {
                 <Text style={[styles.accountSettingValue, isDarkMode && styles.darkText]}>{testerUser?.name || 'Tester'}</Text>
               </View>
             </View>
+            <AppearancePreferences />
             <AlphaAccountPanel onOpenSharedPlans={() => { setAccountSettingsOpen(false); setSharedWorkspace({}); }} />
             <View style={styles.accountActions}>
               <Button
@@ -10866,13 +10876,19 @@ function NomNomGoApp() {
 }
 
 export default function App() {
+  return <ThemeProvider><ThemedApp /></ThemeProvider>;
+}
+
+function ThemedApp() {
+  const { theme: { colors, mode: colorMode } } = useTheme();
+  const styles = useThemedStyles(createStyles);
   const [iconsLoaded, iconsError] = useFonts(Ionicons.font);
-  useWebDocumentSurface(DARK_WEB_BACKGROUND);
+  useWebDocumentSurface();
 
   if (!iconsLoaded && !iconsError) {
     return (
       <SafeAreaProvider>
-        <StatusBar style="light" backgroundColor={colors.background} />
+        <StatusBar style={colorMode === 'dark' ? 'light' : 'dark'} backgroundColor={colors.background} />
         <SafeAreaView style={[styles.safeArea, styles.darkScreen]} edges={['top', 'bottom', 'left', 'right']}>
           <View style={styles.authCentered}>
             <ActivityIndicator color={colors.coral} />
@@ -10885,7 +10901,7 @@ export default function App() {
 
   return (
     <SafeAreaProvider>
-      <StatusBar style="light" backgroundColor={colors.background} />
+      <StatusBar style={colorMode === 'dark' ? 'light' : 'dark'} backgroundColor={colors.background} />
       <AlphaAccessGate>
         <NomNomGoApp />
       </AlphaAccessGate>
@@ -10894,7 +10910,9 @@ export default function App() {
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  const isDarkMode = true;
+  const { theme: { mode: colorMode } } = useTheme();
+  const isDarkMode = colorMode === 'dark';
+  const styles = useThemedStyles(createStyles);
   return (
     <View style={styles.section}>
       <Text style={[styles.sectionTitle, isDarkMode && styles.darkText]}>{title}</Text>
@@ -10912,7 +10930,9 @@ function ChipRow<T extends string>({
   selected: string[];
   onPress: (value: T) => void;
 }) {
-  const isDarkMode = true;
+  const { theme: { mode: colorMode } } = useTheme();
+  const isDarkMode = colorMode === 'dark';
+  const styles = useThemedStyles(createStyles);
   return (
     <View style={styles.chipWrap}>
       {items.map((item) => {
@@ -10951,7 +10971,9 @@ function PreferenceGroup<T extends string>({
   expanded?: boolean;
   onToggleExpanded?: () => void;
 }) {
-  const isDarkMode = true;
+  const { theme: { mode: colorMode } } = useTheme();
+  const isDarkMode = colorMode === 'dark';
+  const styles = useThemedStyles(createStyles);
   const limit = previewCount || items.length;
   const canExpand = items.length > limit && Boolean(onToggleExpanded);
   const visibleItems = expanded || !canExpand ? items : items.slice(0, limit);
@@ -11003,7 +11025,9 @@ function FilterTab({
   active: boolean;
   onPress: () => void;
 }) {
-  const isDarkMode = true;
+  const { theme: { mode: colorMode } } = useTheme();
+  const isDarkMode = colorMode === 'dark';
+  const styles = useThemedStyles(createStyles);
   return (
     <TouchableOpacity
       style={[styles.filterTab, isDarkMode && styles.darkChip, active && styles.filterTabActive]}
@@ -11018,7 +11042,9 @@ function FilterTab({
 }
 
 function PlanLine({ label, value }: { label: string; value: string }) {
-  const isDarkMode = true;
+  const { theme: { mode: colorMode } } = useTheme();
+  const isDarkMode = colorMode === 'dark';
+  const styles = useThemedStyles(createStyles);
   return (
     <View style={styles.planLine}>
       <Text style={[styles.planLabel, isDarkMode && styles.darkMutedText]}>{label}:</Text>
@@ -11046,7 +11072,9 @@ function PlanningSuggestionCard({
   onOpenEvent?: () => void;
   onOpenWebsite?: () => void;
 }) {
-  const isDarkMode = true;
+  const { theme: { mode: colorMode } } = useTheme();
+  const isDarkMode = colorMode === 'dark';
+  const styles = useThemedStyles(createStyles);
   const voted = suggestion.votes.includes(currentUser);
   const voteCount = unique(suggestion.votes).length;
   const item = suggestion.item;
@@ -11098,6 +11126,8 @@ function CardIconButton({
   active?: boolean;
   disabled?: boolean;
 }) {
+  const { theme: { colors } } = useTheme();
+  const styles = useThemedStyles(createStyles);
   return (
     <TouchableOpacity
       style={[
@@ -11143,6 +11173,7 @@ function Button({
   disabled?: boolean;
   compact?: boolean;
 }) {
+  const styles = useThemedStyles(createStyles);
   return (
     <ActionButton
       label={label}
@@ -11159,6 +11190,7 @@ function Button({
 }
 
 function HeaderAction({ label }: { label: string }) {
+  const styles = useThemedStyles(createStyles);
   return (
     <View style={styles.headerActionButton}>
       <Text style={styles.headerActionText}>{label}</Text>
@@ -11166,7 +11198,7 @@ function HeaderAction({ label }: { label: string }) {
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = ({ colors, semanticTones }: NomNomGoTheme) => StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: colors.background,

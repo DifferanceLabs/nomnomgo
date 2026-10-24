@@ -1,8 +1,9 @@
+import { useTheme, useThemedStyles } from './ThemeProvider';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import React, { useState } from 'react';
 import { StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { RsvpSummary } from './RsvpSummary';
-import { colors } from './theme';
+import { type NomNomGoTheme } from './theme';
 
 type HeaderProps = {
   section: 'plan' | 'friends'; count?: number; disabled?: boolean;
@@ -16,6 +17,8 @@ type HeaderProps = {
 // Identity and context belong to the plan; only the content below its tabs changes.
 export function PlanWorkspaceHeader({ section, count, disabled, title, dateLabel, timeLabel,
   locationLabel, stopCount, locked, statusLabel, participants, onTitleChange, onBack, onPlan, onFriends }: HeaderProps) {
+  const { theme: { colors } } = useTheme();
+  const styles = useThemedStyles(createStyles);
   const [editingTitle, setEditingTitle] = useState(false);
   return <View style={styles.header} testID="plan-workspace-header">
     <View style={styles.navigation}>
@@ -55,13 +58,13 @@ export function PlanWorkspaceHeader({ section, count, disabled, title, dateLabel
         accessibilityState={{ selected: section === tab, disabled }} disabled={disabled}
         onPress={tab === 'plan' ? onPlan : onFriends}
         style={[styles.tab, section === tab && styles.selected]}>
-        <Text style={styles.tabText}>{tab === 'plan' ? 'Plan' : 'Friends' + (count ? ' (' + count + ')' : '')}</Text>
+        <Text style={[styles.tabText, section === tab && { color: colors.teal }]}>{tab === 'plan' ? 'Plan' : 'Friends' + (count ? ' (' + count + ')' : '')}</Text>
       </TouchableOpacity>)}
     </View>
   </View>;
 }
 
-const styles = StyleSheet.create({
+const createStyles = ({ colors }: NomNomGoTheme) => StyleSheet.create({
   header: { gap: 10, width: '100%', paddingBottom: 16, borderBottomWidth: 1, borderColor: colors.divider },
   navigation: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   back: { flexDirection: 'row', alignItems: 'center', gap: 4, minHeight: 44, alignSelf: 'flex-start', paddingRight: 12 },
@@ -77,7 +80,7 @@ const styles = StyleSheet.create({
   status: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', columnGap: 12, rowGap: 8 },
   statusText: { color: colors.textTertiary, fontSize: 13, lineHeight: 20 },
   tabs: { flexDirection: 'row', gap: 8, width: '100%', paddingTop: 6 },
-  tab: { flex: 1, minHeight: 46, padding: 12, borderRadius: 10, backgroundColor: '#25323d', justifyContent: 'center' },
-  selected: { backgroundColor: '#276558' },
-  tabText: { color: '#fff', textAlign: 'center', fontWeight: '700', fontSize: 15 },
+  tab: { flex: 1, minHeight: 46, padding: 12, borderRadius: 10, backgroundColor: colors.surfaceInteractive, justifyContent: 'center' },
+  selected: { backgroundColor: colors.tealSoft },
+  tabText: { color: colors.textPrimary, textAlign: 'center', fontWeight: '700', fontSize: 15 },
 });
