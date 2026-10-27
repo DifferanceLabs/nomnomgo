@@ -17,16 +17,16 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test:route-import": "tsc --module commonjs --target ES2020 --skipLibCheck --esModuleInterop --outDir .route-import-test-build routeImport.ts routeHandoff.ts planningHours.ts placeHours.ts alphaAccess.ts src/domain/itinerary.ts src/domain/searchExecution.ts src/domain/eventDiscovery.ts src/domain/searchArea.ts && node --test tests/routeImport.test.js tests/routeHandoff.test.js tests/planningHours.test.js tests/placeHours.test.js tests/alphaAccess.test.js tests/itinerary.test.js tests/searchExecution.test.js tests/eventDiscovery.test.js tests/searchArea.test.js",
-    "test:alpha": "node --test tests/realUserAlpha.test.js tests/accountStorage.test.js tests/sharedPlans.test.js tests/sharedPlanUpdates.test.js tests/homePlans.test.js tests/friends.test.js tests/appearance.test.js",
+    "test:alpha": "node --test tests/realUserAlpha.test.js tests/accountStorage.test.js tests/sharedPlans.test.js tests/sharedPlanUpdates.test.js tests/homePlans.test.js tests/friends.test.js tests/appearance.test.js tests/publicApiSecurity.test.js",
     "test": "npm run test:route-import && npm run test:alpha",
     "verify": "npm run lint && npm run typecheck && npm test"
   },
   "dependencies": {
     "@expo/metro-runtime": "~6.1.2",
-    "@expo/vector-icons": "latest",
+    "@expo/vector-icons": "15.1.1",
     "@react-native-async-storage/async-storage": "2.2.0",
     "@react-native-community/datetimepicker": "8.4.4",
-    "expo": "~54.0.37",
+    "expo": "~54.0.38",
     "expo-constants": "~18.0.14",
     "expo-font": "~14.0.12",
     "expo-linking": "~8.0.12",
@@ -52,7 +52,28 @@
     "@types/react": "~19.1.10",
     "eslint": "^9.39.5",
     "eslint-config-expo": "~10.0.0",
-    "sharp": "^0.34.5",
+    "sharp": "^0.35.5",
     "typescript": "~5.9.2"
+  },
+  "overrides": {
+    "postcss": "^8.5.23",
+    "expo": "$expo",
+    "metro": "0.83.8",
+    "metro-babel-transformer": "0.83.8",
+    "metro-cache": "0.83.8",
+    "metro-cache-key": "0.83.8",
+    "metro-config": "0.83.8",
+    "metro-core": "0.83.8",
+    "metro-file-map": "0.83.8",
+    "metro-minify-terser": "0.83.8",
+    "metro-resolver": "0.83.8",
+    "metro-runtime": "0.83.8",
+    "metro-source-map": "0.83.8",
+    "metro-symbolicate": "0.83.8",
+    "metro-transform-plugins": "0.83.8",
+    "metro-transform-worker": "0.83.8"
+  },
+  "engines": {
+    "node": "24.x"
   }
 }

@@ -1,0 +1,7 @@
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Known non-secret saved-plan and appearance preference storage identifiers"
+regexTarget = "secret"
+regexes = ['^nomNomGoSavedPlansV1$', '^nomNomGoAppearanceV1$']

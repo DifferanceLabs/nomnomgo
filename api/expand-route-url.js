@@ -10,9 +10,10 @@ function setNoStore(res) {
   res.setHeader('Cache-Control', 'no-store, max-age=0');
 }
 
-function isAllowedHost(hostname) {
-  const host = String(hostname || '').toLowerCase();
-  return ALLOWED_HOSTS.has(host) || host.endsWith('.google.com');
+function isAllowedUrl(url) {
+  const host = url.hostname.toLowerCase();
+  return url.protocol === 'https:' && !url.username && !url.password && !url.port
+    && (ALLOWED_HOSTS.has(host) || host.endsWith('.google.com'));
 }
 
 function readUrlParam(req) {
@@ -31,29 +32,35 @@ module.exports = async function expandRouteUrl(req, res) {
 
   let current;
   try {
-    current = new URL(String(readUrlParam(req) || ''));
+    const input = String(readUrlParam(req) || '');
+    if (input.length > 4096) throw new Error('URL too long');
+    current = new URL(input);
   } catch {
     res.status(400).json({ error: 'invalid_url' });
     return;
   }
 
-  if (!isAllowedHost(current.hostname)) {
+  if (!isAllowedUrl(current)) {
     res.status(400).json({ error: 'unsupported_url' });
     return;
   }
 
   try {
+    const signal = AbortSignal.timeout(10000);
     for (let hop = 0; hop < 5; hop += 1) {
       const response = await fetch(current.toString(), {
         method: 'GET',
         redirect: 'manual',
+        signal,
       });
 
       const location = response.headers.get('location');
+      // The redirect resolver only needs headers; release streamed bodies promptly.
+      await response.body?.cancel();
       if (!location || response.status < 300 || response.status >= 400) break;
 
       const next = new URL(location, current);
-      if (!isAllowedHost(next.hostname)) {
+      if (!isAllowedUrl(next)) {
         res.status(400).json({ error: 'unsupported_redirect' });
         return;
       }
