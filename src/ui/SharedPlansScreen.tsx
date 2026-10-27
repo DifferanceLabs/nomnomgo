@@ -1,3 +1,4 @@
+import { useTheme, useThemedStyles } from './ThemeProvider';
 import React, { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -7,7 +8,7 @@ import { changeSharedPlan, changedSharedRsvps, createSharedPlan, getSharedPlan, 
 import { startForegroundRefresh } from '../data/foregroundRefresh';
 import { ActionButton as Button, BottomNavigation, RsvpControl } from './primitives';
 import { RsvpBadge, RsvpSummary } from './RsvpSummary';
-import { colors } from './theme';
+import { type NomNomGoTheme } from './theme';
 import { DateField } from './DateField';
 import { ShareMessage } from './ShareMessage';
 import { FriendsPanel } from './FriendsPanel';
@@ -21,6 +22,8 @@ const errorText = (error: unknown) => error instanceof Error ? error.message : '
 const statusOf = (error: unknown) => (error as { status?: number })?.status;
 
 export function SharedPlansScreen({ initialPlan, initialPlanId, initialSection, onOpenEditor, onClose, onOpenFriends, onNavigate }: { initialSection?: 'plan' | 'people'; onOpenEditor?: (plan: SharedPlan) => void; initialPlan?: SharedPlan | null; initialPlanId?: string | null; onClose: () => void; onOpenFriends?: () => void; onNavigate?: (key: 'home' | 'saved' | 'profile') => void }) {
+  const { theme: { colors } } = useTheme();
+  const styles = useThemedStyles(createStyles);
   const account = getAlphaAccount()!;
   const [selectedId, setSelectedId] = useState(initialPlan?.id || initialPlanId || '');
   const [plan, setPlan] = useState<SharedPlan | null>(initialPlan || null);
@@ -156,9 +159,9 @@ export function SharedPlansScreen({ initialPlan, initialPlanId, initialSection, 
   const field = (label: string, key: 'title' | 'locationLabel' | 'dateStart' | 'dateEnd' | 'timeWindow') => <View style={styles.field} key={key}>
     <Text style={styles.copy}>{label}</Text>
     {key === 'dateStart' || key === 'dateEnd' ? <DateField label={label} value={draft[key]} disabled={busy} onChange={(value) => { setFormError(''); setDraft((current) => ({ ...current, [key]: value, ...(key === 'dateStart' && current.dateEnd < value ? { dateEnd: value } : {}) })); }} />
-      : <TextInput accessibilityLabel={label} style={styles.input} value={draft[key] || ''} onChangeText={(value) => { setFormError(''); setDraft((current) => ({ ...current, [key]: value })); }} editable={!busy} placeholder={key === 'timeWindow' ? 'e.g. 6–8 PM Central' : undefined} placeholderTextColor="#a8b2bf" />}
+      : <TextInput accessibilityLabel={label} style={styles.input} value={draft[key] || ''} onChangeText={(value) => { setFormError(''); setDraft((current) => ({ ...current, [key]: value })); }} editable={!busy} placeholder={key === 'timeWindow' ? 'e.g. 6–8 PM Central' : undefined} placeholderTextColor={colors.textTertiary} />}
   </View>;
-  return <SafeAreaView style={styles.screen}>
+  return <SafeAreaView style={styles.screen} edges={onNavigate ? ['top', 'left', 'right'] : ['top', 'bottom', 'left', 'right']}>
     {!plan || editing ? <View style={styles.header}>
       <View style={styles.headerRow}>
         <Button label={selectedId || editing ? 'Back' : 'Home'} accessibilityLabel={selectedId || editing ? 'Back to plans' : 'Back to NomNomGo'} size="compact" onPress={() => navigate(selectedId || editing ? () => openPlan('') : onClose)} disabled={busy} />
@@ -182,7 +185,7 @@ export function SharedPlansScreen({ initialPlan, initialPlanId, initialSection, 
 
       {!selectedId && !editing ? <>
         <Button label="Create plan" accessibilityLabel="Create shared plan" onPress={create} disabled={busy || !!syncError} tone="primary" />
-        {plans.length > 5 || search ? <TextInput accessibilityLabel="Search plans" placeholder="Search plans" placeholderTextColor="#a8b2bf" style={styles.input} value={search} onChangeText={setSearch} /> : null}
+        {plans.length > 5 || search ? <TextInput accessibilityLabel="Search plans" placeholder="Search plans" placeholderTextColor={colors.textTertiary} style={styles.input} value={search} onChangeText={setSearch} /> : null}
         {!loading && !plans.length ? <Text style={styles.copy}>Plans you organize or are invited to will appear here.</Text> : null}
         {plans.length > 0 && !plans.some((item) => `${item.title} ${item.locationLabel}`.toLowerCase().includes(search.trim().toLowerCase())) ? <Text style={styles.copy}>No plans match. Try another name or place.</Text> : null}
         {(['future', 'past'] as const).map((group) => <View key={group} style={{ gap: 12 }}>
@@ -245,7 +248,7 @@ export function SharedPlansScreen({ initialPlan, initialPlanId, initialSection, 
         <View style={styles.card}>
           <Text style={styles.title}>Suggestions & votes</Text>
           {!locked ? <>
-            <TextInput accessibilityLabel="Suggest a place" placeholder="Place name or activity" placeholderTextColor="#a8b2bf" style={styles.input} value={suggestion} onChangeText={(value) => { setSuggestion(value); suggestionKey.current = requestId(); }} editable={!busy} />
+            <TextInput accessibilityLabel="Suggest a place" placeholder="Place name or activity" placeholderTextColor={colors.textTertiary} style={styles.input} value={suggestion} onChangeText={(value) => { setSuggestion(value); suggestionKey.current = requestId(); }} editable={!busy} />
             <View style={styles.row}>
               <Button label="Food" accessibilityLabel="Food suggestion" size="compact" tone={slot === 'food' ? 'primary' : 'secondary'} onPress={() => setSlot('food')} />
               <Button label="Activity" accessibilityLabel="Activity suggestion" size="compact" tone={slot === 'activity' ? 'primary' : 'secondary'} onPress={() => setSlot('activity')} />
@@ -276,15 +279,15 @@ export function SharedPlansScreen({ initialPlan, initialPlanId, initialSection, 
   </SafeAreaView>;
 }
 
-const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.background }, header: { padding: 16, gap: 10, borderBottomWidth: 1, borderColor: '#293440' },
+const createStyles = ({ colors }: NomNomGoTheme) => StyleSheet.create({
+  screen: { flex: 1, backgroundColor: colors.background }, header: { padding: 16, gap: 10, borderBottomWidth: 1, borderColor: colors.border },
   headerRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   content: { padding: 16, gap: 16, paddingBottom: 48, width: '100%', maxWidth: 780, alignSelf: 'center' },
   planContent: { paddingTop: 0 },
-  heading: { fontSize: 24, fontWeight: '700', color: '#f5f7fa' }, title: { fontSize: 19, fontWeight: '700', color: '#f5f7fa' },
-  copy: { color: '#d7e0e9', fontSize: 15, lineHeight: 22 }, muted: { color: '#a8b2bf', fontSize: 13, lineHeight: 19 },
-  notice: { color: '#8fe0d3', lineHeight: 22 }, error: { color: '#ffb3a8', lineHeight: 22 },
-  card: { backgroundColor: '#18212b', borderRadius: 16, padding: 16, gap: 14 }, row: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  input: { backgroundColor: '#0d1721', borderColor: '#667785', borderWidth: 1, borderRadius: 10, padding: 12, color: '#fff', minHeight: 44 },
-  field: { gap: 6 }, person: { gap: 8, borderTopWidth: 1, borderColor: '#344150', paddingTop: 12 },
+  heading: { fontSize: 24, fontWeight: '700', color: colors.textPrimary }, title: { fontSize: 19, fontWeight: '700', color: colors.textPrimary },
+  copy: { color: colors.textSecondary, fontSize: 15, lineHeight: 22 }, muted: { color: colors.textTertiary, fontSize: 13, lineHeight: 19 },
+  notice: { color: colors.teal, lineHeight: 22 }, error: { color: colors.red, lineHeight: 22 },
+  card: { backgroundColor: colors.surfaceRaised, borderRadius: 16, padding: 16, gap: 14 }, row: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  input: { backgroundColor: colors.surface, borderColor: colors.borderStrong, borderWidth: 1, borderRadius: 10, padding: 12, color: colors.textPrimary, minHeight: 44 },
+  field: { gap: 6 }, person: { gap: 8, borderTopWidth: 1, borderColor: colors.border, paddingTop: 12 },
 });

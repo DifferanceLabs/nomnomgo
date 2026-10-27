@@ -1,3 +1,5 @@
+import type { NomNomGoTheme } from './theme';
+import { useTheme, useThemedStyles } from './ThemeProvider';
 import React, { useState } from 'react';
 import { Platform, StyleSheet, Text, TextInput, View } from 'react-native';
 import { accountRequest, getAlphaAccount } from '../data/accountStorage';
@@ -18,6 +20,8 @@ const metricsLabels: Record<string, string> = {
 };
 
 export function AlphaAccountPanel({ onOpenSharedPlans }: { onOpenSharedPlans?: () => void }) {
+  const { theme: { colors } } = useTheme();
+  const styles = useThemedStyles(createStyles);
   const account = getAlphaAccount();
   const [email, setEmail] = useState('');
   const [invitedEmail, setInvitedEmail] = useState('');
@@ -57,7 +61,7 @@ export function AlphaAccountPanel({ onOpenSharedPlans }: { onOpenSharedPlans?: (
       <Text style={styles.copy}>Use their Google email. Their first sign-in connects you as friends. Up to 10 new invites a day.</Text>
       <TextInput
         style={styles.input} value={email} onChangeText={setEmail} placeholder="Their Google account email"
-        placeholderTextColor="#a8b2bf" accessibilityLabel="Invitee Google account email"
+        placeholderTextColor={colors.textTertiary} accessibilityLabel="Invitee Google account email"
         keyboardType="email-address" autoCapitalize="none" autoCorrect={false} editable={!busy}
       />
       <Button label="Invite by email or text" onPress={invite} loading={busy} disabled={!email.trim()} size="compact" />
@@ -75,9 +79,9 @@ export function AlphaAccountPanel({ onOpenSharedPlans }: { onOpenSharedPlans?: (
   );
 }
 
-const styles = StyleSheet.create({
-  panel: { gap: 12, marginVertical: 12 }, title: { color: '#f5f7fa', fontSize: 18, fontWeight: '700' },
-  copy: { color: '#c7d1db', fontSize: 14, lineHeight: 20 },
-  input: { backgroundColor: '#15202b', borderColor: '#667785', borderWidth: 1, borderRadius: 10, padding: 12, color: '#ffffff', minHeight: 44 },
+const createStyles = ({ colors }: NomNomGoTheme) => StyleSheet.create({
+  panel: { gap: 12, marginVertical: 12 }, title: { color: colors.textPrimary, fontSize: 18, fontWeight: '700' },
+  copy: { color: colors.textSecondary, fontSize: 14, lineHeight: 20 },
+  input: { backgroundColor: colors.surfaceRaised, borderColor: colors.borderStrong, borderWidth: 1, borderRadius: 10, padding: 12, color: colors.textPrimary, minHeight: 44 },
   actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
 });

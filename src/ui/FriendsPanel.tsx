@@ -1,3 +1,5 @@
+import type { NomNomGoTheme } from './theme';
+import { useTheme, useThemedStyles } from './ThemeProvider';
 import React, { useEffect, useRef, useState } from 'react';
 import { StyleSheet, Text, TextInput, View } from 'react-native';
 import { listFriends, removeFriend, type Friend } from '../data/friends';
@@ -9,6 +11,8 @@ export function FriendsPanel({ onInvite, excludedEmails = [], disabled = false }
   excludedEmails?: string[];
   disabled?: boolean;
 }) {
+  const { theme: { colors } } = useTheme();
+  const styles = useThemedStyles(createStyles);
   const [friends, setFriends] = useState<Friend[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState('');
@@ -50,7 +54,7 @@ export function FriendsPanel({ onInvite, excludedEmails = [], disabled = false }
     {error ? <Text accessibilityRole="alert" style={styles.copy}>{error}</Text> : null}
     {!loaded && !error ? <Text style={styles.copy}>Loading friends…</Text> : null}
     {loaded && !available.length && !error ? <Text style={styles.copy}>{friends.length && onInvite ? 'Your friends are already in this plan.' : 'Invite someone to NomNomGo. They become your friend after their first sign-in.'}</Text> : null}
-    {available.length > 8 || search ? <TextInput accessibilityLabel="Search friends" placeholder="Search friends by email" placeholderTextColor="#a8b2bf" value={search} onChangeText={setSearch} style={styles.input} autoCapitalize="none" /> : null}
+    {available.length > 8 || search ? <TextInput accessibilityLabel="Search friends" placeholder="Search friends by email" placeholderTextColor={colors.textTertiary} value={search} onChangeText={setSearch} style={styles.input} autoCapitalize="none" /> : null}
     {loaded && available.length > 0 && !matches.length ? <Text style={styles.copy}>No friends match this email.</Text> : null}
     {matches.slice(0, 20).map((friend) => <View key={friend.id} style={styles.friend}>
       <Text selectable style={styles.copy}>{friend.email}</Text>
@@ -64,10 +68,10 @@ export function FriendsPanel({ onInvite, excludedEmails = [], disabled = false }
   </View>;
 }
 
-const styles = StyleSheet.create({
-  panel: { gap: 10, backgroundColor: '#15202b', padding: 14, borderRadius: 12 },
-  title: { color: '#f5f7fa', fontSize: 18, fontWeight: '700' },
-  copy: { color: '#c7d1db', fontSize: 14, lineHeight: 20 },
-  friend: { gap: 8, paddingVertical: 8, borderTopWidth: 1, borderTopColor: '#667785' },
-  input: { borderColor: '#667785', borderWidth: 1, borderRadius: 10, padding: 12, color: '#fff', minHeight: 44 },
+const createStyles = ({ colors }: NomNomGoTheme) => StyleSheet.create({
+  panel: { gap: 10, backgroundColor: colors.surfaceRaised, padding: 14, borderRadius: 12 },
+  title: { color: colors.textPrimary, fontSize: 18, fontWeight: '700' },
+  copy: { color: colors.textSecondary, fontSize: 14, lineHeight: 20 },
+  friend: { gap: 8, paddingVertical: 8, borderTopWidth: 1, borderTopColor: colors.borderStrong },
+  input: { borderColor: colors.borderStrong, borderWidth: 1, borderRadius: 10, padding: 12, color: colors.textPrimary, minHeight: 44 },
 });

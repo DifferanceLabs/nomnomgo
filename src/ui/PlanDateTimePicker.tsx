@@ -1,10 +1,12 @@
+import { useTheme } from './ThemeProvider';
 import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
 import { useState } from 'react';
 import { Modal, Platform, Text, TouchableOpacity, View } from 'react-native';
 import type { PlanDateTimePickerProps } from './PlanDateTimePicker.types';
-import { colors } from './theme';
+
 
 export function PlanDateTimePicker({ mode, value, label, displayValue, disabled, onChange }: PlanDateTimePickerProps) {
+  const { theme: { colors, mode: colorMode } } = useTheme();
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState(value);
   return <>
@@ -25,7 +27,7 @@ export function PlanDateTimePicker({ mode, value, label, displayValue, disabled,
       <View style={{ flex: 1, justifyContent: 'flex-end', backgroundColor: colors.overlay }}>
         <View style={{ backgroundColor: colors.surfaceRaised, padding: 24, paddingBottom: 40 }}>
           <Text style={{ color: colors.textPrimary, fontWeight: '700' }}>{label}</Text>
-          <DateTimePicker value={draft} mode={mode} display="spinner" themeVariant="dark" onChange={(_, selected) => { if (selected) setDraft(selected); }} />
+          <DateTimePicker value={draft} mode={mode} display="spinner" themeVariant={colorMode} onChange={(_, selected) => { if (selected) setDraft(selected); }} />
           <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
             <TouchableOpacity accessibilityRole="button" onPress={() => setOpen(false)} style={{ padding: 12 }}><Text style={{ color: colors.textPrimary }}>Cancel</Text></TouchableOpacity>
             <TouchableOpacity accessibilityRole="button" onPress={() => { if (!disabled) onChange(draft); setOpen(false); }} style={{ padding: 12 }}><Text style={{ color: colors.cyan }}>Done</Text></TouchableOpacity>

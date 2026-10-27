@@ -117,14 +117,15 @@ test('place details reuse fresh special hours and refresh stale or regular-only 
     canResolvePlaceWebsite: () => true, placeDetailsLookupId: (card) => card.id,
     recordPlacesUsage: async () => {}, withTimeout: (promise) => promise,
     setCards: () => {}, addLog: () => {},
+    setPlaceHoursById: () => {},
     fetch: async (_, init) => {
       calls += 1;
       assert.ok(init.headers['X-Goog-FieldMask'].includes('currentOpeningHours'));
-      return { ok: true, json: async () => ({ currentOpeningHours: { openNow: false } }) };
+      return { ok: true, json: async () => ({ currentOpeningHours: { openNow: false, weekdayDescriptions: ['Saturday: Closed'] } }) };
     },
   };
   const open = appHandler('openPlaceDetails', context);
-  const fresh = { id: 'coffee', ...readPlaceHours({ currentOpeningHours: { openNow: false } }) };
+  const fresh = { id: 'coffee', ...readPlaceHours({ currentOpeningHours: { openNow: false, weekdayDescriptions: ['Saturday: Closed'] } }) };
   await open(fresh);
   assert.equal(calls, 0);
   assert.equal(details.isOpen, false);
@@ -138,6 +139,8 @@ test('place details reuse fresh special hours and refresh stale or regular-only 
   assert.equal(details.isOpen, false);
   await open({ ...fresh, openNow: true, hoursNextChange: new Date(Date.now() - 1000).toISOString() });
   assert.equal(calls, 3);
+  await open({ id: 'status-only', ...readPlaceHours({ currentOpeningHours: { openNow: false } }) });
+  assert.equal(calls, 4);
 });
 
 test('a newer manual search owns the results and loading state after an older lookup completes', async () => {

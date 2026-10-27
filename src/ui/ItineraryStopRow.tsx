@@ -1,3 +1,4 @@
+import { useTheme, useThemedStyles } from './ThemeProvider';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useEffect, useState, type ComponentProps } from 'react';
 import {
@@ -22,16 +23,7 @@ import {
   type ItineraryStopKind,
 } from '../domain/itinerary';
 import type { TravelMode } from '../domain/plan';
-import {
-  borders,
-  colors,
-  controls,
-  iconSizes,
-  radii,
-  semanticTones,
-  spacing,
-  typography,
-} from './theme';
+import { controls, iconSizes, radii, spacing, typography, type NomNomGoTheme } from './theme';
 
 type IconName = ComponentProps<typeof Ionicons>['name'];
 type PressHandler = () => void | Promise<void>;
@@ -53,6 +45,7 @@ export type ItineraryStopRowProps = {
   arrivalTime: string;
   durationMinutes: number;
   location?: string;
+  hours?: { hoursText: string; operatingHours?: string; hoursWarning?: string; isOpen: boolean | null };
   travelToNext?: ItineraryTravelToNext | null;
   expanded: boolean;
   onToggleExpanded: () => void;
@@ -125,6 +118,8 @@ function CompactAction({
   expanded,
   testID,
 }: CompactActionProps) {
+  const { theme: { colors } } = useTheme();
+  const styles = useThemedStyles(createStyles);
   const disabled = !onPress;
   return (
     <TouchableOpacity
@@ -165,6 +160,8 @@ type MoreActionProps = {
 };
 
 function MoreAction({ label, icon, onPress, disabled = false, selected = false }: MoreActionProps) {
+  const { theme: { colors } } = useTheme();
+  const styles = useThemedStyles(createStyles);
   return (
     <TouchableOpacity
       activeOpacity={0.72}
@@ -199,6 +196,7 @@ export function ItineraryStopRow({
   arrivalTime,
   durationMinutes,
   location,
+  hours,
   travelToNext,
   expanded,
   onToggleExpanded,
@@ -221,6 +219,8 @@ export function ItineraryStopRow({
   style,
   testID,
 }: ItineraryStopRowProps) {
+  const { theme: { colors, semanticTones } } = useTheme();
+  const styles = useThemedStyles(createStyles);
   const { width: viewportWidth } = useWindowDimensions();
   const tone = semanticTones[kind];
   const { activationAnimationProgress, isActive } = useItemContext();
@@ -422,6 +422,14 @@ export function ItineraryStopRow({
             ) : null}
           </TouchableOpacity>
 
+          {hours ? (
+            <View style={styles.hours} testID={testID ? `${testID}-hours` : undefined}>
+              <Text style={[styles.hoursStatus, hours.isOpen === false && { color: colors.red },
+                hours.hoursWarning && { color: colors.amber }]}>{hours.hoursWarning || hours.hoursText}</Text>
+              {hours.operatingHours ? <Text style={styles.hoursCopy}>{hours.operatingHours}</Text> : null}
+            </View>
+          ) : null}
+
           {expanded ? (
             <View style={styles.expandedContent}>
               {location ? (
@@ -619,7 +627,7 @@ export function ItineraryStopRow({
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = ({ colors, semanticTones, borders }: NomNomGoTheme) => StyleSheet.create({
   stop: {
     width: '100%',
   },
@@ -778,6 +786,19 @@ const styles = StyleSheet.create({
     borderTopWidth: borders.thin,
     paddingBottom: spacing.xs,
     paddingHorizontal: spacing.xs,
+  },
+  hours: {
+    paddingHorizontal: spacing.sm,
+    paddingBottom: spacing.xs,
+    gap: spacing.micro,
+  },
+  hoursStatus: {
+    ...typography.caption,
+    color: colors.textSecondary,
+  },
+  hoursCopy: {
+    ...typography.caption,
+    color: colors.textSecondary,
   },
   locationRow: {
     alignItems: 'flex-start',

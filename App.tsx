@@ -1,3 +1,5 @@
+import { AppearancePreferences } from './src/ui/AppearancePreferences';
+import { useTheme, useThemedStyles, ThemeProvider } from './src/ui/ThemeProvider';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -48,8 +50,8 @@ import {
   type RouteHandoffPlan,
   type RouteHandoffStop,
 } from './routeHandoff';
-import { foodTimePreferenceScore, hoursLineForDate, placeOpenDuringWindow, timePreferenceForWindow } from './planningHours';
-import { currentHoursDisplay, PLACE_HOURS_FIELDS, readPlaceHours, weeklyHoursForDate, type PlaceHours } from './placeHours';
+import { foodTimePreferenceScore, timePreferenceForWindow } from './planningHours';
+import { currentHoursDisplay, fetchPlaceHours, hasPlaceHours, PLACE_HOURS_FIELDS, placeDateKey, plannedHoursDisplay, readPlaceHours, type PlaceHours } from './placeHours';
 import { BETA_FEATURES } from './src/config/features';
 import { SearchExecution, isSearchCancelled, mapConcurrent } from './src/domain/searchExecution';
 import { collectEventPages, deduplicateEvents } from './src/domain/eventDiscovery';
@@ -64,7 +66,7 @@ import {
   snapStopDurationMinutes,
   type ItineraryStopKind,
 } from './src/domain/itinerary';
-import { colors, controls, elevations, iconSizes, layout, radii, semanticTones, spacing, typography } from './src/ui/theme';
+import { controls, elevations, iconSizes, layout, radii, spacing, typography, type NomNomGoTheme } from './src/ui/theme';
 import { ActionButton, AppHeader, BottomNavigation, EmptyState, PersonRow, RsvpControl } from './src/ui/primitives';
 import { ItineraryStopRow } from './src/ui/ItineraryStopRow';
 import { PlanDateTimePicker } from './src/ui/PlanDateTimePicker';
@@ -159,6 +161,8 @@ type PlaceCard = PlaceHours & {
   openNow?: boolean | null;
   isOpen?: boolean | null;
   hoursText?: string;
+  operatingHours?: string;
+  hoursWarning?: string;
   eventDateText?: string;
   eventAddressConflict?: boolean;
   eventStartMs?: number;
@@ -1315,7 +1319,7 @@ function stopSearchCenter(stop?: ItineraryStop): LatLon | undefined {
 
 function hasKnownHours(card: PlaceCard) {
   if (card.kind === 'event') return Boolean(card.eventDateText);
-  return Boolean(card.todayHours || card.hoursText || (card.weeklyHours && card.weeklyHours.length > 0));
+  return hasPlaceHours(card);
 }
 
 function mapsDirectionsUrl(plan: ConfirmedPlan, origin = 'Current Location') {
@@ -1372,6 +1376,7 @@ function placeDetailsLookupId(card: PlaceCard) {
 function canResolvePlaceWebsite(card: PlaceCard) {
   if (!GOOGLE_API_KEY) return false;
   if (card.kind === 'event') return false;
+  if (card.source === 'manual') return false;
   if (card.source === 'Google Maps route') return false;
   if (!card.id || card.id.startsWith('ticketmaster-') || card.id.startsWith('google-route-')) return false;
   return true;
@@ -2740,7 +2745,6 @@ function safeCalendarFileName(title: string) {
   return `${safe || 'nomnomgo-plan'}.ics`;
 }
 
-const DARK_WEB_BACKGROUND = colors.background;
 
 type AlphaGateState = 'checking' | 'allowed' | 'locked';
 
@@ -2772,7 +2776,9 @@ function removeLaunchTokenFromUrl() {
   window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
 }
 
-function useWebDocumentSurface(backgroundColor: string) {
+function useWebDocumentSurface() {
+  const { theme: { colors, mode } } = useTheme();
+  const backgroundColor = colors.background;
   useEffect(() => {
     if (Platform.OS !== 'web' || typeof document === 'undefined') return;
 
@@ -2797,6 +2803,7 @@ function useWebDocumentSurface(backgroundColor: string) {
       }
     `;
 
+    document.documentElement.style.colorScheme = mode;
     document.documentElement.style.backgroundColor = backgroundColor;
     document.documentElement.style.minHeight = '100%';
     document.body.style.backgroundColor = backgroundColor;
@@ -2811,7 +2818,7 @@ function useWebDocumentSurface(backgroundColor: string) {
     if (viewport && !viewportContent.includes('viewport-fit=cover')) {
       viewport.setAttribute('content', viewportContent ? `${viewportContent}, viewport-fit=cover` : 'viewport-fit=cover');
     }
-  }, [backgroundColor]);
+  }, [backgroundColor, colors.focus, mode]);
 }
 
 function openDifferanceLaunch() {
@@ -2846,9 +2853,11 @@ async function validateAlphaSession() {
 }
 
 function AlphaAccessGate({ children }: { children: React.ReactNode }) {
-  const isLightMode = false;
-  const isDarkMode = true;
-  useWebDocumentSurface(DARK_WEB_BACKGROUND);
+  const { theme: { colors, mode: colorMode } } = useTheme();
+  const isDarkMode = colorMode === 'dark';
+  const isLightMode = colorMode === 'light';
+  const styles = useThemedStyles(createStyles);
+  useWebDocumentSurface();
   const [gateState, setGateState] = useState<AlphaGateState>(() => (shouldApplyAlphaGate() ? 'checking' : 'allowed'));
   const [gateError, setGateError] = useState('');
 
@@ -2925,6 +2934,7 @@ function AlphaAccessGate({ children }: { children: React.ReactNode }) {
 }
 
 function ItineraryInsertionIndicator({ activeAnimationProgress, style }: DropIndicatorComponentProps) {
+  const styles = useThemedStyles(createStyles);
   const animatedStyle = useAnimatedStyle(() => ({
     opacity: activeAnimationProgress.value,
   }));
@@ -2943,7 +2953,8 @@ function confirmedPlanFromSharedPlan(shared: SharedPlan): ConfirmedPlan {
       key: stop.id, slot, visualType: kind,
       item: { id: stop.place.providerId || stop.id, title: stop.place.title, subtitle: stop.place.subtitle || '',
         address: stop.place.address, lat: stop.place.latitude, lng: stop.place.longitude,
-        kind: stop.place.provider === 'ticketmaster' ? 'event' : 'place', websiteUri: stop.place.sourceUrl },
+        kind: stop.place.provider === 'ticketmaster' ? 'event' : 'place', websiteUri: stop.place.sourceUrl,
+        source: stop.place.provider === 'manual' ? 'manual' : undefined },
       durationMinutes: stop.durationMinutes, travelMode: stop.travelMode,
     };
   });
@@ -2956,6 +2967,10 @@ function confirmedPlanFromSharedPlan(shared: SharedPlan): ConfirmedPlan {
 }
 
 function NomNomGoApp() {
+  const { theme: { colors, semanticTones, mode: colorMode } } = useTheme();
+  const isDarkMode = colorMode === 'dark';
+  const isLightMode = colorMode === 'light';
+  const styles = useThemedStyles(createStyles);
   const [gettingThere, setGettingThere] = useState<GettingThereSummary | null>(null);
   const [sharedWorkspace, setSharedWorkspace] = useState<{ id?: string; plan?: SharedPlan; section?: 'plan' | 'people' } | null>(() => {
     const id = getAlphaAccount() ? planIdFromUrl() : null;
@@ -2992,8 +3007,6 @@ function NomNomGoApp() {
     timePreference: string;
   }>({ dateRange: { start: '', end: '' }, timePreference: 'Now' });
   const betaPlanRecordBuilderRef = useRef<((base?: BetaPlanRecord | null) => BetaPlanRecord) | null>(null);
-  const isLightMode = false;
-  const isDarkMode = true;
   const [selectedMoods, setSelectedMoods] = useState<string[]>(['Easy']);
   const [selectedTime, setSelectedTime] = useState('Now');
   const [selectedDateWindow, setSelectedDateWindow] = useState<DateWindowId>('today');
@@ -3047,16 +3060,40 @@ function NomNomGoApp() {
   const [sharePreviewOpen, setSharePreviewOpen] = useState(false);
   const [planPreviewOpen, setPlanPreviewOpen] = useState(false);
   const [quickShareTarget, setQuickShareTarget] = useState<QuickShareTarget | null>(null);
-  const [placeDetailCard, setPlaceDetailCard] = useState<PlaceCard | null>(null);
+  const [placeDetailSnapshot, setPlaceDetailCard] = useState<PlaceCard | null>(null);
+  const [placeHoursById, setPlaceHoursById] = useState<Record<string, PlaceHours>>({});
+  const hoursLookupAttemptsRef = useRef(new Map<string, number>());
+  const placeHoursUsageRef = useRef<() => Promise<void>>(async () => {});
+  const planHoursLookupIds = JSON.stringify(unique(plan.stops.flatMap(({ item }) =>
+    typeof item !== 'string' && canResolvePlaceWebsite(item) &&
+    (!item.hoursFetchedAt || Date.now() - item.hoursFetchedAt >= 5 * 60_000 || !hasPlaceHours(item))
+      ? [placeDetailsLookupId(item)] : [])));
+  useEffect(() => {
+    if (!GOOGLE_API_KEY) return;
+    const ids: string[] = JSON.parse(planHoursLookupIds);
+    const needed = ids.filter((id) => Date.now() - (hoursLookupAttemptsRef.current.get(id) ?? 0) >= 5 * 60_000);
+    needed.forEach((id) => hoursLookupAttemptsRef.current.set(id, Date.now()));
+    // Shared snapshots intentionally omit hours. Refresh locally without editing
+    // the shared plan or resurfacing it as a major plan update.
+    void mapConcurrent(needed, async (id) => {
+      try {
+        await placeHoursUsageRef.current();
+        const hours = await fetchPlaceHours(id, GOOGLE_API_KEY);
+        setPlaceHoursById((previous) => ({ ...previous, [id]: hours }));
+      } catch {
+        setPlaceHoursById((previous) => ({ ...previous, [id]: {} }));
+      }
+    }, 3);
+  }, [planHoursLookupIds]);
   const placeDetailRequestRef = useRef(0);
   useEffect(() => {
-    if (!placeDetailCard?.id || placeDetailCard.kind === 'event') return;
+    if (!placeDetailSnapshot?.id || placeDetailSnapshot.kind === 'event') return;
     const timer = setInterval(() => {
       if (activePlanTimingRef.current.timeWindow) return;
       setPlaceDetailCard((card) => card ? { ...card, ...currentHoursDisplay(card) } : card);
     }, 30_000);
     return () => clearInterval(timer);
-  }, [placeDetailCard?.id, placeDetailCard?.kind]);
+  }, [placeDetailSnapshot?.id, placeDetailSnapshot?.kind]);
   const [routeOptionsOpen, setRouteOptionsOpen] = useState(false);
   const [pendingConfirmation, setPendingConfirmation] = useState<{
     title: string;
@@ -3091,7 +3128,6 @@ function NomNomGoApp() {
   const [suggestedPairingsOpen, setSuggestedPairingsOpen] = useState(true);
   const [suggestedPairingsExpanded, setSuggestedPairingsExpanded] = useState(false);
   const [toastMessage, setToastMessage] = useState('');
-  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
   const [accountTab, setAccountTab] = useState<'account' | 'friends'>('account');
   const [peopleGroupsOpen, setPeopleGroupsOpen] = useState(false);
@@ -3218,28 +3254,24 @@ function NomNomGoApp() {
   };
   const cardForActivePlanTiming = (card: PlaceCard): PlaceCard => {
     if (card.kind === 'event') return card;
+    const cachedHours = placeHoursById[placeDetailsLookupId(card)];
+    if (cachedHours && (cachedHours.hoursFetchedAt ?? 0) >= (card.hoursFetchedAt ?? 0)) card = { ...card, ...cachedHours };
     const timing = activePlanTimingRef.current;
-    if (!timing.timeWindow) {
+    if (!timing.timeWindow && timing.dateRange.start === placeDateKey(new Date(), card.utcOffsetMinutes)) {
+      const current = currentHoursDisplay(card);
       return {
         ...card,
-        ...currentHoursDisplay(card),
+        ...current,
+        operatingHours: current.todayHours,
+        hoursWarning: undefined,
       };
     }
-
-    const weeklyHours = weeklyHoursForDate(card, timing.dateRange.start);
-    const planAvailability = placeOpenDuringWindow(weeklyHours, timing.dateRange.start, timing.timeWindow);
-    const plannedDayHours = hoursLineForDate(weeklyHours, timing.dateRange.start);
     return {
       ...card,
-      isOpen: planAvailability ?? null,
-      hoursText: planAvailability === true
-        ? 'Open at planned time'
-        : planAvailability === false
-          ? 'Closed at planned time'
-          : plannedDayHours ? 'Hours available' : 'Hours unknown',
-      todayHours: plannedDayHours,
+      ...plannedHoursDisplay(card, timing.dateRange.start, timing.timeWindow),
     };
   };
+  const placeDetailCard = placeDetailSnapshot ? cardForActivePlanTiming(placeDetailSnapshot) : null;
   const activePlanType = inferPlanType({
     planDateStart: activePlanDateRange.start,
     planDateEnd: activePlanDateRange.end,
@@ -3575,6 +3607,7 @@ function NomNomGoApp() {
     };
     await saveUsageMeter(next);
   };
+  placeHoursUsageRef.current = () => recordPlacesUsage('text');
 
   const selectTester = async (name: string) => {
     const next = { name };
@@ -3635,7 +3668,6 @@ function NomNomGoApp() {
 
   const closeTransientSurfaces = () => {
     cancelSearch();
-    setAccountMenuOpen(false);
     setAccountSettingsOpen(false);
     setPeopleGroupsOpen(false);
     setPlanPeopleOpen(false);
@@ -4110,6 +4142,7 @@ function NomNomGoApp() {
       return;
     }
     closeTransientSurfaces();
+    setAccountTab('account');
     setAccountSettingsOpen(true);
   };
 
@@ -5046,7 +5079,6 @@ function NomNomGoApp() {
     const applyResultFilters = (nextCards: PlaceCard[]) => nextCards.map(cardForActivePlanTiming).filter((card) => {
       if (!isInsideSearchArea(center, card)) return false;
       if (memory.neverRecommend.includes(card.id)) return false;
-      if (!hasKnownHours(card) && !(chargerFocused && isEvCharger(card))) return false;
       const cardDistance = distanceMeters(center, card);
       if (Number.isFinite(cardDistance) && cardDistance > resultRadiusMeters) return false;
       if (card.kind === 'event' && card.eventStartMs) {
@@ -6068,7 +6100,7 @@ function NomNomGoApp() {
     if (!canResolvePlaceWebsite(card) || !GOOGLE_API_KEY) return;
     // Search already returns special hours. Avoid paying for a duplicate lookup
     // while that status is fresh and before its next opening/closing boundary.
-    if (card.currentHoursStartDate && currentHoursDisplay(card).isOpen !== null) return;
+    if (card.currentHoursStartDate && card.currentWeeklyHours?.length && currentHoursDisplay(card).isOpen !== null) return;
     try {
       await recordPlacesUsage('text');
       const response = await withTimeout(
@@ -6085,6 +6117,7 @@ function NomNomGoApp() {
       if (!response.ok) throw new Error(`Google Places hours status ${response.status}`);
       const hours = readPlaceHours(await response.json());
       if (request !== placeDetailRequestRef.current) return;
+      setPlaceHoursById((previous) => ({ ...previous, [placeDetailsLookupId(card)]: hours }));
       setPlaceDetailCard((current) => current?.id === card.id
         ? cardForActivePlanTiming({ ...current, ...hours }) : current);
       setCards((previous) => previous.map((item) => item.id === card.id
@@ -7939,12 +7972,12 @@ function NomNomGoApp() {
     (suggestion) => samePlanningSuggestion(suggestion, resultMode, placeDetailCard),
   ));
   const placeDetailActionLabel = nowDiscovering
-    ? 'Use'
+    ? 'Add to Plan'
     : planningSuggestionMode
       ? placeDetailIsSuggested ? 'Suggested' : 'Suggest'
       : placeDetailIsSelected ? 'Deselect' : 'Add to Plan';
   const placeDetailActionIcon: React.ComponentProps<typeof Ionicons>['name'] = nowDiscovering
-    ? 'navigate-outline'
+    ? 'add'
     : planningSuggestionMode
       ? placeDetailIsSuggested ? 'checkmark-done-outline' : 'chatbubble-ellipses-outline'
       : placeDetailIsSelected ? 'remove-circle-outline' : 'add';
@@ -8317,9 +8350,9 @@ function NomNomGoApp() {
         trailing={(
           <TouchableOpacity
             style={[styles.accountIconButton, styles.darkChip]}
-            onPress={() => setAccountMenuOpen((prev) => !prev)}
+            onPress={() => handleMainNavigation('profile')}
             accessibilityRole="button"
-            accessibilityLabel="Open user menu"
+            accessibilityLabel="Open profile settings"
           >
             <Ionicons name="person-circle-outline" size={28} color={colors.textPrimary} />
           </TouchableOpacity>
@@ -8334,51 +8367,6 @@ function NomNomGoApp() {
       <Modal visible={sharedEditorSaving || sharedStatusChanging} transparent><View style={{ flex: 1, backgroundColor: colors.overlay, alignItems: 'center', justifyContent: 'center' }}><ActivityIndicator color={colors.cyan} /><Text style={styles.authHint}>{sharedStatusChanging ? 'Updating plan…' : 'Saving plan…'}</Text></View></Modal>
 
       <Modal
-        visible={accountMenuOpen}
-        animationType="fade"
-        transparent
-        onRequestClose={() => setAccountMenuOpen(false)}
-      >
-        <TouchableOpacity style={styles.accountOverlay} activeOpacity={1} onPress={() => setAccountMenuOpen(false)}>
-          <TouchableOpacity style={[styles.accountCard, isDarkMode && styles.darkModalCard]} activeOpacity={1} onPress={(event) => event.stopPropagation()}>
-            <View style={styles.accountHeader}>
-              <View style={styles.accountAvatar}>
-                <Ionicons name="person-circle-outline" size={36} color={colors.textPrimary} />
-              </View>
-              <View style={styles.accountTextBlock}>
-                <Text style={[styles.accountName, isDarkMode && styles.darkText]}>{testerUser?.name || 'Tester'}</Text>
-                <Text style={[styles.accountUsage, isDarkMode && styles.darkMutedText]}>
-                  {getAlphaAccount() ? 'Your NomNomGo account' : 'Local tester'}
-                </Text>
-              </View>
-            </View>
-            <View style={styles.accountActions}>
-              {getAlphaAccount() ? <Button label="Shared plans & RSVPs" onPress={() => { setAccountMenuOpen(false); setSharedWorkspace({}); }} compact /> : null}
-              {getAlphaAccount() ? <Button label="Friends" onPress={() => { setAccountMenuOpen(false); setAccountTab('friends'); setAccountSettingsOpen(true); }} compact /> : null}
-              <Button
-                label={getAlphaAccount() ? 'Account, invites & usage' : 'User settings'}
-                onPress={() => {
-                  setAccountMenuOpen(false);
-                  setAccountTab('account');
-                  setAccountSettingsOpen(true);
-                }}
-                compact
-              />
-              <Button
-                label={getAlphaAccount() ? 'Sign out of NomNomGo' : 'Switch user'}
-                onPress={() => {
-                  setAccountMenuOpen(false);
-                  void signOutTester();
-                }}
-                compact
-              />
-              <Button label="Close" onPress={() => setAccountMenuOpen(false)} compact />
-            </View>
-          </TouchableOpacity>
-        </TouchableOpacity>
-      </Modal>
-
-      <Modal
         visible={accountSettingsOpen}
         animationType="fade"
         transparent
@@ -8391,8 +8379,8 @@ function NomNomGoApp() {
               {(['account', 'friends'] as const).map((tab) => <TouchableOpacity
                 key={tab} accessibilityRole="tab" accessibilityLabel={tab === 'account' ? 'Account' : 'Friends'}
                 accessibilityState={{ selected: accountTab === tab }} onPress={() => setAccountTab(tab)}
-                style={{ flex: 1, minHeight: 44, padding: 12, borderRadius: 10, backgroundColor: accountTab === tab ? colors.teal : '#25323d' }}
-              ><Text style={{ color: '#fff', fontWeight: '700', textAlign: 'center' }}>{tab === 'account' ? 'Account' : 'Friends'}</Text></TouchableOpacity>)}
+                style={{ flex: 1, minHeight: 44, padding: 12, borderRadius: 10, backgroundColor: accountTab === tab ? colors.tealSoft : colors.surfaceInteractive }}
+              ><Text style={{ color: accountTab === tab ? colors.teal : colors.textPrimary, fontWeight: '700', textAlign: 'center' }}>{tab === 'account' ? 'Account' : 'Friends'}</Text></TouchableOpacity>)}
             </View> : null}
             <ScrollView key={accountTab} style={{ maxHeight: 420 }} keyboardShouldPersistTaps="handled">
             {getAlphaAccount() && accountTab === 'friends' ? <View style={{ gap: 12, marginVertical: 12 }}>
@@ -8406,6 +8394,7 @@ function NomNomGoApp() {
                 <Text style={[styles.accountSettingValue, isDarkMode && styles.darkText]}>{testerUser?.name || 'Tester'}</Text>
               </View>
             </View>
+            <AppearancePreferences />
             <AlphaAccountPanel onOpenSharedPlans={() => { setAccountSettingsOpen(false); setSharedWorkspace({}); }} />
             <View style={styles.accountActions}>
               <Button
@@ -9147,6 +9136,14 @@ function NomNomGoApp() {
                       ? undefined
                       : stop.item.address || stop.item.subtitle || cityStateLabel(cityStateForPlace(stop.item));
                     const kind = itineraryKindForStop(stop);
+                    const arrivalDate = new Date(activePlanTimelineBaseMs + itineraryArrivalMinutes(index) * 60_000);
+                    const arrivalTime = displayedArrivalTimeForStop(stop, index);
+                    arrivalDate.setHours(arrivalTime.hours, arrivalTime.minutes, 0, 0);
+                    const endDate = new Date(arrivalDate.getTime() + durationForStop(stop) * 60_000);
+                    const stopHours = typeof stop.item !== 'string' && stop.item.kind !== 'event'
+                      ? plannedHoursDisplay({ ...stop.item, ...placeHoursById[placeDetailsLookupId(stop.item)] },
+                        formatDateInput(arrivalDate), `${formatClockTime(arrivalTime)} - ${formatClockTime(clockTimeFromDate(endDate))}`)
+                      : undefined;
                     return (
                       <View
                         key={stop.key}
@@ -9164,6 +9161,7 @@ function NomNomGoApp() {
                           durationMinutes={durationForStop(stop)}
                           expanded={expandedStopKey === stop.key}
                           featureOptions={stop.featureOptions || []}
+                          hours={stopHours}
                           kind={kind}
                           location={stopLocation}
                           name={cardToName(stop.item) || `${kind === 'idea' ? 'Idea' : kind} stop`}
@@ -9292,7 +9290,7 @@ function NomNomGoApp() {
                       onPress={addIdeaStop}
                       style={[styles.itineraryIdeaAddButton, !ideaDraft.trim() && styles.itineraryControlDisabled]}
                     >
-                      <Ionicons name="arrow-forward" size={iconSizes.sm} color={colors.textInverse} />
+                      <Ionicons name="add" size={iconSizes.sm} color={colors.textInverse} />
                       <Text style={styles.itineraryIdeaAddText}>Add</Text>
                     </TouchableOpacity>
                   </View>
@@ -10036,7 +10034,7 @@ function NomNomGoApp() {
             <Button label="Search" onPress={() => runManualSearch(resultMode)} disabled={!manualSearch.trim()} compact />
           )}
         </View>
-        <Text style={[styles.preferenceSummary, isDarkMode && styles.darkMutedText]}>Search shows matches first. Choose Add, Suggest, or Use to select one.</Text>
+        <Text style={[styles.preferenceSummary, isDarkMode && styles.darkMutedText]}>Search shows matches first. Choose Add or Suggest to select one.</Text>
         {!loading && manualSearch.trim() && manualSearchSubmitted && (searchFailed || cards.length === 0) ? (
           <Button label={planningSuggestionMode ? 'Suggest this place manually' : 'Add this place manually'} onPress={() => addManualPlace(resultMode)} compact />
         ) : null}
@@ -10093,7 +10091,8 @@ function NomNomGoApp() {
           {!loading && shownCards.length > 0 && searchNotice ? (
             <Text style={styles.preferenceSummary} accessibilityLiveRegion="polite">{searchNotice}</Text>
           ) : null}
-          {!loading && shownCards.map((card, index) => {
+          {!loading && shownCards.map((rawCard, index) => {
+            const card = cardForActivePlanTiming(rawCard);
             const isSelected = !nowDiscovering && selectedCards.some((item) => cardToId(item) === card.id);
             const isSuggested = planningSuggestionMode && Boolean(activePlanningSession?.suggestions.some((suggestion) => samePlanningSuggestion(suggestion, resultMode, card)));
             const isFavorite = memory.favorites.includes(card.id);
@@ -10112,7 +10111,7 @@ function NomNomGoApp() {
             const resultActionLabel = nowDiscovering
               ? nowPlanCreating
                 ? 'Adding'
-                : 'Use'
+                : 'Add'
               : planningSuggestionMode
                 ? isSuggested
                   ? 'Suggested'
@@ -10121,14 +10120,14 @@ function NomNomGoApp() {
                   ? 'In plan'
                   : 'Add';
             const resultActionIcon: React.ComponentProps<typeof Ionicons>['name'] = nowDiscovering
-              ? 'navigate-outline'
+              ? 'add'
               : planningSuggestionMode
                 ? isSuggested
                   ? 'checkmark-done-outline'
                   : 'chatbubble-ellipses-outline'
                 : isSelected
                   ? 'checkmark-circle-outline'
-                  : 'add-outline';
+                  : 'add';
             const imageUri = cardImageUri(card);
             return (
             <View key={`${card.id}-${index}`} style={[
@@ -10205,6 +10204,8 @@ function NomNomGoApp() {
                       {card.kind === 'event' ? card.eventDateText || 'Date TBA' : card.hoursText || 'Hours unknown'}
                     </Text>
                   </View>
+                  {card.kind !== 'event' && card.operatingHours ? <Text style={[styles.address, styles.darkMutedText]}>{card.operatingHours}</Text> : null}
+                  {card.kind !== 'event' && card.hoursWarning ? <Text style={[styles.address, { color: colors.amber }]}>{card.hoursWarning}</Text> : null}
                   {card.address ? <Text style={[styles.address, styles.darkMutedText]} numberOfLines={2}>{card.address}</Text> : null}
                   {card.eventAddressConflict ? <Text style={[styles.address, styles.darkMutedText]}>Venue addresses differ between listings. Confirm on the event website.</Text> : null}
                 </View>
@@ -10332,7 +10333,16 @@ function NomNomGoApp() {
                     <Text style={styles.placeDetailAddress}>{placeDetailCard.address}</Text>
                   </View>
                 ) : null}
-                {placeDetailCard.todayHours ? <Text style={styles.placeDetailHours}>{placeDetailCard.todayHours}</Text> : null}
+                {placeDetailCard.operatingHours ? <Text style={styles.placeDetailHours}>{placeDetailCard.operatingHours}</Text> : null}
+                {placeDetailCard.hoursWarning ? <Text style={[styles.placeDetailHours, { color: colors.amber }]}>{placeDetailCard.hoursWarning}</Text> : null}
+                {placeDetailCard.kind !== 'event' ? (
+                  <View style={{ marginTop: spacing.sm }}>
+                    <Text style={styles.placeDetailHours}>Typical weekly hours</Text>
+                    {placeDetailCard.weeklyHours?.length ? placeDetailCard.weeklyHours.map((line) => (
+                      <Text key={line} style={styles.placeDetailHours}>{line}</Text>
+                    )) : <Text style={styles.placeDetailHours}>Weekly hours unavailable. Check the venue website or Maps.</Text>}
+                  </View>
+                ) : null}
                 {placeDetailCard.eventAddressConflict ? <Text style={styles.placeDetailAddress}>Venue addresses differ between listings. Confirm on the event website.</Text> : null}
               </View>
 
@@ -10820,13 +10830,19 @@ function NomNomGoApp() {
 }
 
 export default function App() {
+  return <ThemeProvider><ThemedApp /></ThemeProvider>;
+}
+
+function ThemedApp() {
+  const { theme: { colors, mode: colorMode } } = useTheme();
+  const styles = useThemedStyles(createStyles);
   const [iconsLoaded, iconsError] = useFonts(Ionicons.font);
-  useWebDocumentSurface(DARK_WEB_BACKGROUND);
+  useWebDocumentSurface();
 
   if (!iconsLoaded && !iconsError) {
     return (
       <SafeAreaProvider>
-        <StatusBar style="light" backgroundColor={colors.background} />
+        <StatusBar style={colorMode === 'dark' ? 'light' : 'dark'} backgroundColor={colors.background} />
         <SafeAreaView style={[styles.safeArea, styles.darkScreen]} edges={['top', 'bottom', 'left', 'right']}>
           <View style={styles.authCentered}>
             <ActivityIndicator color={colors.coral} />
@@ -10839,7 +10855,7 @@ export default function App() {
 
   return (
     <SafeAreaProvider>
-      <StatusBar style="light" backgroundColor={colors.background} />
+      <StatusBar style={colorMode === 'dark' ? 'light' : 'dark'} backgroundColor={colors.background} />
       <AlphaAccessGate>
         <NomNomGoApp />
       </AlphaAccessGate>
@@ -10848,7 +10864,9 @@ export default function App() {
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  const isDarkMode = true;
+  const { theme: { mode: colorMode } } = useTheme();
+  const isDarkMode = colorMode === 'dark';
+  const styles = useThemedStyles(createStyles);
   return (
     <View style={styles.section}>
       <Text style={[styles.sectionTitle, isDarkMode && styles.darkText]}>{title}</Text>
@@ -10866,7 +10884,9 @@ function ChipRow<T extends string>({
   selected: string[];
   onPress: (value: T) => void;
 }) {
-  const isDarkMode = true;
+  const { theme: { mode: colorMode } } = useTheme();
+  const isDarkMode = colorMode === 'dark';
+  const styles = useThemedStyles(createStyles);
   return (
     <View style={styles.chipWrap}>
       {items.map((item) => {
@@ -10905,7 +10925,9 @@ function PreferenceGroup<T extends string>({
   expanded?: boolean;
   onToggleExpanded?: () => void;
 }) {
-  const isDarkMode = true;
+  const { theme: { mode: colorMode } } = useTheme();
+  const isDarkMode = colorMode === 'dark';
+  const styles = useThemedStyles(createStyles);
   const limit = previewCount || items.length;
   const canExpand = items.length > limit && Boolean(onToggleExpanded);
   const visibleItems = expanded || !canExpand ? items : items.slice(0, limit);
@@ -10957,7 +10979,9 @@ function FilterTab({
   active: boolean;
   onPress: () => void;
 }) {
-  const isDarkMode = true;
+  const { theme: { mode: colorMode } } = useTheme();
+  const isDarkMode = colorMode === 'dark';
+  const styles = useThemedStyles(createStyles);
   return (
     <TouchableOpacity
       style={[styles.filterTab, isDarkMode && styles.darkChip, active && styles.filterTabActive]}
@@ -10972,7 +10996,9 @@ function FilterTab({
 }
 
 function PlanLine({ label, value }: { label: string; value: string }) {
-  const isDarkMode = true;
+  const { theme: { mode: colorMode } } = useTheme();
+  const isDarkMode = colorMode === 'dark';
+  const styles = useThemedStyles(createStyles);
   return (
     <View style={styles.planLine}>
       <Text style={[styles.planLabel, isDarkMode && styles.darkMutedText]}>{label}:</Text>
@@ -11000,7 +11026,9 @@ function PlanningSuggestionCard({
   onOpenEvent?: () => void;
   onOpenWebsite?: () => void;
 }) {
-  const isDarkMode = true;
+  const { theme: { mode: colorMode } } = useTheme();
+  const isDarkMode = colorMode === 'dark';
+  const styles = useThemedStyles(createStyles);
   const voted = suggestion.votes.includes(currentUser);
   const voteCount = unique(suggestion.votes).length;
   const item = suggestion.item;
@@ -11052,6 +11080,8 @@ function CardIconButton({
   active?: boolean;
   disabled?: boolean;
 }) {
+  const { theme: { colors } } = useTheme();
+  const styles = useThemedStyles(createStyles);
   return (
     <TouchableOpacity
       style={[
@@ -11097,6 +11127,7 @@ function Button({
   disabled?: boolean;
   compact?: boolean;
 }) {
+  const styles = useThemedStyles(createStyles);
   return (
     <ActionButton
       label={label}
@@ -11113,6 +11144,7 @@ function Button({
 }
 
 function HeaderAction({ label }: { label: string }) {
+  const styles = useThemedStyles(createStyles);
   return (
     <View style={styles.headerActionButton}>
       <Text style={styles.headerActionText}>{label}</Text>
@@ -11120,7 +11152,7 @@ function HeaderAction({ label }: { label: string }) {
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = ({ colors, semanticTones }: NomNomGoTheme) => StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: colors.background,
@@ -11134,7 +11166,6 @@ const styles = StyleSheet.create({
   },
   bottomNavigation: {
     width: '100%',
-    maxWidth: layout.contentMaxWidth,
     alignSelf: 'center',
   },
   screen: {

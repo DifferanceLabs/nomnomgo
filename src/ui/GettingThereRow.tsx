@@ -1,3 +1,4 @@
+import { useTheme, useThemedStyles } from './ThemeProvider';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import * as Location from 'expo-location';
 import { useEffect, useRef, useState } from 'react';
@@ -5,7 +6,7 @@ import { ActivityIndicator, StyleSheet, Text, TextInput, TouchableOpacity, View 
 import Storage from '../data/accountStorage';
 import { departureForArrival, formatItineraryDuration } from '../domain/itinerary';
 import type { TravelMode } from '../domain/plan';
-import { colors } from './theme';
+import { type NomNomGoTheme } from './theme';
 
 type Origin = { latitude: number; longitude: number; label?: string };
 type Journey = { source: 'current' | 'home' | 'custom'; mode: TravelMode; origin?: Origin; override?: number };
@@ -44,6 +45,8 @@ export function GettingThereRow({ tripKey, arrivalMs, initialOrigin, initialMode
   resolveOrigin: (query: string) => Promise<Origin | undefined>;
   onChange: (summary: GettingThereSummary) => void;
 }) {
+  const { theme: { colors } } = useTheme();
+  const styles = useThemedStyles(createStyles);
   const [journey, setJourney] = useState<Journey>({
     source: initialOrigin?.label && initialOrigin.label !== 'Current location' ? 'custom' : 'current',
     mode: initialMode, origin: initialOrigin,
@@ -172,10 +175,11 @@ export function GettingThereRow({ tripKey, arrivalMs, initialOrigin, initialMode
 }
 
 function Choice({ label, selected, disabled, onPress }: { label: string; selected?: boolean; disabled?: boolean; onPress: () => void }) {
+  const styles = useThemedStyles(createStyles);
   return <TouchableOpacity accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ selected, disabled }} disabled={disabled} onPress={onPress}
     style={[styles.choice, selected && styles.selected, disabled && { opacity: 0.5 }]}><Text style={styles.copy}>{label}</Text></TouchableOpacity>;
 }
-const styles = StyleSheet.create({
+const createStyles = ({ colors }: NomNomGoTheme) => StyleSheet.create({
   container: { borderLeftWidth: 2, borderColor: colors.cyan, backgroundColor: colors.surface, borderRadius: 10 },
   editingContainer: { marginLeft: 28 },
   summary: { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 12, minHeight: 58 },
@@ -184,7 +188,7 @@ const styles = StyleSheet.create({
   copy: { color: colors.textSecondary, fontSize: 13, lineHeight: 18 }, hint: { color: colors.textTertiary, fontSize: 12, lineHeight: 18 },
   editor: { padding: 12, paddingTop: 0, gap: 12 }, field: { gap: 8 }, choices: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6 },
   choice: { minHeight: 44, justifyContent: 'center', paddingHorizontal: 10, borderWidth: 1, borderColor: colors.divider, borderRadius: 8 },
-  selected: { backgroundColor: '#123b38', borderColor: colors.cyan },
+  selected: { backgroundColor: colors.cyanSoft, borderColor: colors.cyan },
   input: { minHeight: 44, padding: 10, borderWidth: 1, borderColor: colors.divider, borderRadius: 8, color: colors.textPrimary, fontSize: 15, backgroundColor: colors.background },
   minutes: { width: 65 }, error: { padding: 12, color: colors.red, fontSize: 13, lineHeight: 18 },
 });

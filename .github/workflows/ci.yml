@@ -23,6 +23,7 @@ jobs:
           node-version: '24'
           cache: npm
       - run: npm ci
+      - run: npx expo install --check
       - run: npm run verify
       - run: npm run build:web
       - run: npm run export:android
