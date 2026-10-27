@@ -5,9 +5,15 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    # Expo SDK 54 owns the React/React Native/TypeScript compatibility matrix.
+    # A SemVer-minor React Native 0.x update can require an SDK migration.
+    # allow.update-types limits routine version PRs, not security updates.
+    allow:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-patch"]
     groups:
-      compatible-updates:
-        update-types: [minor, patch]
+      routine-patches:
+        update-types: [patch]
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
