@@ -2,7 +2,7 @@
 
 Production is maintained through reviewed source changes and verified deployments.
 
-- Dependabot proposes weekly npm and GitHub Actions updates. Review major upgrades separately.
+- Dependabot proposes weekly npm patch releases and GitHub Actions updates. Routine npm minor/major upgrades, including TypeScript and the coupled Expo/React/React Native stack, require a deliberate compatibility review. The npm `allow.update-types` restriction applies only to routine version updates; security updates remain eligible regardless of SemVer level. Expo's compatibility check and the release tests still apply to every proposed change.
 - The Security workflow scans pull requests, main-branch pushes and daily schedules. High or critical dependency findings fail visibly; known findings are not silently ignored.
 - Secret scanning uses redacted output. Never publish a detected credential in an issue, log, pull request or report.
 - A passing scan is evidence for its scope, not proof of complete application security. Also check authentication, authorization, database policies, provider settings and integrations.
