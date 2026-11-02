@@ -1,0 +1,10 @@
+{
+  "name": "@differancelabs/uri-decoder-compat",
+  "version": "1.0.0",
+  "private": true,
+  "description": "CommonJS adapter for the patched upstream URI decoder",
+  "main": "index.cjs",
+  "dependencies": {
+    "decode-uri-component-patched": "npm:decode-uri-component@0.5.1"
+  }
+}
