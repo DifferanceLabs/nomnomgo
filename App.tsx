@@ -28,6 +28,9 @@ import { FriendsPanel } from './src/ui/FriendsPanel';
 import { RsvpBadge, RsvpSummary } from './src/ui/RsvpSummary';
 import { SharedPlanActivity } from './src/ui/SharedPlanActivity';
 import { PlanStarters } from './src/ui/PlanStarters';
+import type { PreviewSettings } from './src/ui/StarterPreview';
+import type { StarterOuting } from './src/domain/starterOuting';
+import { starterCandidates } from './src/domain/starterSearch';
 import { OutingFeedback } from './src/ui/OutingFeedback';
 import type { StarterSelection } from './src/domain/planStarters';
 import { HomeStart } from './src/ui/HomeStart';
@@ -65,6 +68,8 @@ import {
   departureForArrival,
   scheduleFromFirstArrival,
   defaultItineraryStopDurationMinutes,
+  driveMinutesForMiles,
+  pairingDistancePenalty,
   inferItineraryStopKind,
   snapStopDurationMinutes,
   type ItineraryStopKind,
@@ -2117,10 +2122,7 @@ function estimateDriveMinutes(from: LatLon | undefined, to: PlaceCard | string) 
   const toCoords = stopCoords(to);
   if (!from || !toCoords) return 15;
   const miles = distanceMeters(from, { lat: toCoords.latitude, lng: toCoords.longitude }) / 1609.344;
-  if (miles <= 1) return Math.max(5, Math.round(miles * 8 + 3));
-  if (miles <= 5) return Math.round(miles * 3 + 5);
-  if (miles <= 15) return Math.round(miles * 2 + 6);
-  return Math.round(miles * 1.35 + 7);
+  return driveMinutesForMiles(miles);
 }
 
 function estimateTravelMinutes(from: LatLon | undefined, to: PlaceCard | string, mode: StopTravelMode) {
@@ -2419,11 +2421,7 @@ function pairDistancePenalty(food: PlanningSuggestion, activity: PlanningSuggest
   const from = stopCoords(food.item);
   if (!from) return 8;
   const miles = distanceMeters(from, activity.item) / 1609.344;
-  if (!Number.isFinite(miles)) return 8;
-  if (miles <= 3) return -8;
-  if (miles <= 8) return 0;
-  if (miles <= 15) return 18;
-  return 40;
+  return pairingDistancePenalty(miles);
 }
 
 function buildPlanningRecommendation(session: PlanningSession): PlanningRecommendation {
@@ -3309,7 +3307,9 @@ function NomNomGoApp() {
     const now = new Date();
     return localDateClockMs(activePlanDateRange.start, now.getHours() * 60 + now.getMinutes());
   })();
-  const activePlanPeopleSummary = sharedEditor ? `${sharedEditor.participants.length} people` : (plan.invitees || []).length ? unique([currentTesterName, ...(plan.invitees || [])]).join(', ') : 'Just me';
+  const activePlanPeopleSummary = sharedEditor ? `${sharedEditor.participants.length} people`
+    : plan.starter?.people.length ? `${1 + plan.starter.people.length} people`
+    : plan.invitees?.length ? unique([currentTesterName, ...plan.invitees]).join(', ') : 'Just me';
   const activePlanTimeLabel = activePlanTimePreference || 'Time TBD';
   const activePlanDateToken = conciseDateTitle(activePlanDateWindow, activePlanDateRange.start, activePlanCustomDateRange);
   const activePlanTimingLabel = activePlanDateWindow === 'today'
@@ -3927,16 +3927,28 @@ function NomNomGoApp() {
     addLog(`Home action: ${timing}`);
   };
 
-  const submitPlanSetup = async () => {
+  const submitPlanSetup = async (outing?: StarterOuting) => {
     if (planSetupSubmitting) return;
 
-    const whereInput = normalizeCurrentLocationInput(planSetupWhere);
-    const startingInput = normalizeCurrentLocationInput(planSetupStartingLocation);
-    const isNowSetup = planSetupTiming === 'now';
+    const fromNow = Boolean(outing && nowExperienceActive && !homeOpen);
+    const isNowSetup = fromNow || planSetupTiming === 'now';
+    const whereInput = outing?.center.label || (fromNow ? '' : normalizeCurrentLocationInput(planSetupWhere));
+    const startingInput = fromNow ? routeOriginOverride : normalizeCurrentLocationInput(planSetupStartingLocation);
+    const title = fromNow ? undefined : planSetupName;
+    const intent = outing && starter ? starter.intent : planSetupIntent;
+    const participants = fromNow ? nowSelectedPeople : planSetupInvitees;
+    const chosenStops = outing?.stops.map(({slot,item,durationMinutes}) => ({
+      key: makeStopKey(slot,item), slot, item, durationMinutes,
+    }));
     const effectiveDateWindow: DateWindowId = isNowSetup ? 'today' : planSetupDateWindow;
     const effectiveTime = isNowSetup ? 'Now' : planSetupTime;
-    const initialSearchSlot: PlanSlot = planSetupIntent === 'activity' ? 'activity' : 'food';
-    const nextTimeWindow = effectiveTime === 'Now' ? undefined : defaultTimeWindowForPreference(effectiveTime);
+    const initialSearchSlot: PlanSlot = intent === 'activity' ? 'activity' : 'food';
+    const selectedWindow = effectiveTime === 'Now' ? undefined : defaultTimeWindowForPreference(effectiveTime);
+    const firstVisit = outing?.stops[0];
+    const selectedEnd = selectedWindow ? parsePlanningTimeWindow(selectedWindow)?.end : undefined;
+    const nextTimeWindow = firstVisit
+      ? timeWindowFromStartClock(clockTimeFromMinutes(firstVisit.minute), selectedEnd ? Math.max(15, selectedEnd - firstVisit.minute) : 180)
+      : selectedWindow;
     let nextCustomDateRange: CustomDateRange | null = null;
 
     if (!isNowSetup && effectiveDateWindow === 'custom') {
@@ -3957,11 +3969,12 @@ function NomNomGoApp() {
     }
 
     const nextDateRange = dateRangeKeysForWindow(effectiveDateWindow, nextCustomDateRange, new Date());
+    if (firstVisit && isNowSetup) nextDateRange.start = nextDateRange.end = firstVisit.date;
     const nextPlanType = inferPlanType({
       planDateStart: nextDateRange.start,
       planDateEnd: nextDateRange.end,
       destinationLabel: whereInput,
-      title: planSetupName,
+      title,
     });
     const nextRoadTripMode = inferRoadTripMode({
       planType: nextPlanType,
@@ -3989,9 +4002,10 @@ function NomNomGoApp() {
       } else {
         setSearchLocationOverride('');
       }
-      setSearchLocation(null);
-      setLastSearchLocationCenter(null);
-      await AsyncStorage.removeItem(STORAGE_SEARCH_LOCATION);
+      setSearchLocation(outing?.center || null);
+      setLastSearchLocationCenter(outing?.center || null);
+      if (outing) await AsyncStorage.setItem(STORAGE_SEARCH_LOCATION, JSON.stringify(outing.center));
+      else await AsyncStorage.removeItem(STORAGE_SEARCH_LOCATION);
 
       if (activePlanningSession) await saveActivePlanningSession(null);
       selectedDateWindowRef.current = effectiveDateWindow;
@@ -4009,23 +4023,25 @@ function NomNomGoApp() {
         timePreference: effectiveTime,
       };
       setSelectedMoods(['Easy']);
-      setSelectedFoods([...DEFAULT_FOOD_SELECTIONS]);
-      setSelectedActivities([...DEFAULT_ACTIVITY_SELECTIONS]);
+      if (!outing) {
+        setSelectedFoods([...DEFAULT_FOOD_SELECTIONS]);
+        setSelectedActivities([...DEFAULT_ACTIVITY_SELECTIONS]);
+      }
       setResultMode(initialSearchSlot);
       const betaRecord = await createBetaPlanRecord({
         source: isNowSetup ? 'now' : 'later',
-        title: planSetupName,
+        title,
         dateWindow: effectiveDateWindow,
         customDateRange: nextCustomDateRange,
         planDateStart: nextDateRange.start,
         planDateEnd: nextDateRange.end,
         timeWindow: nextTimeWindow,
         timePreference: effectiveTime,
-        intent: planSetupIntent,
+        intent,
         locationLabel: whereInput || startingInput || 'Current location',
         routeOriginLabel: startingInput || 'Current location',
         routeStartLocation: startingInput ? undefined : location || undefined,
-        participants: planSetupInvitees,
+        participants, stops: chosenStops, searchLocation: outing?.center,
       });
       setPlan({
         ...EMPTY_PLAN,
@@ -4035,6 +4051,7 @@ function NomNomGoApp() {
         owner: betaRecord.owner,
         intent: betaRecord.intent,
         status: 'draft',
+        stops: chosenStops || [],
         dateWindow: effectiveDateWindow,
         customDateRange: nextCustomDateRange,
         planDateStart: nextDateRange.start,
@@ -4043,11 +4060,11 @@ function NomNomGoApp() {
         timeWindow: nextTimeWindow,
         routeOriginLabel: startingInput || 'Current location',
         routeStartLocation: startingInput ? undefined : location || undefined,
-        searchLocation: undefined,
+        searchLocation: outing?.center,
         searchLocationLabel: whereInput || startingInput || 'Current location',
         roadTripMode: nextRoadTripMode,
         vehicleProfile: nextVehicleProfile,
-        invitees: planSetupInvitees,
+        invitees: participants,
         chargingStops: [],
         nearbyPlacesDuringCharging: [],
         rsvps: betaRecord.rsvps,
@@ -4063,6 +4080,7 @@ function NomNomGoApp() {
       setLoading(false);
       setHasInitiatedSearch(false);
       setPlanSetupOpen(false);
+      setNowMode('closed');
       setHomeOpen(false);
       setSavedPlansLandingOpen(false);
       setSavedPlansOpen(false);
@@ -4075,7 +4093,7 @@ function NomNomGoApp() {
       setAdvancedPreferencesOpen(false);
       scrollToPlan();
       addLog(`Plan setup complete: ${planSetupTiming}`);
-      if (whereInput) {
+      if (whereInput && !outing) {
         void (async () => {
           try {
             const center = await resolveLocationInput(whereInput);
@@ -4655,7 +4673,7 @@ function NomNomGoApp() {
     return getLocation();
   };
 
-  const searchNearbyType = async (type: string, center: LatLon, radiusMeters: number, execution = new SearchExecution(0)): Promise<PlaceCard[]> => {
+  const searchNearbyType = async (type: string | string[], center: LatLon, radiusMeters: number, execution = new SearchExecution(0)): Promise<PlaceCard[]> => {
     execution.check();
     if (!GOOGLE_API_KEY) throw new Error('Google Places API key is not loaded.');
 
@@ -4669,7 +4687,7 @@ function NomNomGoApp() {
           'X-Goog-FieldMask': FIELD_MASK,
         },
         body: JSON.stringify({
-          includedTypes: [type],
+          includedTypes: Array.isArray(type) ? type : [type],
           languageCode: 'en',
           maxResultCount: 20,
           rankPreference: 'DISTANCE',
@@ -4989,7 +5007,7 @@ function NomNomGoApp() {
 
   const ticketmasterDateParam = (date: Date) => date.toISOString().replace(/\.\d{3}Z$/, 'Z');
 
-  const searchTicketmasterEvents = async (center: LatLon, radiusMiles = TICKETMASTER_EVENT_RADIUS_MILES, execution = new SearchExecution(0)): Promise<PlaceCard[]> => {
+  const searchTicketmasterEvents = async (center: LatLon, radiusMiles = TICKETMASTER_EVENT_RADIUS_MILES, execution = new SearchExecution(0), dates?: CustomDateRange): Promise<PlaceCard[]> => {
     execution.check();
     radiusMiles = areaSearchRadius(center, radiusMiles * METERS_PER_MILE) / METERS_PER_MILE;
     if (!TICKETMASTER_API_KEY) {
@@ -4998,8 +5016,9 @@ function NomNomGoApp() {
       return [];
     }
 
-    const activeDateWindow = selectedDateWindowRef.current;
-    const { start, end } = dateWindowRange(activeDateWindow, new Date(), customDateRangeRef.current);
+    const activeDateWindow = dates ? 'custom' : selectedDateWindowRef.current;
+    const range = dates || customDateRangeRef.current;
+    const { start, end } = dateWindowRange(activeDateWindow, new Date(), range);
     const cacheKey = [
       'ticketmaster-events',
       center.latitude.toFixed(4),
@@ -5008,7 +5027,7 @@ function NomNomGoApp() {
       radiusMiles,
       EVENT_PROVIDER_CACHE_VERSION,
       activeDateWindow,
-      customDateRangeRef.current ? `${customDateRangeRef.current.start}-${customDateRangeRef.current.end}` : 'preset',
+      range ? `${range.start}-${range.end}` : 'preset',
       ticketmasterDateParam(start).slice(0, 10),
       ticketmasterDateParam(end).slice(0, 10),
     ].join('|');
@@ -5785,6 +5804,41 @@ function NomNomGoApp() {
       }
     }
   };
+
+  function starterPreviewSettings(later: boolean): PreviewSettings {
+    const where = later ? normalizeCurrentLocationInput(planSetupWhere) : '';
+    const date = later ? planSetupPreviewDateRange.start : undefined;
+    const window = later && planSetupTime !== 'Now'
+      ? parsePlanningTimeWindow(defaultTimeWindowForPreference(planSetupTime)) : undefined;
+    const center = activeSearchLocation || location;
+    return {
+      areaKey: JSON.stringify([later,where,searchLocationOverride]),
+      requestKey: JSON.stringify([later, where, date, window, searchLocationOverride, center?.latitude, center?.longitude,
+        center?.areaFocus?.placeId, center?.areaFocus?.radiusMeters, selectedFoods, selectedActivities, selectedDietary, memory.neverRecommend]),
+      timing: { date, start: window?.start, end: window?.end },
+      busy: planSetupSubmitting,
+      favorites: memory.favorites,
+      resolveCenter: async query => query || where ? resolveLocationInput(query || where) : getSearchLocation(),
+      loadAreas: async (kind, execution, base) => {
+        if (kind !== 'freeway') await recordPlacesUsage('text');
+        return findSearchAreas(GOOGLE_API_KEY || '', kind, '', base, execution);
+      },
+      search: (area, execution) => starterCandidates(starter?.intent || 'both', area, execution, {
+        food: () => searchNearbyType(typesForSelection(selectedFoods, FOOD_TYPE_MAP, DEFAULT_FOOD_TYPES),
+          area, wantsCloseBy(selectedFoods) ? CLOSE_BY_RADIUS_METERS : DEFAULT_RADIUS_METERS, execution),
+        activity: () => selectedActivities.includes('Events')
+          ? searchTicketmasterEvents(area, TICKETMASTER_EVENT_RADIUS_MILES, execution, date ? {start:date,end:date} : undefined)
+          : searchNearbyType(typesForSelection(selectedActivities, ACTIVITY_TYPE_MAP, DEFAULT_ACTIVITY_TYPES), area, DEFAULT_ACTIVITY_RADIUS_METERS, execution),
+      }, (slot, card) => {
+        if (memory.neverRecommend.includes(card.id)) return false;
+        if (slot === 'activity') return !isBadActivityResult(card) && isRelevantActivityResult(card, selectedActivities);
+        return isLikelyFoodVenue(card) && isLikelyFoodPreferenceMatch(card, selectedFoods)
+          && !(wantsNoFastFood(selectedFoods) && isLikelyFastFood(card))
+          && dietarySelections(selectedDietary).every(pref => foodDietaryMatchStrength(card, [pref]) > 0);
+      }),
+      onUse: submitPlanSetup,
+    };
+  }
 
   const renderSearchAreaPicker = () => (
     <SearchAreaPicker
@@ -6755,7 +6809,7 @@ function NomNomGoApp() {
   betaPlanRecordBuilderRef.current = betaPlanRecordFromCurrentState;
 
   useEffect(() => {
-    if (sharedEditor) return;
+    if (sharedEditor || planSetupSubmitting) return;
     const recordId = plan.sharedPlanId || activeBetaPlanId;
     if (!recordId) return;
     const base = betaPlansRef.current.find((record) => record.id === recordId);
@@ -6763,7 +6817,7 @@ function NomNomGoApp() {
     const nextRecord = betaPlanRecordBuilderRef.current?.(base);
     if (!nextRecord) return;
     void saveBetaPlans((current) => [nextRecord, ...current.filter((record) => record.id !== nextRecord.id)]);
-  }, [activeBetaPlanId, plan, sharedEditor]);
+  }, [activeBetaPlanId, plan, sharedEditor, planSetupSubmitting]);
 
   const ensureActiveBetaPlanRecord = async () => {
     const existing = plan.sharedPlanId ? betaPlansRef.current.find((record) => record.id === plan.sharedPlanId) : activeBetaPlan;
@@ -8459,7 +8513,7 @@ function NomNomGoApp() {
                 <Button label="Back" onPress={() => setPlanSetupOpen(false)} compact />
               </View>
 
-              <PlanStarters value={starter} context={planSetupPreviewType === 'trip_plan' ? 'travel' : 'local'} onChange={next=>{setStarter(next); if(next)setPlanSetupIntent(next.intent);}} />
+              <PlanStarters value={starter} preview={starterPreviewSettings(planSetupTiming==='later')} context={planSetupPreviewType === 'trip_plan' ? 'travel' : 'local'} onChange={next=>{setStarter(next); setPlanSetupIntent(next?.intent || 'both');}} />
               {planSetupTiming === 'later' ? (
                 <View style={styles.setupField}>
                   <Text style={[styles.setupLabel, isDarkMode && styles.darkMutedText]}>Plan name (optional)</Text>
@@ -8616,7 +8670,7 @@ function NomNomGoApp() {
                   placeholder="Current location, neighborhood, or city"
                   placeholderTextColor={isLightMode ? colors.textTertiary : colors.textSecondary}
                   returnKeyType="done"
-                  onSubmitEditing={submitPlanSetup}
+                  onSubmitEditing={starter ? undefined : () => void submitPlanSetup()}
                 />
               </View>
 
@@ -8663,8 +8717,8 @@ function NomNomGoApp() {
 
               <View style={styles.setupActions}>
                 <Button
-                  label={planSetupSubmitting ? 'Starting' : 'Start Planning'}
-                  onPress={submitPlanSetup}
+                  label={planSetupSubmitting ? 'Starting' : starter ? 'Plan manually' : 'Start Planning'}
+                  onPress={() => void submitPlanSetup()}
                   primary
                   disabled={planSetupSubmitting}
                 />
@@ -8692,7 +8746,7 @@ function NomNomGoApp() {
             <Button label="Back" onPress={openHome} compact />
           </View>
 
-          <PlanStarters value={starter} onChange={next=>{setStarter(next); if(next && next.intent!=='both' && nowMode!==next.intent && (starter?.id!==next.id || starter?.intent!==next.intent)) void startNowDiscovery(next.intent);}} />
+          <PlanStarters value={starter} preview={starterPreviewSettings(false)} onChange={setStarter} />
           {nowMode === 'home' ? (
             <View style={styles.nowActionGrid}>
               <TouchableOpacity

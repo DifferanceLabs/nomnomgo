@@ -2,11 +2,12 @@ export type Intent = 'food' | 'activity' | 'both';
 export type StarterSelection = { id: string; people: string[]; intent: Intent };
 export const starters: readonly { id: string; label: string; intent: Intent }[] = [
   { id: 'family-outing', label: 'Outing with the family', intent: 'both' },
-  { id: 'father-son', label: 'Father and son fun', intent: 'activity' },
+  { id: 'father-son', label: 'Father and son fun', intent: 'both' },
   { id: 'friends', label: 'Get together with friends', intent: 'both' },
 ];
 export type Signal = { starter: string | null; people: string[]; kind: string; at: string;
-  intent: Intent | null; context: string; categories: string[] | null; interpretation?: {intent?: string} };
+  intent: Intent | null; context: string; categories: string[] | null; interpretation?: {intent?: string};
+  places?: { id: string; types?: string[] | null }[] };
 export type StarterProfile = { people: {id:string;label:string}[]; signals: Signal[]; favoriteCategories: string[] };
 export const emptyProfile: StarterProfile = {people:[], signals:[], favoriteCategories:[]};
 

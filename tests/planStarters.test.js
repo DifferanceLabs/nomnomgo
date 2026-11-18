@@ -6,6 +6,7 @@ test('all choices remain accessible for a new account',()=>{
  const choices=starterChoices(emptyProfile);
  assert.deepEqual(choices.map(c=>c.label),['Outing with the family','Father and son fun','Get together with friends']);
  assert.ok(choices.every(c=>!c.people.length));
+ assert.ok(choices.every(c=>c.intent==='both'));
 });
 test('explicit feedback outweighs many saves and completions and repeated renders are pure',()=>{
  const profile={...emptyProfile,signals:[...Array(25).fill(example('plan-created')),example('plan-completed'),example('different')]};

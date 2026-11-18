@@ -4,28 +4,30 @@ import { accountRequest, getAlphaAccount } from '../data/accountStorage';
 import { emptyProfile, starterChoices, type StarterProfile, type StarterSelection } from '../domain/planStarters';
 import { ActionButton, Chip } from './primitives';
 import { useTheme } from './ThemeProvider';
+import { StarterPreview, type PreviewSettings } from './StarterPreview';
 
-export function PlanStarters({value,onChange,context='local'}:{value:StarterSelection | null;onChange:(s:StarterSelection|null)=>void;context?:string}) {
+export function PlanStarters({value,onChange,context='local',preview}:{value:StarterSelection | null;onChange:(s:StarterSelection|null)=>void;context?:string;preview:PreviewSettings}) {
   const {theme:{colors}}=useTheme();
-  const [profile,setProfile]=useState(emptyProfile);
+  const [loaded,setLoaded]=useState<{account?:string;profile:StarterProfile}>();
   const [name,setName]=useState('');
   const [message,setMessage]=useState('');
   const [busy,setBusy]=useState(false);
   const account=getAlphaAccount()?.id;
+  const profile=loaded && loaded.account===account ? loaded.profile : emptyProfile;
   useEffect(()=>{
     let active=true;
-    if (account) accountRequest<StarterProfile>({action:'learn.profile'}).then(p=>{if(active)setProfile(p);})
+    if (account) accountRequest<StarterProfile>({action:'learn.profile'}).then(p=>{if(active)setLoaded({account,profile:p});})
       .catch(()=>{if(active)setMessage('History is unavailable. You can still choose a starter.');});
     return ()=>{active=false;};
   },[account]);
   const row={flexDirection:'row' as const,flexWrap:'wrap' as const,gap:6};
-  const choices=starterChoices(profile,context,value?.people);
+  const choices=starterChoices(profile,context);
   async function addCompanion() {
     if (!name.trim() || busy || !value) return;
     setBusy(true);
     try {
       const next=await accountRequest<StarterProfile>({action:'learn.companion',label:name.trim()});
-      setProfile(next);
+      setLoaded({account,profile:next});
       const person=next.people.find(p=>p.label===name.trim());
       if (person) onChange({...value,people:[...new Set([...value.people,person.id])]});
       setName(''); setMessage('');
@@ -36,7 +38,8 @@ export function PlanStarters({value,onChange,context='local'}:{value:StarterSele
     <Text style={{fontWeight:'700',color:colors.textPrimary}}>Plan starters</Text>
     <View style={row}>{choices.map(s=><Chip key={s.id} label={s.label} selected={value?.id===s.id}
       onPress={()=>onChange(value?.id===s.id ? null : {id:s.id,people:s.people,intent:s.intent})}/>)}</View>
-    {value && <><Text style={{color:colors.textSecondary}}>Plan for</Text><View style={row}>{(['food','activity','both'] as const).map(intent=>
+    {value && <><StarterPreview key={JSON.stringify([account,preview.areaKey])} {...preview} value={value} profile={profile} context={context}/>
+      <Text style={{color:colors.textSecondary}}>Plan for</Text><View style={row}>{(['food','activity','both'] as const).map(intent=>
       <Chip key={intent} label={{food:'Food',activity:'Activities',both:'Food and activities'}[intent]} selected={value.intent===intent} onPress={()=>onChange({...value,intent})}/>)}</View>
       {account && <><Text style={{color:colors.textSecondary}}>People · private until you choose to share</Text>
         <View style={row}><Chip label="Just me" selected={!value.people.length} onPress={()=>onChange({...value,people:[]})}/>

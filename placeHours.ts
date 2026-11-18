@@ -89,6 +89,7 @@ export function plannedHoursDisplay(hours: PlaceHours, dateKey: string, timeWind
   const previousVisit = hoursForVisit((date) => date < dateKey ? lineForDate(date) : undefined, dateKey, timeWindow);
   const hoursLines = [previousVisit.availability !== 'unknown' && previousVisit.availability !== 'closed' ? previous : undefined, todayHours].filter(Boolean);
   return {
+    availability,
     isOpen: availability === 'open' ? true : availability === 'closed' ? false : null,
     hoursText: availability === 'open' ? 'Open for planned visit'
       : availability === 'partial' ? 'Partly open during visit'

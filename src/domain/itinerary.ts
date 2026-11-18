@@ -3,6 +3,20 @@ export type ItineraryStopKind = 'food' | 'activity' | 'dessert' | 'idea';
 export const DURATION_STEP_MINUTES = 15;
 export const MIN_STOP_DURATION_MINUTES = 15;
 
+export function driveMinutesForMiles(miles: number) {
+  if (miles <= 1) return Math.max(5, Math.round(miles * 8 + 3));
+  if (miles <= 5) return Math.round(miles * 3 + 5);
+  if (miles <= 15) return Math.round(miles * 2 + 6);
+  return Math.round(miles * 1.35 + 7);
+}
+
+export function pairingDistancePenalty(miles: number) {
+  if (!Number.isFinite(miles)) return 8;
+  if (miles <= 3) return -8;
+  if (miles <= 8) return 0;
+  return miles <= 15 ? 18 : 40;
+}
+
 export const DEFAULT_STOP_DURATION_MINUTES = {
   coffee: 30,
   dessert: 30,

@@ -7,6 +7,7 @@ import { isSearchCancelled, SearchExecution } from '../domain/searchExecution';
 import { type NomNomGoTheme } from './theme';
 
 type Props = {
+  forPreview?: boolean;
   location: AreaLocation | null;
   contextKey: string;
   pendingKind?: AreaKind | 'whole';
@@ -15,7 +16,7 @@ type Props = {
 };
 
 /** The inline chooser contains filter values; only selecting one updates main results. */
-export function SearchAreaPicker({ location, contextKey, pendingKind, onLoad, onSelect }: Props) {
+export function SearchAreaPicker({ location, contextKey, pendingKind, onLoad, onSelect, forPreview }: Props) {
   const { theme: { colors } } = useTheme();
   const styles = useThemedStyles(createStyles);
   const [openKind, setOpenKind] = useState<AreaKind | null>(null);
@@ -100,7 +101,7 @@ export function SearchAreaPicker({ location, contextKey, pendingKind, onLoad, on
           {busy ? <View style={styles.heading}><ActivityIndicator size="small" color={colors.teal} /><Text style={styles.hint}>Finding local choices…</Text></View> : null}
           {error ? <View style={styles.heading}><Text style={[styles.hint, styles.grow]} accessibilityLiveRegion="polite">{error}</Text><TouchableOpacity accessibilityRole="button" onPress={() => { void load(openKind); }} style={styles.chip}><Text style={styles.chipText}>Retry</Text></TouchableOpacity></View> : null}
           {options ? <>
-            <Text style={styles.hint}>Near {options.base.label || 'your search location'}. Select one to refresh the main results.</Text>
+            <Text style={styles.hint}>Near {options.base.label || 'your search location'}. {forPreview ? 'Choose an area for the suggested outing.' : 'Select one to refresh the main results.'}</Text>
             {!options.matches.length ? <Text style={styles.hint} accessibilityLiveRegion="polite">No nearby choices found. Try another filter or change your search city.</Text> : null}
             <ScrollView style={styles.options} nestedScrollEnabled keyboardShouldPersistTaps="handled">
               {options.matches.map((match) => (
@@ -121,7 +122,7 @@ export function SearchAreaPicker({ location, contextKey, pendingKind, onLoad, on
       <Text style={styles.hint}>
         {pendingKind ? 'Updating main results…' : focus ? `Showing results ${focus.corridor ? 'along' : 'near'} ${location.label}.` : 'Choose a filter, then a location to update the main results.'}
       </Text>
-      {focus?.kind === 'supercharger' ? <Text style={styles.hint}>Adding a place also adds this Supercharger to your plan.</Text> : null}
+      {!forPreview && focus?.kind === 'supercharger' ? <Text style={styles.hint}>Adding a place also adds this Supercharger to your plan.</Text> : null}
       {focus ? (
         <View style={styles.chips}>
           <Text style={styles.radiusLabel}>{focus.corridor ? 'From freeway' : 'Within'}</Text>

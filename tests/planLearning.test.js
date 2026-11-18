@@ -57,6 +57,8 @@ test('publication retains identity; revoked and unrelated members have no learni
  await call('nng_learning',b,'learn.feedback',{sharedId,value:'different'});
  const profile=await call('nng_learning',b,'learn.profile');
  assert.deepEqual(profile.signals.map(s=>s.kind),['different']);assert.deepEqual(profile.people,[]);assert.equal(profile.signals[0].starter,null);
+ assert.ok(profile.signals[0].places.some(place=>place.id==='p2'));
+ assert.ok(profile.signals[0].places.every(place=>Object.keys(place).every(key=>['id','types'].includes(key))));
  assert.ok(!(await call('nng_learning',a,'learn.profile')).signals.some(s=>s.kind==='different'));
  const fav=await call('nng_learning',b,'learn.feedback',{sharedId,value:'favorite',placeId:'p2'});
  assert.deepEqual(JSON.parse(fav.memory.value).favorites,['p2']);
