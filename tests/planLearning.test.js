@@ -89,3 +89,24 @@ test('missing keys, refusals, invalid model updates and outages leave determinis
  assert.equal(result.status,'retry');
  assert.throws(()=>learningData('learn.complete',{sourceKey,actuals:{durationMinutes:-3}}));
 });
+
+test('publishing a configured empty draft captures starter context privately and only once',async()=>{
+ const privateDraft={...record,id:'empty-then-shared',stops:[],planType:'trip_plan'};
+ await save([],privateDraft);
+ assert.equal((await query('select * from nng_outings where source_key=$1',[privateDraft.id])).length,0);
+ const details={dateStart:'2026-12-20',dateEnd:'2026-12-21',intent:'food',title:'Weekend',stops:[]};
+ const publish=async()=>call('nng_shared',a,'plan.create',{sourceKey:privateDraft.id,details});
+ const published=await publish(); await publish();
+ assert.equal(published.plan.starter,undefined);
+ assert.ok(!JSON.stringify(published).includes(companion));
+ const rows=await query('select e.evidence from nng_learning_events e join nng_outings o on o.id=e.outing_id where o.source_key=$1',[privateDraft.id]);
+ assert.equal(rows.length,1);assert.equal(rows[0].evidence.context,'travel');
+ assert.equal(rows[0].evidence.starter,'family-outing');assert.deepEqual(rows[0].evidence.people,[companion]);
+});
+test('removing all selected stops preserves the change and does not create a new outing',async()=>{
+ const extra={id:'all-removed'};
+ await save([item],extra);await save([],extra);
+ const rows=await query('select kind,evidence from nng_learning_events e join nng_outings o on o.id=e.outing_id where o.source_key=$1 order by e.created_at',[extra.id]);
+ assert.deepEqual(rows.map(r=>r.kind),['plan-created','choices-updated']);
+ assert.deepEqual(rows[1].evidence.stops,[]);assert.deepEqual(rows[1].evidence.replaced.map(s=>s.id),['p1']);
+});
