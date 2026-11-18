@@ -46,7 +46,7 @@ test('automatic activities require an evidenced experience even for highly rated
   const closed = candidate('Closed museum', 'activity', 0, {types:['museum'],businessStatus:'CLOSED_TEMPORARILY'});
   assert.deepEqual(options({pool:[bare,monument,closed]}),[]);
   assert.equal(options({pool:[bare,monument,trails,closed]})[0].stops[0].experience,'Walk the trails');
-  const cityPark=candidate('City park','activity',0.01,{types:['park'],editorialSummary:{text:'Urban park with a replica and museum.'}});
+  const cityPark=candidate('City park','activity',0.01,{types:['park'],editorialSummary:{text:'Urban park with a replica & museum.'}});
   assert.equal(options({pool:[cityPark]})[0].stops[0].experience,'Visit the on-site museum');
   const reviewed = {...trails,review:{id:trails.item.id,slot:'activity',quality:0,feature:''}};
   assert.deepEqual(options({pool:[reviewed]}),[]);

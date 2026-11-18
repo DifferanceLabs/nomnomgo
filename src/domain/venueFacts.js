@@ -7,7 +7,7 @@ const experiences = [
     'onsite_museum',
     'Visit the on-site museum',
     [],
-    /\b(?:with|features?|includes?|houses?|and|&) (?:a |an |the )?(?:[\w-]+ ){0,2}museum\b/i,
+    /\b(?:with|features?|includes?|houses?|and) (?:a |an |the )?(?:[\w-]+ ){0,2}museum\b/i,
   ],
   [
     'public_art',
@@ -82,6 +82,8 @@ function venueFacts(slot, place) {
   const types = new Set([place.primaryType, ...(place.types || [])]);
   const sentences = String(place.editorialSummary?.text || '')
     .slice(0, 500)
+    .replace(/&/g, ' and ')
+    .replace(/\s+/g, ' ')
     .split(/[.!?;]/)
     .filter(
       (line) =>
