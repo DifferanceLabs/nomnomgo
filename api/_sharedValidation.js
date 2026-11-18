@@ -48,6 +48,7 @@ function details(value, includeStops, preserveIds = false) {
     result.stops = value.stops.map((stop, index) => {
       const result = { id: `initial-${index}`, planId: '', position: index, place: place(stop.place) };
       if (preserveIds) result.id = text(stop.id, 100);
+      if (stop.automatic === true) result.automatic = true;
       if (stop.kind) { need(['food', 'activity', 'dessert', 'idea'].includes(stop.kind)); result.kind = stop.kind; }
       if (stop.travelMode) { need(['car', 'walk', 'bike', 'train', 'plane'].includes(stop.travelMode)); result.travelMode = stop.travelMode; }
       if (stop.arrivalTime) result.arrivalTime = text(stop.arrivalTime, 100);

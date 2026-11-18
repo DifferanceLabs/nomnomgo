@@ -40,6 +40,7 @@ export type PlanSuggestion = {
 };
 
 export type PlanStop = {
+  automatic?: boolean;
   kind?: 'food' | 'activity' | 'dessert' | 'idea';
   id: string;
   planId: string;

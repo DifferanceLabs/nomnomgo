@@ -86,3 +86,20 @@ export default {
   setItem: (key: string, value: string) => write(key, value),
   removeItem: (key: string) => write(key, null),
 };
+
+type FeedbackState = { completed:boolean; owner:boolean; feedback:'more'|'different'|null;
+  stops:{id:string;title:string;favorite:boolean}[]; memory?:Entry|null };
+
+// Serialize favorite feedback with the same versioned account storage queue.
+export function outingRequest(body:Record<string,unknown>):Promise<FeedbackState> {
+  const owner=account?.id;
+  const operation=queue.then(async()=>{
+    if (!owner || owner!==account?.id || saveError) throw new Error(saveError || 'Sign in to continue.');
+    const result=await accountRequest<FeedbackState>(body);
+    if (owner!==account?.id) throw new Error('The active account changed.');
+    if (result.memory) state.thingsNearbyGooglePlacesMemoryV1=result.memory;
+    return result;
+  });
+  queue=operation.then(()=>undefined,()=>undefined);
+  return operation;
+}

@@ -6,6 +6,7 @@ dist/
 .route-import-test-build/
 .env
 .env.*
+!.env.example
 *.err
 *.out
 *.log

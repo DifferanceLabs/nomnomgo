@@ -27,13 +27,16 @@ import { AlphaAccountPanel } from './src/ui/AlphaAccountPanel';
 import { FriendsPanel } from './src/ui/FriendsPanel';
 import { RsvpBadge, RsvpSummary } from './src/ui/RsvpSummary';
 import { SharedPlanActivity } from './src/ui/SharedPlanActivity';
+import { PlanStarters } from './src/ui/PlanStarters';
+import { OutingFeedback } from './src/ui/OutingFeedback';
+import type { StarterSelection } from './src/domain/planStarters';
 import { HomeStart } from './src/ui/HomeStart';
 import { SharedPlansScreen } from './src/ui/SharedPlansScreen';
 import { PlanWorkspaceHeader } from './src/ui/PlanWorkspaceHeader';
 import { GettingThereRow, type GettingThereSummary } from './src/ui/GettingThereRow';
 import { planLocationLabel } from './src/domain/planLocation';
 import { startForegroundRefresh } from './src/data/foregroundRefresh';
-import { changeSharedItinerary, createSharedPlan, getSharedPlan, newerSharedPlan, sharedItinerarySignature, sharedPlanStopKind, planIdFromUrl, planDateRangeLabel, type SharedPlan, type SharedPlanDraft } from './src/data/sharedPlans';
+import { changeSharedItinerary, createSharedPlan, getSharedPlan, newerSharedPlan, sharedItinerarySignature, sharedPlanStopKind, sharedPlanUrl, planIdFromUrl, planDateRangeLabel, type SharedPlan, type SharedPlanDraft } from './src/data/sharedPlans';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import Sortable, { type DropIndicatorComponentProps, type SortableFlexDragEndParams } from 'react-native-sortables';
 import Animated, { useAnimatedRef, useAnimatedStyle } from 'react-native-reanimated';
@@ -180,6 +183,7 @@ type PlaceCard = PlaceHours & {
 };
 
 type ItineraryStop = {
+  automatic?: boolean;
   key: string;
   slot: PlanSlot;
   item: PlaceCard | string;
@@ -192,6 +196,7 @@ type ItineraryStop = {
 };
 
 type ConfirmedPlan = {
+  starter?: StarterSelection;
   stops: ItineraryStop[];
   title?: string;
   sharedPlanId?: string;
@@ -266,6 +271,9 @@ type PeoplePickerGroup = {
 };
 
 type SavedPlan = {
+  starter?: StarterSelection;
+  outingKey?: string;
+  learningVersion?: number;
   id: string;
   title: string;
   stops: ItineraryStop[];
@@ -346,6 +354,9 @@ type PlanningSession = {
 };
 
 type BetaPlanRecord = {
+  starter?: StarterSelection;
+  planType?: PlanType;
+  learningVersion?: number;
   id: string;
   owner: string;
   participants: string[];
@@ -1086,7 +1097,7 @@ function searchSuperchargerStop(center: AreaLocation | null | undefined): Itiner
   const charger = superchargerForSearchArea(center);
   if (!charger) return undefined;
   const stop: ItineraryStop = {
-    key: makeStopKey('activity', charger), slot: 'activity', item: charger, visualType: 'activity',
+    automatic: true, key: makeStopKey('activity', charger), slot: 'activity', item: charger, visualType: 'activity',
     featureOptions: [], selectedFeatures: [], featuresExpanded: false,
   };
   stop.durationMinutes = defaultStopDurationMinutes(stop);
@@ -2598,7 +2609,7 @@ function betaPlanFinalLabel(plan: BetaPlanRecord) {
 
 function publicBetaPlanSnapshot(plan: BetaPlanRecord): BetaPlanRecord {
   return {
-    ...plan,
+    ...plan, starter: undefined,
     suggestions: plan.suggestions.slice(0, 30),
     stops: plan.stops.slice(0, 8),
   };
@@ -2670,6 +2681,7 @@ function betaPlanShareMessage(plan: BetaPlanRecord) {
 function confirmedPlanFromBetaRecord(record: BetaPlanRecord): ConfirmedPlan {
   return {
     title: record.title,
+    starter: record.starter,
     sharedPlanId: record.id,
     owner: record.owner,
     invitees: record.participants.filter((name) => name !== record.owner),
@@ -2950,7 +2962,7 @@ function confirmedPlanFromSharedPlan(shared: SharedPlan): ConfirmedPlan {
     const arrival = stop.arrivalTime ? parseClockMinutes(stop.arrivalTime) : undefined;
     if (arrival !== undefined) lockedArrivalTimes[stop.id] = clockTimeFromMinutes(arrival);
     return {
-      key: stop.id, slot, visualType: kind,
+      key: stop.id, slot, automatic: stop.automatic, visualType: kind,
       item: { id: stop.place.providerId || stop.id, title: stop.place.title, subtitle: stop.place.subtitle || '',
         address: stop.place.address, lat: stop.place.latitude, lng: stop.place.longitude,
         kind: stop.place.provider === 'ticketmaster' ? 'event' : 'place', websiteUri: stop.place.sourceUrl,
@@ -3107,6 +3119,7 @@ function NomNomGoApp() {
   const [homeOpen, setHomeOpen] = useState(true);
   const [savedPlansLandingOpen, setSavedPlansLandingOpen] = useState(false);
   const [savedPlansNavigationSource, setSavedPlansNavigationSource] = useState<'plans' | 'saved'>('saved');
+  const [starter,setStarter] = useState<StarterSelection|null>(null);
   const [planSetupOpen, setPlanSetupOpen] = useState(false);
   const [planSetupTiming, setPlanSetupTiming] = useState<'now' | 'later'>('now');
   const [planSetupName, setPlanSetupName] = useState('');
@@ -3746,6 +3759,8 @@ function NomNomGoApp() {
     });
     const record: BetaPlanRecord = {
       id: `beta-plan-${stamp}`,
+      starter: starter || undefined, learningVersion: 1,
+      planType: inferPlanType({planDateStart,planDateEnd,destinationLabel:locationLabel,title}),
       owner: currentTesterName,
       participants: unique([currentTesterName, ...(participants || [])]),
       title: resolvedTitle,
@@ -3774,6 +3789,7 @@ function NomNomGoApp() {
   };
 
   const startNowPlan = async () => {
+    setStarter(null);
     closeTransientSurfaces();
     if (activePlanningSession) await saveActivePlanningSession(null);
     if (activeBetaPlanId) await saveActiveBetaPlan(null);
@@ -3794,7 +3810,6 @@ function NomNomGoApp() {
     setResultMode('food');
     setSelectedFoods([...DEFAULT_FOOD_SELECTIONS]);
     setSelectedActivities([...DEFAULT_ACTIVITY_SELECTIONS]);
-    setSelectedDietary([...DEFAULT_DIETARY_SELECTIONS]);
     setPlan(EMPTY_PLAN);
     setPlanTimes({});
     setArrivalTimes({});
@@ -3843,7 +3858,6 @@ function NomNomGoApp() {
     if (slot === 'food') {
       setNowFoodCategory(nextCategory);
       setSelectedFoods(foodSelections);
-      setSelectedDietary([...DEFAULT_DIETARY_SELECTIONS]);
     } else {
       setNowActivityCategory(nextCategory);
       setSelectedActivities(activitySelections);
@@ -3852,7 +3866,7 @@ function NomNomGoApp() {
     await searchForSlot(slot, true, false, undefined, {
       foodSelections,
       activitySelections,
-      dietarySelections: [...DEFAULT_DIETARY_SELECTIONS],
+      dietarySelections: [...selectedDietary],
     }, undefined, useDeviceLocation);
   };
 
@@ -3894,6 +3908,7 @@ function NomNomGoApp() {
     const nextTime = timing === 'now' ? 'Now' : 'Dinner';
     const defaultCustomStart = formatDateInput(new Date());
     const defaultCustomEnd = formatDateInput(addLocalDays(new Date(), 6));
+    setStarter(null);
     setPlanSetupTiming(timing);
     setPlanSetupName('');
     setPlanSetupIntent('both');
@@ -3920,7 +3935,7 @@ function NomNomGoApp() {
     const isNowSetup = planSetupTiming === 'now';
     const effectiveDateWindow: DateWindowId = isNowSetup ? 'today' : planSetupDateWindow;
     const effectiveTime = isNowSetup ? 'Now' : planSetupTime;
-    const initialSearchSlot: PlanSlot = isNowSetup && planSetupIntent === 'activity' ? 'activity' : 'food';
+    const initialSearchSlot: PlanSlot = planSetupIntent === 'activity' ? 'activity' : 'food';
     const nextTimeWindow = effectiveTime === 'Now' ? undefined : defaultTimeWindowForPreference(effectiveTime);
     let nextCustomDateRange: CustomDateRange | null = null;
 
@@ -3996,7 +4011,6 @@ function NomNomGoApp() {
       setSelectedMoods(['Easy']);
       setSelectedFoods([...DEFAULT_FOOD_SELECTIONS]);
       setSelectedActivities([...DEFAULT_ACTIVITY_SELECTIONS]);
-      setSelectedDietary([...DEFAULT_DIETARY_SELECTIONS]);
       setResultMode(initialSearchSlot);
       const betaRecord = await createBetaPlanRecord({
         source: isNowSetup ? 'now' : 'later',
@@ -4016,6 +4030,7 @@ function NomNomGoApp() {
       setPlan({
         ...EMPTY_PLAN,
         title: betaRecord.title,
+        starter: betaRecord.starter,
         sharedPlanId: betaRecord.id,
         owner: betaRecord.owner,
         intent: betaRecord.intent,
@@ -4075,7 +4090,7 @@ function NomNomGoApp() {
             await searchForSlot(initialSearchSlot, true, false, stampedCenter, {
               foodSelections: [...DEFAULT_FOOD_SELECTIONS],
               activitySelections: [...DEFAULT_ACTIVITY_SELECTIONS],
-              dietarySelections: [...DEFAULT_DIETARY_SELECTIONS],
+              dietarySelections: [...selectedDietary],
             });
           } catch (err) {
             setSearchNotice('The plan is ready, but suggestions could not be loaded. Try Search Food or Search Activities.');
@@ -4203,7 +4218,7 @@ function NomNomGoApp() {
           const seenSavedPlans = new Set<string>();
           const dedupedSavedPlans = parsedSavedPlans.filter((saved) => {
             const contentKey = JSON.stringify({
-              source: saved.source,
+              source: saved.source, outingKey: saved.outingKey,
               title: saved.title,
               owner: saved.owner,
               sharedBy: saved.sharedBy,
@@ -6577,7 +6592,7 @@ function NomNomGoApp() {
               provider: item.kind === 'event' ? 'ticketmaster' as const : 'google_places' as const,
               providerId: item.id, title: item.title, subtitle: item.subtitle, address: item.address,
               latitude: item.lat, longitude: item.lng, sourceUrl: item.websiteUri || item.eventUrl }),
-            durationMinutes: durationForStop(stop), travelMode: stop.travelMode,
+            automatic: stop.automatic, durationMinutes: durationForStop(stop), travelMode: stop.travelMode,
             arrivalTime: formatClockTime(displayedArrivalTimeForStop(stop, index)) };
         }),
       };
@@ -6664,7 +6679,7 @@ function NomNomGoApp() {
   const planInvitees = plan.invitees || [];
   const currentContextSignature = currentPlanContext();
   const savedPlanContentSignature = (saved: SavedPlan) => JSON.stringify({
-    title: saved.title,
+    title: saved.title, outingKey: saved.outingKey,
     planDateStart: dateRangeForSavedPlan(saved).start,
     planDateEnd: dateRangeForSavedPlan(saved).end,
     timeWindow: saved.timeWindow || '',
@@ -6680,7 +6695,7 @@ function NomNomGoApp() {
     })),
   });
   const currentPlanContentSignature = JSON.stringify({
-    title: planTitle,
+    title: planTitle, outingKey: plan.sharedPlanId,
     planDateStart: currentContextSignature.planDateStart,
     planDateEnd: currentContextSignature.planDateEnd,
     timeWindow: currentContextSignature.timeWindow || '',
@@ -6711,7 +6726,8 @@ function NomNomGoApp() {
     const context = currentPlanContext(plan.stops);
     const status: BetaPlanRecord['status'] = plan.status === 'locked' ? 'finalized' : base?.status || 'planning';
     return {
-      id: base?.id || plan.sharedPlanId || `beta-plan-${stamp}`,
+      id: plan.sharedPlanId || base?.id || `beta-plan-${stamp}`,
+      learningVersion: 1, starter: plan.starter || base?.starter, planType: context.planType,
       owner: base?.owner || plan.owner || currentTesterName,
       participants: unique([...(base?.participants || []), currentTesterName, ...(plan.invitees || [])]),
       title: plan.title?.trim() || base?.title || titleForPlanStops(plan.stops),
@@ -6739,17 +6755,18 @@ function NomNomGoApp() {
   betaPlanRecordBuilderRef.current = betaPlanRecordFromCurrentState;
 
   useEffect(() => {
-    const recordId = activeBetaPlanId || plan.sharedPlanId;
+    if (sharedEditor) return;
+    const recordId = plan.sharedPlanId || activeBetaPlanId;
     if (!recordId) return;
     const base = betaPlansRef.current.find((record) => record.id === recordId);
     if (!base) return;
     const nextRecord = betaPlanRecordBuilderRef.current?.(base);
     if (!nextRecord) return;
     void saveBetaPlans((current) => [nextRecord, ...current.filter((record) => record.id !== nextRecord.id)]);
-  }, [activeBetaPlanId, plan]);
+  }, [activeBetaPlanId, plan, sharedEditor]);
 
   const ensureActiveBetaPlanRecord = async () => {
-    const existing = activeBetaPlan || betaPlansRef.current.find((record) => record.id === plan.sharedPlanId) || null;
+    const existing = plan.sharedPlanId ? betaPlansRef.current.find((record) => record.id === plan.sharedPlanId) : activeBetaPlan;
     const nextRecord = betaPlanRecordFromCurrentState(existing);
     await saveBetaPlans((current) => [nextRecord, ...current.filter((record) => record.id !== nextRecord.id)]);
     if (activeBetaPlanId !== nextRecord.id) await saveActiveBetaPlan(nextRecord.id);
@@ -6796,7 +6813,7 @@ function NomNomGoApp() {
         planDateEnd: nextDateRange.end,
         timeWindow: nextTimeWindow,
         timePreference: 'Now',
-        intent: 'both',
+        intent: starter?.intent || 'both',
         locationLabel: selectedLocationLabel,
         searchLocation: selectedSearchLocation,
         routeOriginLabel: startingLocationLabel,
@@ -6814,9 +6831,10 @@ function NomNomGoApp() {
       setPlan({
         ...EMPTY_PLAN,
         title: nextTitle,
+        starter: betaRecord.starter,
         sharedPlanId: betaRecord.id,
         owner: betaRecord.owner,
-        intent: 'both',
+        intent: starter?.intent || 'both',
         status: 'draft',
         stops: nextStops,
         dateWindow: effectiveDateWindow,
@@ -7130,6 +7148,7 @@ function NomNomGoApp() {
     });
     return {
       id: `plan-${stamp}`,
+      learningVersion: 1, outingKey: plan.sharedPlanId || plan.savedPlanId || `plan-${stamp}`, starter: plan.starter,
       title: options.title || plan.title || titleForPlanStops(stops),
       stops: savedStops,
       planTimes: savedPlanTimes,
@@ -7169,12 +7188,12 @@ function NomNomGoApp() {
     const signature = savedPlanContentSignature(saved);
     await saveSavedPlans((current) => [
       saved,
-      ...current.filter((item) => item.source !== 'saved' || savedPlanContentSignature(item) !== signature),
+      ...current.filter((item) => item.source !== 'saved' || (item.outingKey !== saved.outingKey && savedPlanContentSignature(item) !== signature)),
     ]);
     setPlan((prev) => ({
       ...prev,
       ...currentPlanContext(),
-      savedPlanId: saved.id,
+      savedPlanId: saved.id, sharedPlanId: saved.outingKey,
     }));
     addLog(`Plan saved: ${saved.title}`);
   };
@@ -7240,8 +7259,11 @@ function NomNomGoApp() {
     } else if (saved.routeOriginLabel) {
       setRouteOriginOverride(saved.routeOriginLabel === 'Current location' ? '' : saved.routeOriginLabel);
     }
+    const restoredKey = saved.outingKey || saved.id;
+    void saveActiveBetaPlan(betaPlansRef.current.some(record => record.id === restoredKey) ? restoredKey : null);
     setPlan({
       stops: loadedStops,
+      sharedPlanId: saved.outingKey || saved.id, starter: saved.starter,
       title: saved.title,
       sourceUrl: saved.sourceUrl,
       routeProvider: saved.routeProvider,
@@ -7656,7 +7678,7 @@ function NomNomGoApp() {
             providerId: stop.item.id, title: stop.item.title, address: stop.item.address,
             latitude: stop.item.lat, longitude: stop.item.lng,
           },
-          travelMode: stop.travelMode, durationMinutes: durationForStop(stop),
+          automatic: stop.automatic, travelMode: stop.travelMode, durationMinutes: durationForStop(stop),
           arrivalTime: formatClockTime(displayedArrivalTimeForStop(stop, index)),
         })),
       };
@@ -7669,8 +7691,8 @@ function NomNomGoApp() {
 
   const addActiveBetaPlanToCalendar = async () => {
     try {
-      const record = await ensureActiveBetaPlanRecord();
-      const shareUrl = betaPlanShareUrl(record);
+      const record = sharedEditor ? {...betaPlanRecordFromCurrentState(), id:sharedEditor.id} : await ensureActiveBetaPlanRecord();
+      const shareUrl = sharedEditor ? sharedPlanUrl(sharedEditor.id) : getAlphaAccount() ? undefined : betaPlanShareUrl(record);
       const ics = betaPlanIcs(record, shareUrl);
       const fileName = safeCalendarFileName(record.title);
       if (Platform.OS === 'web' && typeof document !== 'undefined' && typeof URL !== 'undefined' && typeof Blob !== 'undefined') {
@@ -7964,7 +7986,7 @@ function NomNomGoApp() {
   const recentPeople = quickShareUsers.slice(0, 2);
   const favoritePeople = quickShareUsers.filter((user) => !recentPeople.includes(user)).slice(0, 3);
   const planSetupPeopleSummary = planSetupInvitees.length ? unique([currentTesterName, ...planSetupInvitees]).join(', ') : 'Just me';
-  const nowPeopleSummary = nowSelectedPeople.length ? unique([currentTesterName, ...nowSelectedPeople]).join(', ') : 'Just me';
+  const nowPeopleSummary = starter?.people.length ? `${starter.people.length + 1} people` : nowSelectedPeople.length ? unique([currentTesterName, ...nowSelectedPeople]).join(', ') : 'Just me';
   const placeDetailIsSelected = Boolean(placeDetailCard && !nowDiscovering && plan.stops.some(
     (stop) => stop.slot === resultMode && cardToId(stop.item) === placeDetailCard.id,
   ));
@@ -8437,6 +8459,7 @@ function NomNomGoApp() {
                 <Button label="Back" onPress={() => setPlanSetupOpen(false)} compact />
               </View>
 
+              <PlanStarters value={starter} context={planSetupPreviewType === 'trip_plan' ? 'travel' : 'local'} onChange={next=>{setStarter(next); if(next)setPlanSetupIntent(next.intent);}} />
               {planSetupTiming === 'later' ? (
                 <View style={styles.setupField}>
                   <Text style={[styles.setupLabel, isDarkMode && styles.darkMutedText]}>Plan name (optional)</Text>
@@ -8465,6 +8488,7 @@ function NomNomGoApp() {
                           active={planSetupIntent === intent}
                           onPress={() => {
                             setPlanSetupIntent(intent);
+                            if (starter) setStarter({...starter,intent});
                             setResultMode(intent === 'activity' ? 'activity' : 'food');
                             addLog(`Now setup intent selected: ${planningIntentLabel(intent)}`);
                           }}
@@ -8611,7 +8635,7 @@ function NomNomGoApp() {
                 </View>
               </View>
 
-              <View style={styles.setupField}>
+              {(!getAlphaAccount() || !starter) && <View style={styles.setupField}>
                 <View style={styles.setupFieldHeader}>
                     <Text style={[styles.setupLabel, isDarkMode && styles.darkMutedText]}>Who’s going?</Text>
                   <Text style={[styles.setupPeopleSummary, isDarkMode && styles.darkMutedText]} numberOfLines={1}>
@@ -8635,7 +8659,7 @@ function NomNomGoApp() {
                     );
                   })}
                 </View>
-              </View>
+              </View>}
 
               <View style={styles.setupActions}>
                 <Button
@@ -8668,6 +8692,7 @@ function NomNomGoApp() {
             <Button label="Back" onPress={openHome} compact />
           </View>
 
+          <PlanStarters value={starter} onChange={next=>{setStarter(next); if(next && next.intent!=='both' && nowMode!==next.intent && (starter?.id!==next.id || starter?.intent!==next.intent)) void startNowDiscovery(next.intent);}} />
           {nowMode === 'home' ? (
             <View style={styles.nowActionGrid}>
               <TouchableOpacity
@@ -9398,6 +9423,9 @@ function NomNomGoApp() {
 
                 </View>
 
+                {getAlphaAccount() && (sharedEditor || plan.sharedPlanId || plan.savedPlanId) ? <OutingFeedback
+                  key={sharedEditor?.id || plan.sharedPlanId || plan.savedPlanId} sharedId={sharedEditor?.id} sourceKey={plan.sharedPlanId || plan.savedPlanId}
+                  onFavorite={raw=>setMemory({...INITIAL_MEMORY,...JSON.parse(raw)})} /> : null}
                 <View style={styles.itineraryFooterActions}>
                   <TouchableOpacity
                     activeOpacity={0.72}

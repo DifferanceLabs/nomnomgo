@@ -4,7 +4,9 @@
   "devCommand": "npm run start:web",
   "cleanUrls": true,
   "framework": null,
+  "crons": [{ "path": "/api/learn-worker", "schedule": "0 5 * * *" }],
   "functions": {
+    "api/learn-worker.js": { "maxDuration": 60 },
     "api/local-areas.js": {
       "maxDuration": 30
     }

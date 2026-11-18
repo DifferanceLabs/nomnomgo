@@ -2,6 +2,8 @@ const { sessionIdentity, setNoStore } = require('./_alphaAuth');
 const { accountRpc, isAccountAdmin } = require('./_accountStore');
 const { sharedData, ACTIONS } = require('./_sharedValidation');
 
+const { actions: learningActions, learningData } = require('../server/learning/validation');
+
 const KEYS = new Set([
   'thingsNearbyGooglePlacesMemoryV1', 'nomNomGoSavedPlansV1', 'nomNomGoBetaPlansV1',
   'nomNomGoActiveBetaPlanV1', 'nomNomGoPlanningSessionsV1', 'nomNomGoActivePlanningSessionV1',
@@ -53,7 +55,7 @@ module.exports = async function account(req, res) {
     try { body = await bodyOf(req); } catch { return res.status(400).json({ error: 'Invalid or oversized request.' }); }
   }
   const action = req.method === 'GET' ? 'load' : body.action;
-  if (!['load', 'save', 'invite', 'metrics', 'friend.list', 'friend.remove', 'friend.metrics'].includes(action) && !ACTIONS.has(action)) return res.status(400).json({ error: 'Unknown action.' });
+  if (!['load', 'save', 'invite', 'metrics', 'friend.list', 'friend.remove', 'friend.metrics'].includes(action) && !ACTIONS.has(action) && !learningActions.has(action)) return res.status(400).json({ error: 'Unknown action.' });
   const admin = isAccountAdmin(identity.email);
   if (['metrics', 'plan.metrics', 'friend.metrics'].includes(action) && !admin) return res.status(403).json({ error: 'Admin access required.' });
   let data = {};
@@ -62,6 +64,10 @@ module.exports = async function account(req, res) {
       return res.status(400).json({ error: 'Choose a friend to remove.' });
     }
     data = { friendId: body.friendId };
+  }
+  if (learningActions.has(action)) {
+    try { data = learningData(action, body); }
+    catch (error) { return res.status(400).json({ error: error.message }); }
   }
   if (ACTIONS.has(action)) {
     try { data = sharedData(action, body); }

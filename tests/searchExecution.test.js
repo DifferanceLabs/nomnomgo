@@ -610,7 +610,7 @@ test('Now plans leave now and save the first arrival after travel, including the
   Object.assign(context, {
     Date: class extends Date { static now() { return new Date(2026, 8, 8, 23, 50).getTime(); } },
     estimateTravelMinutes: () => 40, effectivePlanStopTravelMode: () => 'car',
-    nowPlanCreating: false, setNowPlanCreating: () => {},
+    nowPlanCreating: false, starter: null, setNowPlanCreating: () => {},
     dateRangeKeysForWindow: () => ({ start: '2026-09-05', end: '2026-09-05' }),
     contextualNowPlanTitle: () => 'Lunch', inferPlanType: () => 'local_plan',
     startingLocationLabel: 'Franklin', routeStartLocation: undefined, nowSelectedPeople: [],
