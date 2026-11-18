@@ -27,10 +27,12 @@ import { AlphaAccountPanel } from './src/ui/AlphaAccountPanel';
 import { FriendsPanel } from './src/ui/FriendsPanel';
 import { RsvpBadge, RsvpSummary } from './src/ui/RsvpSummary';
 import { SharedPlanActivity } from './src/ui/SharedPlanActivity';
+import { PlaceResultBody } from './src/ui/PlaceResultBody';
 import { PlanStarters } from './src/ui/PlanStarters';
 import type { PreviewSettings } from './src/ui/StarterPreview';
 import type { StarterOuting } from './src/domain/starterOuting';
 import { starterCandidates } from './src/domain/starterSearch';
+import { venueFacts } from './src/domain/venueFacts';
 import { OutingFeedback } from './src/ui/OutingFeedback';
 import type { StarterSelection } from './src/domain/planStarters';
 import { HomeStart } from './src/ui/HomeStart';
@@ -154,7 +156,7 @@ type CityState = {
   state?: string;
 };
 
-type PlaceCard = PlaceHours & {
+export type PlaceCard = PlaceHours & {
   id: string;
   title: string;
   subtitle: string;
@@ -166,6 +168,8 @@ type PlaceCard = PlaceHours & {
   rating?: number;
   ratingCount?: number;
   priceLevel?: string;
+  primaryType?: string;
+  businessStatus?: string;
   openNow?: boolean | null;
   isOpen?: boolean | null;
   hoursText?: string;
@@ -702,6 +706,7 @@ const FIELD_MASK = [
   'places.userRatingCount',
   'places.types',
   'places.primaryType',
+  'places.businessStatus',
   'places.primaryTypeDisplayName',
   ...PLACE_HOURS_FIELDS.map((field) => `places.${field}`),
   'places.googleMapsUri',
@@ -984,6 +989,8 @@ function toCard(place: any): PlaceCard {
       .join(' - '),
     address: place?.formattedAddress,
     rating: place?.rating,
+    primaryType: place?.primaryType,
+    businessStatus: place?.businessStatus,
     ratingCount: place?.userRatingCount,
     priceLevel: priceText(place?.priceLevel),
     ...hours,
@@ -4673,7 +4680,7 @@ function NomNomGoApp() {
     return getLocation();
   };
 
-  const searchNearbyType = async (type: string | string[], center: LatLon, radiusMeters: number, execution = new SearchExecution(0)): Promise<PlaceCard[]> => {
+  const searchNearbyType = async (type: string | string[], center: LatLon, radiusMeters: number, execution = new SearchExecution(0), rankPreference: 'DISTANCE'|'POPULARITY'='DISTANCE'): Promise<PlaceCard[]> => {
     execution.check();
     if (!GOOGLE_API_KEY) throw new Error('Google Places API key is not loaded.');
 
@@ -4690,7 +4697,7 @@ function NomNomGoApp() {
           includedTypes: Array.isArray(type) ? type : [type],
           languageCode: 'en',
           maxResultCount: 20,
-          rankPreference: 'DISTANCE',
+          rankPreference,
           locationRestriction: {
             circle: {
               center: { latitude: center.latitude, longitude: center.longitude },
@@ -5805,12 +5812,31 @@ function NomNomGoApp() {
     }
   };
 
+  function resultBody(card:PlaceCard, slot:PlanSlot, index:number, selected:boolean, suggested:boolean, distance?:string, onDetails?:()=>void) {
+    return <PlaceResultBody card={card} resultMode={slot} badge={resultBadgeForCard(card,selected,index)}
+      category={cardCategoryLabel(card)} imageUri={cardImageUri(card)} isSelected={selected} isSuggested={suggested}
+      isDarkMode={isDarkMode} styles={styles} distanceText={distance} onDetails={onDetails}/>;
+  }
+
   function starterPreviewSettings(later: boolean): PreviewSettings {
     const where = later ? normalizeCurrentLocationInput(planSetupWhere) : '';
     const date = later ? planSetupPreviewDateRange.start : undefined;
     const window = later && planSetupTime !== 'Now'
       ? parsePlanningTimeWindow(defaultTimeWindowForPreference(planSetupTime)) : undefined;
     const center = activeSearchLocation || location;
+    const allowed = (slot:PlanSlot, card:PlaceCard, searching = false) => {
+      if (memory.neverRecommend.includes(card.id) || (card.businessStatus && card.businessStatus!=='OPERATIONAL')) return false;
+      if (slot === 'activity') {
+        if (isBadActivityResult(card)) return false;
+        if (isRelevantActivityResult(card, selectedActivities)) return true;
+        if (nonEventActivitySelections(selectedActivities).length || selectedActivities.includes('Events')) return false;
+        const landmark = card.types?.some(type => ['historical_landmark','monument','historical_place','national_park','tourist_attraction'].includes(type));
+        return venueFacts(slot, card).features.length > 0 || (searching && !!landmark);
+      }
+      return isLikelyFoodVenue(card) && isLikelyFoodPreferenceMatch(card,selectedFoods)
+        && !(wantsNoFastFood(selectedFoods) && isLikelyFastFood(card))
+        && dietarySelections(selectedDietary).every(pref=>foodDietaryMatchStrength(card,[pref])>0);
+    };
     return {
       areaKey: JSON.stringify([later,where,searchLocationOverride]),
       requestKey: JSON.stringify([later, where, date, window, searchLocationOverride, center?.latitude, center?.longitude,
@@ -5825,17 +5851,23 @@ function NomNomGoApp() {
       },
       search: (area, execution) => starterCandidates(starter?.intent || 'both', area, execution, {
         food: () => searchNearbyType(typesForSelection(selectedFoods, FOOD_TYPE_MAP, DEFAULT_FOOD_TYPES),
-          area, wantsCloseBy(selectedFoods) ? CLOSE_BY_RADIUS_METERS : DEFAULT_RADIUS_METERS, execution),
+          area, wantsCloseBy(selectedFoods) ? CLOSE_BY_RADIUS_METERS : DEFAULT_RADIUS_METERS, execution, 'POPULARITY'),
         activity: () => selectedActivities.includes('Events')
           ? searchTicketmasterEvents(area, TICKETMASTER_EVENT_RADIUS_MILES, execution, date ? {start:date,end:date} : undefined)
-          : searchNearbyType(typesForSelection(selectedActivities, ACTIVITY_TYPE_MAP, DEFAULT_ACTIVITY_TYPES), area, DEFAULT_ACTIVITY_RADIUS_METERS, execution),
-      }, (slot, card) => {
-        if (memory.neverRecommend.includes(card.id)) return false;
-        if (slot === 'activity') return !isBadActivityResult(card) && isRelevantActivityResult(card, selectedActivities);
-        return isLikelyFoodVenue(card) && isLikelyFoodPreferenceMatch(card, selectedFoods)
-          && !(wantsNoFastFood(selectedFoods) && isLikelyFastFood(card))
-          && dietarySelections(selectedDietary).every(pref => foodDietaryMatchStrength(card, [pref]) > 0);
-      }),
+          : searchNearbyType(typesForSelection(selectedActivities, ACTIVITY_TYPE_MAP, [...DEFAULT_ACTIVITY_TYPES,
+              'hiking_area','botanical_garden','aquarium','art_gallery','performing_arts_theater','miniature_golf_course','zoo','playground']),
+              area, DEFAULT_ACTIVITY_RADIUS_METERS, execution, 'POPULARITY'),
+      }, allowed),
+      searchReplacements: async (slot,query,area,execution) => {
+        const cards = slot==='activity' && selectedActivities.includes('Events')
+          ? (await searchTicketmasterEvents(area,TICKETMASTER_EVENT_RADIUS_MILES,execution,date ? {start:date,end:date}:undefined))
+              .filter(card=>card.title.toLowerCase().includes(query.toLowerCase()))
+          : await searchPlaceByText(query,slot,area,undefined,execution);
+        const radius = slot === 'food' ? DEFAULT_RADIUS_METERS : DEFAULT_ACTIVITY_RADIUS_METERS;
+        return cards.filter(card => allowed(slot, card, true) && (area.areaFocus
+          ? isInsideSearchArea(area, card) : distanceMeters(area, card) <= radius)).map(item => ({item,slot}));
+      },
+      renderSearchResult: (item,slot,index,distance) => resultBody(item,slot,index,false,false,distance),
       onUse: submitPlanSetup,
     };
   }
@@ -10210,7 +10242,6 @@ function NomNomGoApp() {
                 : isSelected
                   ? 'checkmark-circle-outline'
                   : 'add';
-            const imageUri = cardImageUri(card);
             return (
             <View key={`${card.id}-${index}`} style={[
               styles.card,
@@ -10218,80 +10249,7 @@ function NomNomGoApp() {
               isDarkMode && styles.darkCard,
               (isSelected || isSuggested) && styles.cardSelected,
             ]}>
-              <View style={styles.placeCardBody}>
-                <View style={styles.placeCardMedia}>
-                  <TouchableOpacity
-                    style={styles.placeCardMediaTap}
-                    onPress={() => { void openPlaceDetails(card); }}
-                    accessibilityRole="button"
-                    accessibilityLabel={`Open details for ${card.title}`}
-                  >
-                    {imageUri ? (
-                      <Image source={{ uri: imageUri }} style={styles.placeCardImage} resizeMode="cover" />
-                    ) : (
-                      <View style={[styles.placeCardImage, styles.placeCardImageFallback]}>
-                        <Ionicons
-                          name={card.kind === 'event' ? 'ticket-outline' : resultMode === 'food' ? 'restaurant-outline' : 'sparkles-outline'}
-                          size={30}
-                          color={resultMode === 'food' ? colors.coral : colors.amber}
-                        />
-                      </View>
-                    )}
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={styles.placeCardInfoTouchTarget}
-                    onPress={() => { void openPlaceDetails(card); }}
-                    accessibilityRole="button"
-                    accessibilityLabel={`Show information for ${card.title}`}
-                  >
-                    <View style={styles.placeCardInfoButton}>
-                      <Ionicons name="information-circle-outline" size={17} color={colors.textPrimary} />
-                    </View>
-                  </TouchableOpacity>
-                </View>
-                <View style={styles.placeCardContent}>
-                  <View style={styles.cardHeaderGrid}>
-                    <View style={styles.cardHeaderMain}>
-                      <Text style={[styles.cardRank, isSelected && styles.cardRankSelected]}>
-                        {resultBadgeForCard(card, isSelected, index)}
-                      </Text>
-                      <Text style={[
-                        styles.cardTitle,
-                        isDarkMode && !(isSelected || isSuggested) && styles.darkText,
-                        (isSelected || isSuggested) && styles.cardTitleSelected,
-                      ]} numberOfLines={2}>{card.title}</Text>
-                    </View>
-                  </View>
-                  <Text
-                    style={[styles.cardCategory, resultMode === 'food' ? styles.cardCategoryFood : styles.cardCategoryActivity]}
-                    numberOfLines={1}
-                  >{cardCategoryLabel(card)}</Text>
-                  <View style={styles.cardMetadataRow}>
-                    {typeof card.rating === 'number' ? (
-                      <View style={styles.cardMetadataPill}>
-                        <Ionicons name="star" size={13} color={colors.amber} />
-                        <Text style={styles.cardMetadataText}>{card.rating.toFixed(1)}{card.ratingCount ? ` (${card.ratingCount})` : ''}</Text>
-                      </View>
-                    ) : null}
-                    {distanceText ? (
-                      <View style={styles.cardMetadataPill}>
-                        <Ionicons name="navigate-outline" size={13} color={colors.teal} />
-                        <Text style={styles.cardMetadataText}>{distanceText}</Text>
-                      </View>
-                    ) : null}
-                    <Text style={[
-                      styles.cardHours,
-                      card.isOpen ? styles.open : card.isOpen === false ? styles.closed : styles.darkMutedText,
-                    ]} numberOfLines={1}>
-                      {card.kind === 'event' ? card.eventDateText || 'Date TBA' : card.hoursText || 'Hours unknown'}
-                    </Text>
-                  </View>
-                  {card.kind !== 'event' && card.operatingHours ? <Text style={[styles.address, styles.darkMutedText]}>{card.operatingHours}</Text> : null}
-                  {card.kind !== 'event' && card.hoursWarning ? <Text style={[styles.address, { color: colors.amber }]}>{card.hoursWarning}</Text> : null}
-                  {card.address ? <Text style={[styles.address, styles.darkMutedText]} numberOfLines={2}>{card.address}</Text> : null}
-                  {card.eventAddressConflict ? <Text style={[styles.address, styles.darkMutedText]}>Venue addresses differ between listings. Confirm on the event website.</Text> : null}
-                </View>
-              </View>
+              {resultBody(card,resultMode,index,isSelected,isSuggested,distanceText,()=>void openPlaceDetails(card))}
               <View style={[styles.buttonRow, styles.resultCardActionRow]}>
                 <CardIconButton
                   label={resultActionLabel}
@@ -14788,3 +14746,5 @@ const createStyles = ({ colors, semanticTones }: NomNomGoTheme) => StyleSheet.cr
     height: 8,
   },
 });
+
+export type AppStyles = ReturnType<typeof createStyles>;

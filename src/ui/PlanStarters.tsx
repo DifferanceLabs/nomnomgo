@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import type { ReviewTicket } from '../data/starterReview';
 import { Text, TextInput, View } from 'react-native';
 import { accountRequest, getAlphaAccount } from '../data/accountStorage';
 import { emptyProfile, starterChoices, type StarterProfile, type StarterSelection } from '../domain/planStarters';
@@ -13,6 +14,7 @@ export function PlanStarters({value,onChange,context='local',preview}:{value:Sta
   const [message,setMessage]=useState('');
   const [busy,setBusy]=useState(false);
   const account=getAlphaAccount()?.id;
+  const reviewTicket=useRef<ReviewTicket>({});
   const profile=loaded && loaded.account===account ? loaded.profile : emptyProfile;
   useEffect(()=>{
     let active=true;
@@ -37,8 +39,8 @@ export function PlanStarters({value,onChange,context='local',preview}:{value:Sta
   return <View style={{gap:8}}>
     <Text style={{fontWeight:'700',color:colors.textPrimary}}>Plan starters</Text>
     <View style={row}>{choices.map(s=><Chip key={s.id} label={s.label} selected={value?.id===s.id}
-      onPress={()=>onChange(value?.id===s.id ? null : {id:s.id,people:s.people,intent:s.intent})}/>)}</View>
-    {value && <><StarterPreview key={JSON.stringify([account,preview.areaKey])} {...preview} value={value} profile={profile} context={context}/>
+      onPress={()=>{reviewTicket.current={}; onChange(value?.id===s.id ? null : {id:s.id,people:s.people,intent:s.intent});}}/>)}</View>
+    {value && <><StarterPreview key={JSON.stringify([account,preview.areaKey,value.id])} {...preview} reviewTicket={reviewTicket.current} value={value} profile={profile} context={context}/>
       <Text style={{color:colors.textSecondary}}>Plan for</Text><View style={row}>{(['food','activity','both'] as const).map(intent=>
       <Chip key={intent} label={{food:'Food',activity:'Activities',both:'Food and activities'}[intent]} selected={value.intent===intent} onPress={()=>onChange({...value,intent})}/>)}</View>
       {account && <><Text style={{color:colors.textSecondary}}>People · private until you choose to share</Text>

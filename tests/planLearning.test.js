@@ -112,3 +112,32 @@ test('removing all selected stops preserves the change and does not create a new
  assert.deepEqual(rows.map(r=>r.kind),['plan-created','choices-updated']);
  assert.deepEqual(rows[1].evidence.stops,[]);assert.deepEqual(rows[1].evidence.replaced.map(s=>s.id),['p1']);
 });
+
+test('venue review batches require a granted actor, deduplicate, share AI reservations and never record intent', async()=>{
+ const places=JSON.stringify([{slot:'activity',id:'museum1'}]);
+ const enqueue=async email=>(await query('select nng_review_enqueue($1,$2,3,30,null) j',[email,places]))[0].j;
+ const count=async()=>(await query('select count(*)::int n from nng_learning_events'))[0].n;
+ const initialCount=await count();
+ const denied=await enqueue('absent@example.invalid');
+ assert.ok(denied.error);
+ const first=await enqueue(a);
+ assert.equal(first.state,'ready');assert.equal((await enqueue(a)).id,first.id);
+ const claim=async (id,cap)=>(await query("select nng_review_claim($1,'2020-01-01',null,$2,30) j",[id,cap]))[0].j;
+ assert.equal(await claim(first.id,1),null); // A history job already spent the actor's first reservation.
+ assert.equal((await claim(first.id,2)).id,first.id);
+ assert.equal(await claim(first.id,3),null);
+ const finish=async()=>(await query("select nng_review_finish($1,'done','[]',5,10,5) ok",[first.id]))[0].ok;
+ assert.equal(await finish(),true);assert.equal(await finish(),false);assert.equal((await enqueue(a)).state,'done');
+ const other=await enqueue(b);assert.notEqual(other.id,first.id);
+ await query('update nng_accounts set enabled=false where id=$1',[member]);
+ assert.equal(await claim(other.id,3),null);
+ assert.equal((await query("select has_table_privilege('authenticated','nng_starter_reviews','select') ok"))[0].ok,false);
+ assert.equal((await query("select has_function_privilege('anon','nng_review_enqueue(text,jsonb,int,int,uuid,boolean)','execute') ok"))[0].ok,false);
+ const admin='operator@example.invalid';
+ await query("select nng_alpha($1,true,'load','{}')",[admin]);
+ assert.equal((await enqueue(admin)).status,403);
+ const adminJob=(await query('select nng_review_enqueue($1,$2,3,30,null,true) j',[admin,places]))[0].j;
+ assert.equal(await claim(adminJob.id,3),null);
+ assert.equal((await query("select nng_review_claim($1,'2020-01-01',null,3,30,$2) j",[adminJob.id,[admin]]))[0].j.id,adminJob.id);
+ assert.equal(await count(),initialCount);
+});

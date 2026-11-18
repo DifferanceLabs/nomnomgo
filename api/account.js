@@ -55,6 +55,16 @@ module.exports = async function account(req, res) {
     try { body = await bodyOf(req); } catch { return res.status(400).json({ error: 'Invalid or oversized request.' }); }
   }
   const action = req.method === 'GET' ? 'load' : body.action;
+  if (action === 'starter.review') {
+    const {reviewPlaces,requestReview}=require('../server/learning/venueReview');
+    const places=reviewPlaces(body.places);
+    if (!places) return res.status(400).json({error:'Choose a valid group of places.'});
+    try {
+      const review=await requestReview(identity.email,places);
+      if (review.error) return res.status(review.status || 403).json({error:review.error});
+      return res.status(200).json({result:review.result});
+    } catch {return res.status(503).json({error:'Venue review unavailable.'});}
+  }
   if (!['load', 'save', 'invite', 'metrics', 'friend.list', 'friend.remove', 'friend.metrics'].includes(action) && !ACTIONS.has(action) && !learningActions.has(action)) return res.status(400).json({ error: 'Unknown action.' });
   const admin = isAccountAdmin(identity.email);
   if (['metrics', 'plan.metrics', 'friend.metrics'].includes(action) && !admin) return res.status(403).json({ error: 'Admin access required.' });

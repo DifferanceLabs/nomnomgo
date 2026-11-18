@@ -6,6 +6,9 @@ import type { StarterProfile, StarterSelection } from '../domain/planStarters';
 import {
   starterOptions,
   swapOptions,
+  fitReplacement,
+  venueQuality,
+  type OutingOption,
   type Candidate,
   type StarterOuting,
   type VisitTiming,
@@ -13,8 +16,10 @@ import {
 import { ActionButton } from './primitives';
 import { SearchAreaPicker } from './SearchAreaPicker';
 import { useTheme } from './ThemeProvider';
+import { reviewStarter, type ReviewTicket } from '../data/starterReview';
+import { StarterSwapSearch, type SwapSearchProps } from './StarterSwapSearch';
 
-export type PreviewSettings = {
+export type PreviewSettings = SwapSearchProps & {
   areaKey: string;
   requestKey: string;
   timing: Omit<VisitTiming, 'now'>;
@@ -25,7 +30,12 @@ export type PreviewSettings = {
   loadAreas: (kind: AreaKind, execution: SearchExecution, base: AreaLocation) => Promise<AreaMatch[]>;
   onUse: (outing: StarterOuting) => Promise<void>;
 };
-type Props = PreviewSettings & { value: StarterSelection; profile: StarterProfile; context: string };
+type Props = PreviewSettings & {
+  reviewTicket: ReviewTicket;
+  value: StarterSelection;
+  profile: StarterProfile;
+  context: string;
+};
 
 export function StarterPreview(props: Props) {
   const {
@@ -43,18 +53,23 @@ export function StarterPreview(props: Props) {
     candidates: Candidate[];
     now: number;
   }>();
-  const [swap, setSwap] = useState<{ options: ReturnType<typeof starterOptions>; index: number }>();
+  const [swap, setSwap] = useState<{ key: string; option: OutingOption }>();
+  const [picker, setPicker] = useState<{ key: string; index: number }>();
+  const [reviewing, setReviewing] = useState(false);
   const [using, setUsing] = useState(false);
   const submitting = useRef(false);
   const latest = useRef(props);
   latest.current = props;
   const key = JSON.stringify([props.requestKey, props.value.intent, area, submitted, attempt]);
   const result = loaded?.key === key ? loaded : undefined;
+  const selectionKey = JSON.stringify([key, props.value, props.context]);
   useEffect(() => {
     const exec = new SearchExecution(attempt);
     setResult(undefined);
     setPhase('loading');
     setSwap(undefined);
+    setPicker(undefined);
+    setReviewing(false);
     const timer = setTimeout(async () => {
       let center: AreaLocation | null | undefined;
       try {
@@ -68,6 +83,22 @@ export function StarterPreview(props: Props) {
         exec.check();
         setResult({ key, center, candidates, now: Date.now() });
         setPhase('ready');
+        setReviewing(true);
+        const reviews = await reviewStarter(latest.current.reviewTicket, candidates);
+        exec.check();
+        if (reviews.length)
+          setResult((r) =>
+            r?.key === key
+              ? {
+                  ...r,
+                  candidates: r.candidates.map((c) => ({
+                    ...c,
+                    review: reviews.find((v) => v.id === c.item.id && v.slot === c.slot),
+                  })),
+                }
+              : r,
+          );
+        setReviewing(false);
       } catch {
         if (!exec.controller.signal.aborted) setPhase(center ? 'error' : 'area');
       }
@@ -94,7 +125,28 @@ export function StarterPreview(props: Props) {
         : [],
     [result, timing.date, timing.start, timing.end, profile, value, context, favorites],
   );
-  const current = swap?.options === options ? options[swap.index] : options[0];
+  const current = swap?.key === selectionKey ? swap.option : options[0];
+  const choose = (option: OutingOption) => {
+    setSwap({ key: selectionKey, option });
+    setPicker(undefined);
+  };
+  function replacement(index: number, candidate: Candidate) {
+    return (
+      result &&
+      current &&
+      fitReplacement(
+        current,
+        index,
+        candidate,
+        result.center,
+        { ...timing, now: result.now },
+        profile,
+        value,
+        context,
+        favorites,
+      )
+    );
+  }
   const primary = { color: colors.textPrimary, fontWeight: '700' as const };
   const hint = { color: colors.textSecondary };
   const canUse = current && result && phase === 'ready';
@@ -128,30 +180,72 @@ export function StarterPreview(props: Props) {
           {[result.center.label || 'Your selected area', timing.date].filter(Boolean).join(' · ')}
         </Text>
       )}
-      {phase === 'ready' && !current && (
+      {reviewing && (
+        <Text accessibilityLiveRegion="polite" style={hint}>
+          Checking venue details…
+        </Text>
+      )}
+      {phase === 'ready' && !current && !reviewing && (
         <Text style={hint}>No stops fit this area and time. Change the area or keep planning manually.</Text>
       )}
       {current?.stops.map((stop, index) => {
-        const alternatives = swapOptions(options, current, index);
-        const next =
-          alternatives.find((option) => options.indexOf(option) > options.indexOf(current)) || alternatives[0];
+        let alternatives = swapOptions(options, current, index);
+        if (!alternatives.length && result && swap?.key === selectionKey) {
+          alternatives = result.candidates
+            .filter((c) => venueQuality(c).score > 0)
+            .flatMap((c) => replacement(index, c) || []);
+        }
+        const currentIndex = options.findIndex(
+          (o) =>
+            o.stops.length === current.stops.length &&
+            o.stops.every((s, i) => s.item.id === current.stops[i].item.id),
+        );
+        const next = alternatives.find((option) => options.indexOf(option) > currentIndex) || alternatives[0];
         return (
           <View key={stop.slot} style={{ gap: 3 }}>
             {index > 0 && current.miles !== undefined && (
               <Text style={hint}>{current.miles.toFixed(1)} mi between stops</Text>
             )}
             <Text style={primary}>{stop.item.title}</Text>
+            {stop.experience && <Text style={hint}>{stop.experience}</Text>}
             <Text style={hint}>
               {stop.slot === 'food' ? 'Food' : 'Activity'} · about {stop.durationMinutes} min
             </Text>
             <Text style={hint}>{stop.hours}</Text>
             {stop.reason && <Text style={{ color: colors.textPrimary }}>{stop.reason}</Text>}
-            {next && (
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
               <ActionButton
-                label={'Swap ' + (stop.slot === 'food' ? 'food stop' : 'activity')}
+                label="Quick swap"
+                accessibilityLabel={'Quick swap ' + stop.slot}
+                size="compact"
+                disabled={using || !next}
+                onPress={() => {
+                  if (next) choose(next);
+                }}
+              />
+              <ActionButton
+                label="Search swap"
+                accessibilityLabel={'Search swap ' + stop.slot}
                 size="compact"
                 disabled={using}
-                onPress={() => setSwap({ options, index: options.indexOf(next) })}
+                onPress={() => {
+                  setSwap({ key: selectionKey, option: current });
+                  setPicker({ key: selectionKey, index });
+                }}
+              />
+            </View>
+            {picker?.key === selectionKey && picker.index === index && result && (
+              <StarterSwapSearch
+                key={selectionKey + index}
+                current={current}
+                index={index}
+                nearby={result.candidates}
+                area={result.center}
+                renderSearchResult={props.renderSearchResult}
+                searchReplacements={props.searchReplacements}
+                fit={(candidate) => replacement(index, candidate)}
+                onChoose={choose}
+                onClose={() => setPicker(undefined)}
               />
             )}
           </View>

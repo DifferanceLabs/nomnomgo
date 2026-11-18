@@ -1,5 +1,6 @@
 const { createHash, timingSafeEqual } = require('node:crypto');
 const { processOne } = require('../server/learning/worker');
+const { processReview } = require('../server/learning/venueReview');
 const digest = value => createHash('sha256').update(value).digest();
 module.exports = async function worker(req,res) {
   res.setHeader('Cache-Control','no-store');
@@ -9,6 +10,7 @@ module.exports = async function worker(req,res) {
   try {
     const started=Date.now();
     const batch=[];
+    await processReview().catch(() => console.info('nng_venue_review', { state: 'queue_unavailable' }));
     do {
       const metrics=await processOne();
       batch.push(metrics);

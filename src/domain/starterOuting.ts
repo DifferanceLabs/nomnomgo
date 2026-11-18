@@ -2,6 +2,7 @@ import { currentHoursDisplay, plannedHoursDisplay, type PlaceHours } from '../..
 import { defaultItineraryStopDurationMinutes, driveMinutesForMiles, pairingDistancePenalty } from './itinerary';
 import type { StarterProfile, StarterSelection } from './planStarters';
 import { areaDistanceMeters, METERS_PER_MILE, type AreaLocation } from './searchArea';
+import { labels, venueFacts } from './venueFacts';
 
 export type StarterSlot = 'food' | 'activity';
 export type StarterPlace = PlaceHours & {
@@ -9,24 +10,31 @@ export type StarterPlace = PlaceHours & {
   title: string;
   subtitle: string;
   types?: string[];
+  primaryType?: string;
+  rating?: number;
+  ratingCount?: number;
+  businessStatus?: string;
   lat?: number;
   lng?: number;
   eventStartMs?: number;
   eventEndMs?: number;
   durationMinutes?: number;
 };
-export type Candidate = { slot: StarterSlot; item: StarterPlace };
+export type VenueReview = { id: string; slot: StarterSlot; quality: number; feature: string };
+export type Candidate = { slot: StarterSlot; item: StarterPlace; review?: VenueReview };
 export type Visit = Candidate & {
   durationMinutes: number;
   hours: string;
   reason?: string;
   date: string;
   minute: number;
+  experience?: string;
 };
 export type StarterOuting = { center: AreaLocation; stops: Visit[]; miles?: number };
 export type VisitTiming = { date?: string; start?: number; end?: number; now: number };
 type Match = Candidate & { weights: number[]; reason?: string };
-type Option = { stops: Visit[]; miles?: number; weights: number[] };
+export type OutingOption = { stops: Visit[]; miles?: number; weights: number[] };
+type Option = OutingOption;
 
 const broadTypes = new Set([
   'point_of_interest',
@@ -97,6 +105,14 @@ function matchHistory(
   return { ...candidate, weights, reason: compare(weights, [0, 0, 0]) < 0 ? reason : undefined };
 }
 
+export function venueQuality(candidate: Candidate) {
+  const facts = venueFacts(candidate.slot, candidate.item);
+  const review = candidate.review;
+  return review
+    ? { score: review.quality, experience: labels[review.feature] }
+    : { score: facts.quality, experience: labels[facts.features[0]] };
+}
+
 function clock(minute: number) {
   const m = ((minute % 1440) + 1440) % 1440;
   return String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0');
@@ -140,6 +156,8 @@ function visit(match: Match, wallStart: number, latest: number, timing: VisitTim
   return {
     slot,
     item,
+    review: match.review,
+    experience: venueQuality(match).experience,
     reason,
     durationMinutes,
     date: date.toISOString().slice(0, 10),
@@ -156,6 +174,7 @@ export function starterOptions(
   selection: StarterSelection,
   context: string,
   favorites: string[] = [],
+  manual = false,
 ): Option[] {
   const matches = candidates
     .filter(
@@ -164,7 +183,16 @@ export function starterOptions(
         Number.isFinite(c.item.lat) &&
         Number.isFinite(c.item.lng),
     )
-    .map((c) => matchHistory(c, profile, selection, context, favorites));
+    .filter(
+      (c) =>
+        (!c.item.businessStatus || c.item.businessStatus === 'OPERATIONAL') &&
+        (manual || venueQuality(c).score > 0),
+    )
+    .map((c) => {
+      const match = matchHistory(c, profile, selection, context, favorites);
+      match.weights.push(venueQuality(c).score);
+      return match;
+    });
   function base(match: Match) {
     const now = Math.floor(venueWallTime(timing.now, match.item.utcOffsetMinutes) / 60_000) * 60_000;
     if (!timing.date) return now;
@@ -239,5 +267,27 @@ export function swapOptions(options: Option[], current: Option, index: number) {
           s.slot === current.stops[i].slot &&
           (i === index ? s.item.id !== current.stops[i].item.id : s.item.id === current.stops[i].item.id),
       ),
+  );
+}
+
+export function fitReplacement(
+  current: Option,
+  index: number,
+  candidate: Candidate,
+  center: AreaLocation,
+  timing: VisitTiming,
+  profile: StarterProfile,
+  selection: StarterSelection,
+  context: string,
+  favorites: string[],
+) {
+  if (
+    candidate.slot !== current.stops[index]?.slot ||
+    current.stops.some((s) => s.item.id === candidate.item.id)
+  )
+    return;
+  const wanted = current.stops.map((s, i) => (i === index ? candidate : s));
+  return starterOptions(wanted, center, timing, profile, selection, context, favorites, true).find(
+    (o) => o.stops.length === wanted.length && o.stops.every((s, i) => s.item.id === wanted[i].item.id),
   );
 }

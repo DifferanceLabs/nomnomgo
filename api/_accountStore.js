@@ -60,8 +60,11 @@ async function accountRpc(args) {
   return result;
 }
 
+function accountAdminEmails(env = process.env) {
+  return (env.NNG_ADMIN_EMAILS || '').split(',').map(value => value.trim().toLowerCase()).filter(Boolean);
+}
 function isAccountAdmin(email) {
-  return (process.env.NNG_ADMIN_EMAILS || '').split(',').map((value) => value.trim().toLowerCase()).includes(email);
+  return accountAdminEmails().includes(email);
 }
 
-module.exports = { accountRpc, isAccountAdmin, homePlanUpdateKey };
+module.exports = { accountRpc, isAccountAdmin, accountAdminEmails, homePlanUpdateKey };

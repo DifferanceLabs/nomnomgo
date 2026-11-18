@@ -73,4 +73,4 @@ async function processOne(env=process.env, db=rpc, clientFactory=()=>new OpenAI(
   const applied=await db('nng_learning_finish',{p_event:job.event,p_lease:job.lease,p_status:status,p_result:result,p_latency:latency,p_input:input,p_output:output,p_max_attempts:c.attempts});
   return {status:applied ? status : 'lease_expired',latencyMs:latency,inputTokens:input,outputTokens:output};
 }
-module.exports={processOne,interpret,config};
+module.exports={processOne,interpret,config,rpc};
